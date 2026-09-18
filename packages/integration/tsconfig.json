@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "composite": true
+  },
+  "references": [
+    { "path": "../shared" },
+    { "path": "../execution" },
+    { "path": "../workspace" },
+    { "path": "../persistence" },
+    { "path": "../verification" }
+  ],
+  "include": ["src/**/*"]
+}

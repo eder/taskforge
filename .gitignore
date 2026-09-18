@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# TaskForge state
+.taskforge/worktrees/
+.taskforge/runs/
+.taskforge/*.db
+.taskforge/*.db-journal
+.taskforge/*.db-wal
+.taskforge/*.db-shm

@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/persistence" },
+    { "path": "./packages/execution" },
+    { "path": "./packages/workspace" },
+    { "path": "./packages/agents" },
+    { "path": "./packages/core" },
+    { "path": "./packages/verification" },
+    { "path": "./packages/integration" },
+    { "path": "./packages/scheduler" },
+    { "path": "./apps/cli" }
+  ]
+}

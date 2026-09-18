@@ -1,0 +1,36 @@
+{
+  "name": "@taskforge/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "tf": "./dist/bin.js",
+    "taskforge": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@taskforge/shared": "workspace:*",
+    "@taskforge/persistence": "workspace:*",
+    "@taskforge/execution": "workspace:*",
+    "@taskforge/workspace": "workspace:*",
+    "@taskforge/agents": "workspace:*",
+    "@taskforge/core": "workspace:*",
+    "@taskforge/verification": "workspace:*",
+    "@taskforge/integration": "workspace:*",
+    "@taskforge/scheduler": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
