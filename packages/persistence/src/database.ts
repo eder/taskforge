@@ -243,10 +243,39 @@ export class TaskForgeDatabase {
         timestamp TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS cost_tracking (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        model_name TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS run_metrics (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        total_duration_ms INTEGER NOT NULL DEFAULT 0,
+        total_cost_usd REAL NOT NULL DEFAULT 0.0,
+        tasks_count INTEGER NOT NULL DEFAULT 0,
+        tasks_completed INTEGER NOT NULL DEFAULT 0,
+        tasks_failed INTEGER NOT NULL DEFAULT 0,
+        rework_count INTEGER NOT NULL DEFAULT 0,
+        escalations_count INTEGER NOT NULL DEFAULT 0,
+        first_pass_rate REAL NOT NULL DEFAULT 0.0,
+        created_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tasks_run_id ON tasks(run_id);
       CREATE INDEX IF NOT EXISTS idx_assignments_task_id ON assignments(task_id);
       CREATE INDEX IF NOT EXISTS idx_events_run_id ON events(run_id);
       CREATE INDEX IF NOT EXISTS idx_executions_task_id ON executions(task_id);
+      CREATE INDEX IF NOT EXISTS idx_cost_run_id ON cost_tracking(run_id);
+      CREATE INDEX IF NOT EXISTS idx_run_metrics_run_id ON run_metrics(run_id);
     `);
   }
 

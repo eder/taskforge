@@ -27,7 +27,8 @@
     "@taskforge/collaboration": "workspace:*",
     "@taskforge/verification": "workspace:*",
     "@taskforge/integration": "workspace:*",
-    "@taskforge/scheduler": "workspace:*"
+    "@taskforge/scheduler": "workspace:*",
+    "@taskforge/telemetry": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

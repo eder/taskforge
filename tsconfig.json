@@ -18,6 +18,7 @@
     { "path": "./packages/operator" },
     { "path": "./packages/conversation" },
     { "path": "./packages/plugins" },
+    { "path": "./packages/telemetry" },
     { "path": "./apps/cli" }
   ]
 }

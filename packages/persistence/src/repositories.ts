@@ -739,3 +739,239 @@ export class AuditService {
     };
   }
 }
+
+export interface CostRecord {
+  id: string;
+  runId: string;
+  taskId: string;
+  agentId: string;
+  modelName: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  createdAt: string;
+}
+
+export class CostRepository {
+  constructor(private db: TaskForgeDatabase) {}
+
+  record(item: {
+    id: string;
+    runId: string;
+    taskId: string;
+    agentId: string;
+    modelName: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    estimatedCostUsd?: number;
+  }): CostRecord {
+    const now = new Date().toISOString();
+    const inputTokens = item.inputTokens ?? 0;
+    const outputTokens = item.outputTokens ?? 0;
+    const estimatedCostUsd = item.estimatedCostUsd ?? 0.0;
+
+    this.db
+      .prepare(
+        `INSERT INTO cost_tracking (
+          id, run_id, task_id, agent_id, model_name,
+          input_tokens, output_tokens, estimated_cost_usd, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        item.id,
+        item.runId,
+        item.taskId,
+        item.agentId,
+        item.modelName,
+        inputTokens,
+        outputTokens,
+        estimatedCostUsd,
+        now,
+      );
+
+    return {
+      id: item.id,
+      runId: item.runId,
+      taskId: item.taskId,
+      agentId: item.agentId,
+      modelName: item.modelName,
+      inputTokens,
+      outputTokens,
+      estimatedCostUsd,
+      createdAt: now,
+    };
+  }
+
+  listByRun(runId: string): CostRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM cost_tracking WHERE run_id = ? ORDER BY created_at ASC')
+      .all(runId) as Array<{
+      id: string;
+      run_id: string;
+      task_id: string;
+      agent_id: string;
+      model_name: string;
+      input_tokens: number;
+      output_tokens: number;
+      estimated_cost_usd: number;
+      created_at: string;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      runId: r.run_id,
+      taskId: r.task_id,
+      agentId: r.agent_id,
+      modelName: r.model_name,
+      inputTokens: r.input_tokens,
+      outputTokens: r.output_tokens,
+      estimatedCostUsd: r.estimated_cost_usd,
+      createdAt: r.created_at,
+    }));
+  }
+
+  getTotalCostByRun(runId: string): { totalCostUsd: number; totalInputTokens: number; totalOutputTokens: number } {
+    const row = this.db
+      .prepare(
+        `SELECT
+          COALESCE(SUM(estimated_cost_usd), 0.0) as total_cost,
+          COALESCE(SUM(input_tokens), 0) as total_input,
+          COALESCE(SUM(output_tokens), 0) as total_output
+        FROM cost_tracking WHERE run_id = ?`,
+      )
+      .get(runId) as { total_cost: number; total_input: number; total_output: number } | undefined;
+
+    return {
+      totalCostUsd: row?.total_cost ?? 0.0,
+      totalInputTokens: row?.total_input ?? 0,
+      totalOutputTokens: row?.total_output ?? 0,
+    };
+  }
+}
+
+export interface RunMetricsRecord {
+  id: string;
+  runId: string;
+  totalDurationMs: number;
+  totalCostUsd: number;
+  tasksCount: number;
+  tasksCompleted: number;
+  tasksFailed: number;
+  reworkCount: number;
+  escalationsCount: number;
+  firstPassRate: number;
+  createdAt: string;
+}
+
+export class RunMetricsRepository {
+  constructor(private db: TaskForgeDatabase) {}
+
+  save(record: {
+    id: string;
+    runId: string;
+    totalDurationMs: number;
+    totalCostUsd: number;
+    tasksCount: number;
+    tasksCompleted: number;
+    tasksFailed: number;
+    reworkCount: number;
+    escalationsCount: number;
+    firstPassRate: number;
+  }): RunMetricsRecord {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO run_metrics (
+          id, run_id, total_duration_ms, total_cost_usd,
+          tasks_count, tasks_completed, tasks_failed,
+          rework_count, escalations_count, first_pass_rate, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.runId,
+        record.totalDurationMs,
+        record.totalCostUsd,
+        record.tasksCount,
+        record.tasksCompleted,
+        record.tasksFailed,
+        record.reworkCount,
+        record.escalationsCount,
+        record.firstPassRate,
+        now,
+      );
+
+    return {
+      ...record,
+      createdAt: now,
+    };
+  }
+
+  getByRun(runId: string): RunMetricsRecord | undefined {
+    const r = this.db
+      .prepare('SELECT * FROM run_metrics WHERE run_id = ?')
+      .get(runId) as
+      | {
+          id: string;
+          run_id: string;
+          total_duration_ms: number;
+          total_cost_usd: number;
+          tasks_count: number;
+          tasks_completed: number;
+          tasks_failed: number;
+          rework_count: number;
+          escalations_count: number;
+          first_pass_rate: number;
+          created_at: string;
+        }
+      | undefined;
+
+    if (!r) return undefined;
+    return {
+      id: r.id,
+      runId: r.run_id,
+      totalDurationMs: r.total_duration_ms,
+      totalCostUsd: r.total_cost_usd,
+      tasksCount: r.tasks_count,
+      tasksCompleted: r.tasks_completed,
+      tasksFailed: r.tasks_failed,
+      reworkCount: r.rework_count,
+      escalationsCount: r.escalations_count,
+      firstPassRate: r.first_pass_rate,
+      createdAt: r.created_at,
+    };
+  }
+
+  listAll(): RunMetricsRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM run_metrics ORDER BY created_at DESC')
+      .all() as Array<{
+      id: string;
+      run_id: string;
+      total_duration_ms: number;
+      total_cost_usd: number;
+      tasks_count: number;
+      tasks_completed: number;
+      tasks_failed: number;
+      rework_count: number;
+      escalations_count: number;
+      first_pass_rate: number;
+      created_at: string;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      runId: r.run_id,
+      totalDurationMs: r.total_duration_ms,
+      totalCostUsd: r.total_cost_usd,
+      tasksCount: r.tasks_count,
+      tasksCompleted: r.tasks_completed,
+      tasksFailed: r.tasks_failed,
+      reworkCount: r.rework_count,
+      escalationsCount: r.escalations_count,
+      firstPassRate: r.first_pass_rate,
+      createdAt: r.created_at,
+    }));
+  }
+}
+

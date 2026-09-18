@@ -9,17 +9,22 @@ import { NegotiationManager } from '@taskforge/negotiation';
 import { StaticRoutingProvider, AgentSelector } from '@taskforge/router';
 import { TaskGraph } from '@taskforge/core';
 import { RunOrchestrator } from '@taskforge/scheduler';
+import { TaskForgeDatabase } from '@taskforge/persistence';
+import { TelemetryCollector } from '@taskforge/telemetry';
 
 export interface ShellOptions {
   repoRoot?: string;
   config?: TaskForgeConfig;
   input?: Readable;
   output?: Writable;
+  database?: TaskForgeDatabase;
 }
 
 export class InteractiveShell {
   private repoRoot: string;
   private config: TaskForgeConfig;
+  private db: TaskForgeDatabase;
+  private telemetry: TelemetryCollector;
   private operator: OperatorAgent;
   private agentRegistry: AgentRegistry;
   private gitService: GitService;
@@ -35,6 +40,8 @@ export class InteractiveShell {
   constructor(private options: ShellOptions = {}) {
     this.repoRoot = options.repoRoot ?? process.cwd();
     this.config = options.config ?? loadConfig();
+    this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
+    this.telemetry = new TelemetryCollector(this.db);
     this.operator = new OperatorAgent();
     this.agentRegistry = new AgentRegistry();
     this.gitService = new GitService(this.repoRoot);
@@ -124,6 +131,20 @@ export class InteractiveShell {
         ].join('\n');
       }
 
+      case 'inspect_cost': {
+        if (!this.activeRunId) {
+          return 'Nenhum run ativo ou recente para consulta de custos.';
+        }
+        return this.telemetry.formatCostReport(this.activeRunId);
+      }
+
+      case 'inspect_stats': {
+        if (!this.activeRunId) {
+          return 'Nenhum run ativo ou recente para consulta de estatísticas.';
+        }
+        return this.telemetry.formatStatsReport(this.activeRunId);
+      }
+
       case 'pause_execution': {
         this.isPaused = true;
         return this.operator.formatResponse(intent, {});
@@ -179,6 +200,7 @@ export class InteractiveShell {
         const orchestrator = new RunOrchestrator({
           repoRoot: this.repoRoot,
           config: this.config,
+          database: this.db,
           agentRegistry: this.agentRegistry,
           planner: this.planner,
           negotiator: this.negotiator,
@@ -189,7 +211,19 @@ export class InteractiveShell {
         const result = await orchestrator.run(this.lastGoalDescription ?? 'Execução aprovada', {
           preplannedGraph: this.currentGraph,
         });
+        this.activeRunId = result.runId;
         this.currentGraph = undefined;
+
+        this.telemetry.recordRunMetrics({
+          runId: result.runId,
+          durationMs: result.durationMs,
+          tasksCount: result.tasksCompleted + result.tasksFailed,
+          tasksCompleted: result.tasksCompleted,
+          tasksFailed: result.tasksFailed,
+          reworkCount: 0,
+          escalationsCount: 0,
+        });
+
         return [
           'Plano executado com sucesso!',
           `Status: ${result.status.toUpperCase()}`,

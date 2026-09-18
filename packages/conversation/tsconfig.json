@@ -18,7 +18,8 @@
     { "path": "../collaboration" },
     { "path": "../verification" },
     { "path": "../integration" },
-    { "path": "../scheduler" }
+    { "path": "../scheduler" },
+    { "path": "../telemetry" }
   ],
   "include": ["src/**/*"]
 }

@@ -1,5 +1,5 @@
 {
-  "name": "@taskforge/router",
+  "name": "@taskforge/telemetry",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,10 +16,8 @@
   },
   "dependencies": {
     "@taskforge/shared": "workspace:*",
-    "@taskforge/core": "workspace:*",
-    "@taskforge/agents": "workspace:*",
     "@taskforge/persistence": "workspace:*",
-    "@taskforge/telemetry": "workspace:*"
+    "@taskforge/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

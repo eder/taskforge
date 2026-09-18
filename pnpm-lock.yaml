@@ -316,6 +316,9 @@ importers:
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../shared
+      '@taskforge/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
       '@taskforge/verification':
         specifier: workspace:*
         version: link:../verification
@@ -460,6 +463,9 @@ importers:
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../shared
+      '@taskforge/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
     devDependencies:
       typescript:
         specifier: ^5.7.2
@@ -516,6 +522,22 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/telemetry:
+    dependencies:
+      '@taskforge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@taskforge/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@taskforge/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       typescript:
         specifier: ^5.7.2

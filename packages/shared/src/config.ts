@@ -26,16 +26,18 @@ export const TaskForgeConfigSchema = z.object({
     .default({ agent: 'claude' }),
   router: z
     .object({
-      provider: z.enum(['openai', 'static']).default('openai'),
+      provider: z.enum(['openai', 'static', 'adaptive']).default('openai'),
       model: z.string().default('gpt-5.6-luna'),
       escalationModel: z.string().default('gpt-5.6-terra'),
       fallback: z.enum(['static']).default('static'),
+      adaptive: z.boolean().default(false),
     })
     .default({
       provider: 'openai',
       model: 'gpt-5.6-luna',
       escalationModel: 'gpt-5.6-terra',
       fallback: 'static',
+      adaptive: false,
     }),
   execution: z
     .object({
