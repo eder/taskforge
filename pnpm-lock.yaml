@@ -433,6 +433,19 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/plugins:
+    dependencies:
+      '@taskforge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@taskforge/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/router:
     dependencies:
       '@taskforge/agents':
@@ -475,6 +488,9 @@ importers:
       '@taskforge/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@taskforge/planner':
+        specifier: workspace:*
+        version: link:../planner
       '@taskforge/router':
         specifier: workspace:*
         version: link:../router

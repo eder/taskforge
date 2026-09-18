@@ -19,6 +19,8 @@ export default defineConfig({
       '@taskforge/collaboration': path.resolve(__dirname, 'packages/collaboration/src/index.ts'),
       '@taskforge/operator': path.resolve(__dirname, 'packages/operator/src/index.ts'),
       '@taskforge/conversation': path.resolve(__dirname, 'packages/conversation/src/index.ts'),
+      '@taskforge/plugins': path.resolve(__dirname, 'packages/plugins/src/index.ts'),
+      '@taskforge/telemetry': path.resolve(__dirname, 'packages/telemetry/src/index.ts'),
     },
   },
   test: {

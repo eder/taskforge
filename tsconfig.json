@@ -17,6 +17,7 @@
     { "path": "./packages/collaboration" },
     { "path": "./packages/operator" },
     { "path": "./packages/conversation" },
+    { "path": "./packages/plugins" },
     { "path": "./apps/cli" }
   ]
 }

@@ -8,16 +8,33 @@ import { ProcessRunner } from '@taskforge/execution';
 import { GitService } from '@taskforge/workspace';
 import { AgentAdapter } from './adapter-interface.js';
 
+export interface CliAdapterOptions {
+  binaryPath?: string;
+  defaultArgs?: string[];
+  timeoutMs?: number;
+  env?: Record<string, string>;
+}
+
 export abstract class BaseCliAdapter implements AgentAdapter {
   abstract readonly id: string;
   abstract readonly name: string;
   abstract readonly binaryName: string;
 
+  protected options: CliAdapterOptions;
+
+  constructor(options: CliAdapterOptions = {}) {
+    this.options = options;
+  }
+
+  get commandBinary(): string {
+    return this.options.binaryPath || this.binaryName;
+  }
+
   async detect(): Promise<boolean> {
     try {
       const result = await ProcessRunner.run({
         command: 'which',
-        args: [this.binaryName],
+        args: [this.commandBinary],
         timeoutMs: 5000,
       });
       return result.exitCode === 0;
@@ -49,25 +66,38 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     ].join('\n');
   }
 
+  protected formatArgs(prompt: string): string[] {
+    if (this.options.defaultArgs && this.options.defaultArgs.length > 0) {
+      return [...this.options.defaultArgs, prompt];
+    }
+    return ['-p', prompt];
+  }
+
   async execute(assignment: AgentAssignment, context: AgentContext): Promise<AgentResult> {
     const startTime = Date.now();
     const isAvailable = await this.detect();
     if (!isAvailable) {
       return {
         success: false,
-        message: `${this.name} CLI ('${this.binaryName}') is not installed or not in PATH`,
+        message: `${this.name} CLI ('${this.commandBinary}') is not installed or not in PATH`,
         durationMs: Date.now() - startTime,
       };
     }
 
     const prompt = this.buildPrompt(assignment, context);
+    const args = this.formatArgs(prompt);
+    const timeoutMs = this.options.timeoutMs ?? 300000; // 5 minutes default
+
     const result = await ProcessRunner.run({
-      command: this.binaryName,
-      args: ['-p', prompt],
+      command: this.commandBinary,
+      args,
       cwd: context.worktreePath,
-      env: context.environment,
+      env: {
+        ...context.environment,
+        ...this.options.env,
+      },
       abortSignal: context.abortSignal,
-      timeoutMs: 300000, // 5 minutes default
+      timeoutMs,
     });
 
     const git = new GitService(context.worktreePath);
@@ -103,16 +133,29 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
   readonly id = 'claude';
   readonly name = 'Claude Code';
   readonly binaryName = 'claude';
+
+  constructor(options: CliAdapterOptions = {}) {
+    super({ defaultArgs: ['-p'], ...options });
+  }
 }
 
 export class CodexAdapter extends BaseCliAdapter {
   readonly id = 'codex';
   readonly name = 'Codex CLI';
   readonly binaryName = 'codex';
+
+  constructor(options: CliAdapterOptions = {}) {
+    super({ defaultArgs: ['exec'], ...options });
+  }
 }
 
 export class GeminiCliAdapter extends BaseCliAdapter {
   readonly id = 'gemini';
   readonly name = 'Gemini CLI';
   readonly binaryName = 'gemini';
+
+  constructor(options: CliAdapterOptions = {}) {
+    super({ defaultArgs: ['-p'], ...options });
+  }
 }
+

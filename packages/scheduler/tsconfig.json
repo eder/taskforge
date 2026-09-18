@@ -15,6 +15,7 @@
     { "path": "../verification" },
     { "path": "../integration" },
     { "path": "../negotiation" },
+    { "path": "../planner" },
     { "path": "../router" },
     { "path": "../collaboration" }
   ],

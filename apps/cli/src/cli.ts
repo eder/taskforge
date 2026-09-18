@@ -18,7 +18,7 @@ import { AgentRegistry, AgentDetector, FakeAgent } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
-import { DeterministicScheduler } from '@taskforge/scheduler';
+import { DeterministicScheduler, RunOrchestrator } from '@taskforge/scheduler';
 import { InteractiveShell } from '@taskforge/conversation';
 
 export function createCli(): Command {
@@ -302,5 +302,46 @@ export function createCli(): Command {
       db.close();
     });
 
+  // tf run [goal]
+  program
+    .command('run [goal]')
+    .description('Run full multi-agent orchestration pipeline: plan, negotiate, schedule, verify and integrate')
+    .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
+    .option('--fake', 'Force deterministic fake agent fallback', false)
+    .action(async (goalText?: string, options?: { concurrency?: string; fake?: boolean }) => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      if (options?.concurrency) {
+        config.execution.maxParallelTasks = parseInt(options.concurrency, 10);
+      }
+
+      const gitService = new GitService(repoRoot);
+      const isGit = await gitService.isGitRepo();
+      if (!isGit) {
+        console.error('Error: Must be run inside a Git repository.');
+        process.exit(1);
+      }
+
+      const orchestrator = new RunOrchestrator({
+        repoRoot,
+        config,
+        gitService,
+      });
+
+      console.log('TaskForge Pipeline starting...');
+      const result = await orchestrator.run(goalText ?? 'Default execution goal', {
+        fakeFallback: options?.fake ?? true,
+        onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
+      });
+
+      console.log(`\nRun completed with status: ${result.status}`);
+      console.log(`Tasks: ${result.tasksCompleted} succeeded, ${result.tasksFailed} failed`);
+      if (result.integrationBranch) {
+        console.log(`Integration branch created: ${result.integrationBranch}`);
+      }
+      console.log(`Duration: ${(result.durationMs / 1000).toFixed(2)}s`);
+    });
+
   return program;
 }
+

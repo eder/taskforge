@@ -8,6 +8,7 @@ import { HeuristicPlanner } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
 import { StaticRoutingProvider, AgentSelector } from '@taskforge/router';
 import { TaskGraph } from '@taskforge/core';
+import { RunOrchestrator } from '@taskforge/scheduler';
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -27,6 +28,7 @@ export class InteractiveShell {
   private router: StaticRoutingProvider;
   private agentSelector: AgentSelector;
   private currentGraph?: TaskGraph;
+  private lastGoalDescription?: string;
   private isPaused = false;
   private activeRunId?: string;
 
@@ -142,6 +144,7 @@ export class InteractiveShell {
 
       case 'submit_goal': {
         this.activeRunId = `run-${Date.now()}`;
+        this.lastGoalDescription = intent.goal;
         const goal = {
           id: `goal-${Date.now()}`,
           description: intent.goal,
@@ -173,11 +176,34 @@ export class InteractiveShell {
         if (!this.currentGraph) {
           return 'Nenhum plano pendente de aprovação.';
         }
-        return 'Plano aprovado. Executando tarefas agendadas em worktrees isoladas...';
+        const orchestrator = new RunOrchestrator({
+          repoRoot: this.repoRoot,
+          config: this.config,
+          agentRegistry: this.agentRegistry,
+          planner: this.planner,
+          negotiator: this.negotiator,
+          router: this.router,
+          agentSelector: this.agentSelector,
+          gitService: this.gitService,
+        });
+        const result = await orchestrator.run(this.lastGoalDescription ?? 'Execução aprovada', {
+          preplannedGraph: this.currentGraph,
+        });
+        this.currentGraph = undefined;
+        return [
+          'Plano executado com sucesso!',
+          `Status: ${result.status.toUpperCase()}`,
+          `Tarefas concluídas: ${result.tasksCompleted}, falhas: ${result.tasksFailed}`,
+          result.integrationBranch ? `Branch de integração: ${result.integrationBranch}` : '',
+          `Tempo total: ${(result.durationMs / 1000).toFixed(1)}s`,
+        ]
+          .filter(Boolean)
+          .join('\n');
       }
 
       case 'reject_plan': {
         this.currentGraph = undefined;
+        this.lastGoalDescription = undefined;
         return 'Plano descartado conforme solicitado.';
       }
 

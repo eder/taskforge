@@ -24,6 +24,7 @@
     "@taskforge/verification": "workspace:*",
     "@taskforge/integration": "workspace:*",
     "@taskforge/negotiation": "workspace:*",
+    "@taskforge/planner": "workspace:*",
     "@taskforge/router": "workspace:*",
     "@taskforge/collaboration": "workspace:*"
   },

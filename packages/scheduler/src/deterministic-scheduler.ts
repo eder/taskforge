@@ -70,11 +70,15 @@ export class DeterministicScheduler {
     if (this.ctx.preferredAgentMapping && this.ctx.preferredAgentMapping[task.id]) {
       return this.ctx.preferredAgentMapping[task.id];
     }
-    // Default fallback to first available agent or codex / claude
-    if (this.ctx.agentRegistry.get('fake-agent')) {
-      return 'fake-agent';
+    const configuredAgent = this.ctx.config.planner.agent;
+    if (configuredAgent && this.ctx.agentRegistry.get(configuredAgent)) {
+      return configuredAgent;
     }
-    return this.ctx.config.planner.agent || 'codex';
+    const registered = this.ctx.agentRegistry.list();
+    if (registered.length > 0) {
+      return registered[0].id;
+    }
+    return 'codex';
   }
 
   async run(): Promise<SchedulerResult> {
