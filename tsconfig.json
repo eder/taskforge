@@ -11,6 +11,12 @@
     { "path": "./packages/verification" },
     { "path": "./packages/integration" },
     { "path": "./packages/scheduler" },
+    { "path": "./packages/planner" },
+    { "path": "./packages/negotiation" },
+    { "path": "./packages/router" },
+    { "path": "./packages/collaboration" },
+    { "path": "./packages/operator" },
+    { "path": "./packages/conversation" },
     { "path": "./apps/cli" }
   ]
 }

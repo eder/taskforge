@@ -22,6 +22,7 @@ export interface FakeAgentAction {
   shouldFail?: boolean;
   failMessage?: string;
   findings?: ReviewFinding[];
+  collaborationProposal?: import('@taskforge/shared').CollaborationProposal;
 }
 
 export class FakeAgent implements AgentAdapter {
@@ -101,6 +102,17 @@ export class FakeAgent implements AgentAdapter {
     if (action.gitCommitMessage) {
       const git = new GitService(context.worktreePath);
       commitHash = await git.stageAndCommit(action.gitCommitMessage, context.worktreePath);
+    }
+
+    if (action.collaborationProposal) {
+      return {
+        success: false,
+        commitHash,
+        message: action.failMessage ?? `Collaboration escalated by ${this.id}`,
+        durationMs: Date.now() - startTime,
+        findings: action.findings,
+        collaborationProposal: action.collaborationProposal,
+      };
     }
 
     if (action.shouldFail) {

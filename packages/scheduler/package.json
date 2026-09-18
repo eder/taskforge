@@ -22,7 +22,10 @@
     "@taskforge/agents": "workspace:*",
     "@taskforge/core": "workspace:*",
     "@taskforge/verification": "workspace:*",
-    "@taskforge/integration": "workspace:*"
+    "@taskforge/integration": "workspace:*",
+    "@taskforge/negotiation": "workspace:*",
+    "@taskforge/router": "workspace:*",
+    "@taskforge/collaboration": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

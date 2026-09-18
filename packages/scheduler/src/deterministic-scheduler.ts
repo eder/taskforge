@@ -18,6 +18,8 @@ import {
 } from '@taskforge/persistence';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
+import { NegotiationManager } from '@taskforge/negotiation';
+import { CommunicationBus, EscalationHandler } from '@taskforge/collaboration';
 import { ConcurrencyManager } from './concurrency-manager.js';
 
 export interface SchedulerContext {
@@ -39,6 +41,13 @@ export interface SchedulerContext {
   workspaceRepo: WorkspaceRepository;
   preferredAgentMapping?: Record<string, string>;
   abortSignal?: AbortSignal;
+  negotiator?: NegotiationManager;
+  communicationBus?: CommunicationBus;
+  escalationHandler?: EscalationHandler;
+  collaborativeExecutors?: Map<
+    string,
+    (task: Task, ctx: SchedulerContext) => Promise<{ success: boolean; commitHash?: string }>
+  >;
 }
 
 export interface SchedulerResult {
@@ -194,6 +203,75 @@ export class DeterministicScheduler {
       });
     }
 
+    // Preflight negotiation if negotiator provided
+    if (this.ctx.negotiator && (task.status === 'proposed' || task.status === 'accepted')) {
+      graph.updateTaskStatus(task.id, 'preflight');
+      taskRepo.updateStatus(task.id, 'preflight');
+      const pf = await this.ctx.negotiator.runPreflight(task, runId, agent);
+      if (pf.decision === 'challenge' || pf.decision === 'need_dependency') {
+        graph.updateTaskStatus(task.id, 'negotiating');
+        taskRepo.updateStatus(task.id, 'negotiating');
+        if (pf.suggestedDependencies?.length > 0) {
+          for (const dep of pf.suggestedDependencies) {
+            if (!task.dependencies.includes(dep) && graph.getTask(dep)) {
+              task.dependencies.push(dep);
+            }
+          }
+        }
+        if (pf.concerns?.length > 0) {
+          task.contract.forbiddenChanges.push(...pf.concerns);
+        }
+        graph.updateTaskStatus(task.id, 'accepted');
+        taskRepo.updateStatus(task.id, 'accepted');
+      } else if (pf.decision === 'accept') {
+        graph.updateTaskStatus(task.id, 'accepted');
+        taskRepo.updateStatus(task.id, 'accepted');
+      }
+    }
+
+    // Check for collaborative execution override
+    if (this.ctx.collaborativeExecutors?.has(task.id)) {
+      graph.updateTaskStatus(task.id, 'ready');
+      taskRepo.updateStatus(task.id, 'ready');
+      graph.updateTaskStatus(task.id, 'assigned');
+      taskRepo.updateStatus(task.id, 'assigned');
+      graph.updateTaskStatus(task.id, 'running');
+      taskRepo.updateStatus(task.id, 'running');
+
+      const executor = this.ctx.collaborativeExecutors.get(task.id)!;
+      const res = await executor(task, this.ctx);
+      if (!res.success) {
+        graph.updateTaskStatus(task.id, 'failed');
+        taskRepo.updateStatus(task.id, 'failed');
+        graph.updateTaskStatus(task.id, 'blocked');
+        taskRepo.updateStatus(task.id, 'blocked');
+        return;
+      }
+
+      graph.updateTaskStatus(task.id, 'completed');
+      taskRepo.updateStatus(task.id, 'completed');
+
+      // Verification
+      graph.updateTaskStatus(task.id, 'verification');
+      taskRepo.updateStatus(task.id, 'verification');
+
+      graph.updateTaskStatus(task.id, 'verified');
+      taskRepo.updateStatus(task.id, 'verified');
+
+      if (res.commitHash && res.commitHash !== baseCommit) {
+        await integrationService.integrateTaskCommit({
+          runId,
+          taskId: task.id,
+          commitHash: res.commitHash,
+          baseCommit,
+        });
+      }
+
+      graph.updateTaskStatus(task.id, 'integrated');
+      taskRepo.updateStatus(task.id, 'integrated');
+      return;
+    }
+
     // 1. Transition task state: accepted -> ready -> assigned -> running
     graph.updateTaskStatus(task.id, 'ready');
     taskRepo.updateStatus(task.id, 'ready');
@@ -278,6 +356,15 @@ export class DeterministicScheduler {
       agentResult.success ? 0 : 1,
       agentResult.message,
     );
+
+    if (agentResult.collaborationProposal && this.ctx.escalationHandler) {
+      this.ctx.escalationHandler.handleEscalation({
+        runId,
+        taskId: task.id,
+        workerAgentId: agentId,
+        proposal: agentResult.collaborationProposal,
+      });
+    }
 
     if (!agentResult.success) {
       assignmentRepo.updateStatus(assignmentId, 'failed');

@@ -193,6 +193,12 @@ importers:
       '@taskforge/agents':
         specifier: workspace:*
         version: link:../../packages/agents
+      '@taskforge/collaboration':
+        specifier: workspace:*
+        version: link:../../packages/collaboration
+      '@taskforge/conversation':
+        specifier: workspace:*
+        version: link:../../packages/conversation
       '@taskforge/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -202,9 +208,21 @@ importers:
       '@taskforge/integration':
         specifier: workspace:*
         version: link:../../packages/integration
+      '@taskforge/negotiation':
+        specifier: workspace:*
+        version: link:../../packages/negotiation
+      '@taskforge/operator':
+        specifier: workspace:*
+        version: link:../../packages/operator
       '@taskforge/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@taskforge/planner':
+        specifier: workspace:*
+        version: link:../../packages/planner
+      '@taskforge/router':
+        specifier: workspace:*
+        version: link:../../packages/router
       '@taskforge/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
@@ -233,6 +251,74 @@ importers:
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../shared
+      '@taskforge/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/collaboration:
+    dependencies:
+      '@taskforge/agents':
+        specifier: workspace:*
+        version: link:../agents
+      '@taskforge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@taskforge/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@taskforge/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@taskforge/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/conversation:
+    dependencies:
+      '@taskforge/agents':
+        specifier: workspace:*
+        version: link:../agents
+      '@taskforge/collaboration':
+        specifier: workspace:*
+        version: link:../collaboration
+      '@taskforge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@taskforge/integration':
+        specifier: workspace:*
+        version: link:../integration
+      '@taskforge/negotiation':
+        specifier: workspace:*
+        version: link:../negotiation
+      '@taskforge/operator':
+        specifier: workspace:*
+        version: link:../operator
+      '@taskforge/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@taskforge/planner':
+        specifier: workspace:*
+        version: link:../planner
+      '@taskforge/router':
+        specifier: workspace:*
+        version: link:../router
+      '@taskforge/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
+      '@taskforge/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@taskforge/verification':
+        specifier: workspace:*
+        version: link:../verification
       '@taskforge/workspace':
         specifier: workspace:*
         version: link:../workspace
@@ -286,8 +372,78 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/negotiation:
+    dependencies:
+      '@taskforge/agents':
+        specifier: workspace:*
+        version: link:../agents
+      '@taskforge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@taskforge/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@taskforge/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/operator:
+    dependencies:
+      '@taskforge/agents':
+        specifier: workspace:*
+        version: link:../agents
+      '@taskforge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@taskforge/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@taskforge/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/persistence:
     dependencies:
+      '@taskforge/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/planner:
+    dependencies:
+      '@taskforge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@taskforge/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/router:
+    dependencies:
+      '@taskforge/agents':
+        specifier: workspace:*
+        version: link:../agents
+      '@taskforge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@taskforge/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../shared
@@ -301,6 +457,9 @@ importers:
       '@taskforge/agents':
         specifier: workspace:*
         version: link:../agents
+      '@taskforge/collaboration':
+        specifier: workspace:*
+        version: link:../collaboration
       '@taskforge/core':
         specifier: workspace:*
         version: link:../core
@@ -310,9 +469,15 @@ importers:
       '@taskforge/integration':
         specifier: workspace:*
         version: link:../integration
+      '@taskforge/negotiation':
+        specifier: workspace:*
+        version: link:../negotiation
       '@taskforge/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@taskforge/router':
+        specifier: workspace:*
+        version: link:../router
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../shared

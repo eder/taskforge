@@ -11,7 +11,7 @@ export interface GitStatus {
 export class GitService {
   constructor(private repoRoot: string) {}
 
-  private async exec(args: string[], cwd: string = this.repoRoot): Promise<string> {
+  async exec(args: string[], cwd: string = this.repoRoot): Promise<string> {
     const result = await ProcessRunner.run({
       command: 'git',
       args,
@@ -28,6 +28,10 @@ export class GitService {
     }
 
     return result.stdout.trim();
+  }
+
+  async execGit(args: string[], cwd: string = this.repoRoot): Promise<string> {
+    return this.exec(args, cwd);
   }
 
   async isGitRepo(): Promise<boolean> {

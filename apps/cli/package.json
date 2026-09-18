@@ -28,6 +28,12 @@
     "@taskforge/verification": "workspace:*",
     "@taskforge/integration": "workspace:*",
     "@taskforge/scheduler": "workspace:*",
+    "@taskforge/planner": "workspace:*",
+    "@taskforge/negotiation": "workspace:*",
+    "@taskforge/router": "workspace:*",
+    "@taskforge/collaboration": "workspace:*",
+    "@taskforge/operator": "workspace:*",
+    "@taskforge/conversation": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {

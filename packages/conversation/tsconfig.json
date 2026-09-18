@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "composite": true
+  },
+  "references": [
+    { "path": "../shared" },
+    { "path": "../core" },
+    { "path": "../persistence" },
+    { "path": "../workspace" },
+    { "path": "../agents" },
+    { "path": "../operator" },
+    { "path": "../planner" },
+    { "path": "../negotiation" },
+    { "path": "../router" },
+    { "path": "../collaboration" },
+    { "path": "../verification" },
+    { "path": "../integration" },
+    { "path": "../scheduler" }
+  ],
+  "include": ["src/**/*"]
+}

@@ -13,7 +13,10 @@
     { "path": "../agents" },
     { "path": "../core" },
     { "path": "../verification" },
-    { "path": "../integration" }
+    { "path": "../integration" },
+    { "path": "../negotiation" },
+    { "path": "../router" },
+    { "path": "../collaboration" }
   ],
   "include": ["src/**/*"]
 }

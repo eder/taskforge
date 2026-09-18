@@ -87,6 +87,10 @@ export class TaskGraph {
     }
   }
 
+  topologicalSort(): Task[] {
+    return this.getTopologicalOrder();
+  }
+
   getTopologicalOrder(): Task[] {
     this.validate();
 

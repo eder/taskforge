@@ -19,6 +19,7 @@ import { TaskGraph, Task } from '@taskforge/core';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
 import { DeterministicScheduler } from '@taskforge/scheduler';
+import { InteractiveShell } from '@taskforge/conversation';
 
 export function createCli(): Command {
   const program = new Command();
@@ -27,7 +28,11 @@ export function createCli(): Command {
     .name('tf')
     .alias('taskforge')
     .description('TaskForge: Conversational control plane for self-organizing coding-agent teams')
-    .version('0.1.0');
+    .version('0.1.0')
+    .action(async () => {
+      const shell = new InteractiveShell();
+      await shell.start();
+    });
 
   // tf doctor
   program

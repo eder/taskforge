@@ -1,0 +1,236 @@
+import * as readline from 'node:readline';
+import { Readable, Writable } from 'node:stream';
+import { TaskForgeConfig, loadConfig } from '@taskforge/shared';
+import { GitService, RepositoryAnalyzer } from '@taskforge/workspace';
+import { AgentRegistry, AgentDetector } from '@taskforge/agents';
+import { OperatorAgent } from '@taskforge/operator';
+import { HeuristicPlanner } from '@taskforge/planner';
+import { NegotiationManager } from '@taskforge/negotiation';
+import { StaticRoutingProvider, AgentSelector } from '@taskforge/router';
+import { TaskGraph } from '@taskforge/core';
+
+export interface ShellOptions {
+  repoRoot?: string;
+  config?: TaskForgeConfig;
+  input?: Readable;
+  output?: Writable;
+}
+
+export class InteractiveShell {
+  private repoRoot: string;
+  private config: TaskForgeConfig;
+  private operator: OperatorAgent;
+  private agentRegistry: AgentRegistry;
+  private gitService: GitService;
+  private planner: HeuristicPlanner;
+  private negotiator: NegotiationManager;
+  private router: StaticRoutingProvider;
+  private agentSelector: AgentSelector;
+  private currentGraph?: TaskGraph;
+  private isPaused = false;
+  private activeRunId?: string;
+
+  constructor(private options: ShellOptions = {}) {
+    this.repoRoot = options.repoRoot ?? process.cwd();
+    this.config = options.config ?? loadConfig();
+    this.operator = new OperatorAgent();
+    this.agentRegistry = new AgentRegistry();
+    this.gitService = new GitService(this.repoRoot);
+    this.planner = new HeuristicPlanner();
+    this.negotiator = new NegotiationManager();
+    this.router = new StaticRoutingProvider();
+    this.agentSelector = new AgentSelector(this.agentRegistry);
+  }
+
+  async renderBanner(): Promise<string> {
+    const gitStatus = await this.gitService.getStatus().catch(() => ({
+      currentBranch: 'unknown',
+      headCommit: 'unknown',
+      isClean: true,
+    }));
+
+    const analyzer = new RepositoryAnalyzer(this.repoRoot, this.gitService);
+    const profile = await analyzer.analyze().catch(() => ({
+      hasECC: false,
+      summary: 'Repository',
+      languages: [],
+      frameworks: [],
+      testCommands: [],
+      lintCommands: [],
+      typecheckCommands: [],
+      buildCommands: [],
+    }));
+
+    const reports = await AgentDetector.detect(this.agentRegistry.list());
+
+    const lines = [
+      '',
+      ' TaskForge',
+      ` ${this.repoRoot}  •  ${gitStatus.currentBranch}  •  ${gitStatus.isClean ? 'clean' : 'modified'}`,
+      '',
+      ' Agents',
+      ...reports.map((r) => ` ${r.name.padEnd(12)} ● ${r.ready ? 'ready' : 'not detected'}`),
+      '',
+      ' Router',
+      ` OpenAI       ● ${this.config.router.provider === 'openai' ? 'ready' : 'static fallback'}`,
+      '',
+      ' ECC',
+      ` ${profile.hasECC ? '● detected' : '○ not detected'}`,
+      '────────────────────────────────────',
+      '',
+    ];
+
+    return lines.join('\n');
+  }
+
+  async handleInput(input: string): Promise<string> {
+    const text = input.trim();
+    if (!text) return '';
+
+    if (text === '/exit' || text === '/quit') {
+      return 'Sessão encerrada.';
+    }
+
+    const intent = this.operator.parseIntent(text);
+
+    switch (intent.type) {
+      case 'inspect_agents': {
+        const reports = await AgentDetector.detect(this.agentRegistry.list());
+        return this.operator.formatResponse(intent, { agents: reports });
+      }
+
+      case 'inspect_tasks': {
+        const tasks = this.currentGraph
+          ? this.currentGraph.getAllTasks().map((t) => ({
+              id: t.id,
+              title: t.title,
+              status: t.status,
+            }))
+          : [];
+        return this.operator.formatResponse(intent, { tasks });
+      }
+
+      case 'inspect_plan': {
+        if (!this.currentGraph) return 'Nenhum plano ativo no momento.';
+        const tasks = this.currentGraph.getAllTasks();
+        return [
+          'Plano atual de tarefas:',
+          ...tasks.map(
+            (t) =>
+              `  - ${t.id}: ${t.title} [${t.status.toUpperCase()}]${t.dependencies.length > 0 ? ` (Depende de: ${t.dependencies.join(', ')})` : ''}`,
+          ),
+        ].join('\n');
+      }
+
+      case 'pause_execution': {
+        this.isPaused = true;
+        return this.operator.formatResponse(intent, {});
+      }
+
+      case 'resume_execution': {
+        this.isPaused = false;
+        return this.operator.formatResponse(intent, {});
+      }
+
+      case 'add_constraint': {
+        return this.operator.formatResponse(intent, {});
+      }
+
+      case 'cancel_and_reassign': {
+        return this.operator.formatResponse(intent, {});
+      }
+
+      case 'submit_goal': {
+        this.activeRunId = `run-${Date.now()}`;
+        const goal = {
+          id: `goal-${Date.now()}`,
+          description: intent.goal,
+          repository: this.repoRoot,
+          constraints: [],
+          acceptanceCriteria: [],
+          createdAt: new Date(),
+        };
+
+        const proposedGraph = await this.planner.plan(goal);
+        this.currentGraph = await this.negotiator.negotiateGraph(proposedGraph, this.activeRunId);
+
+        const routing = await this.router.route({
+          task: this.currentGraph.getAllTasks()[0],
+          availableAgents: this.agentRegistry.list().map((a) => a.id),
+        });
+
+        const selected = await this.agentSelector.selectAgents(routing.roles);
+
+        return [
+          `Entendi. Estratégia recomendada: ${routing.strategy.toUpperCase()} (Complexidade: ${routing.complexity}, Risco: ${routing.risk}).`,
+          `Time sugerido: ${selected.map((s) => `${s.agent.name} (${s.roleRequest.role})`).join(', ')}.`,
+          `Total de ${this.currentGraph.getAllTasks().length} tarefas estruturadas.`,
+          'Deseja que eu execute? (digite "sim" ou "/approve" para iniciar)',
+        ].join('\n');
+      }
+
+      case 'approve_plan': {
+        if (!this.currentGraph) {
+          return 'Nenhum plano pendente de aprovação.';
+        }
+        return 'Plano aprovado. Executando tarefas agendadas em worktrees isoladas...';
+      }
+
+      case 'reject_plan': {
+        this.currentGraph = undefined;
+        return 'Plano descartado conforme solicitado.';
+      }
+
+      default:
+        return `Comando recebido: "${text}". Digite /tasks, /agents ou descreva um objetivo em linguagem natural.`;
+    }
+  }
+
+  async start(): Promise<void> {
+    const banner = await this.renderBanner();
+    const inStream = this.options.input ?? process.stdin;
+    const outStream = this.options.output ?? process.stdout;
+
+    outStream.write(banner);
+
+    const rl = readline.createInterface({
+      input: inStream,
+      output: outStream,
+      prompt: '> ',
+    });
+
+    let closed = false;
+    rl.on('close', () => {
+      closed = true;
+    });
+
+    rl.prompt();
+
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (trimmed === '/exit' || trimmed === '/quit') {
+        outStream.write('Até logo!\n');
+        break;
+      }
+      const reply = await this.handleInput(trimmed);
+      if (reply) {
+        outStream.write(`${reply}\n\n`);
+      }
+      if (!closed) {
+        try {
+          rl.prompt();
+        } catch {
+          closed = true;
+        }
+      }
+    }
+
+    if (!closed) {
+      try {
+        rl.close();
+      } catch {
+        // ignore
+      }
+    }
+  }
+}

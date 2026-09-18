@@ -69,6 +69,7 @@ export class IntegrationService {
 
       // Cherry pick the commit into the integration branch worktree
       const newHead = await this.gitService.cherryPick(commitHash, wt.path);
+      await this.gitService.execGit(['update-ref', `refs/heads/${branchName}`, newHead]);
       return newHead;
     } catch (err) {
       const branchName = this.getBranchName(runId);

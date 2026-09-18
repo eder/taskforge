@@ -238,7 +238,7 @@ export class TaskRepository {
 
     this.db
       .prepare(
-        `INSERT INTO tasks (
+        `INSERT OR REPLACE INTO tasks (
           id, run_id, goal_id, title, description, type, status,
           contract_json, execution_strategy_json, acceptance_criteria_json,
           rework_count, created_at, updated_at

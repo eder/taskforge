@@ -113,6 +113,7 @@ export interface AgentResult {
   output?: string;
   durationMs: number;
   findings?: ReviewFinding[];
+  collaborationProposal?: CollaborationProposal;
 }
 
 export interface AgentContext {
