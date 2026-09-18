@@ -220,6 +220,9 @@ importers:
       '@taskforge/planner':
         specifier: workspace:*
         version: link:../../packages/planner
+      '@taskforge/plugins':
+        specifier: workspace:*
+        version: link:../../packages/plugins
       '@taskforge/router':
         specifier: workspace:*
         version: link:../../packages/router
@@ -229,6 +232,9 @@ importers:
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@taskforge/telemetry':
+        specifier: workspace:*
+        version: link:../../packages/telemetry
       '@taskforge/verification':
         specifier: workspace:*
         version: link:../../packages/verification
@@ -364,6 +370,9 @@ importers:
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../shared
+      '@taskforge/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
       '@taskforge/verification':
         specifier: workspace:*
         version: link:../verification

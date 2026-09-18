@@ -11,6 +11,7 @@ import { TaskGraph } from '@taskforge/core';
 import { RunOrchestrator } from '@taskforge/scheduler';
 import { TaskForgeDatabase } from '@taskforge/persistence';
 import { TelemetryCollector } from '@taskforge/telemetry';
+import { TuiDashboard } from './tui-dashboard.js';
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -143,6 +144,27 @@ export class InteractiveShell {
           return 'Nenhum run ativo ou recente para consulta de estatísticas.';
         }
         return this.telemetry.formatStatsReport(this.activeRunId);
+      }
+
+      case 'inspect_dashboard': {
+        const gitStatus = await this.gitService.getStatus().catch(() => ({
+          currentBranch: 'unknown',
+          headCommit: 'unknown',
+          isClean: true,
+        }));
+        const reports = await AgentDetector.detect(this.agentRegistry.list());
+        const runStats = this.activeRunId ? this.telemetry.getRunSummary(this.activeRunId) : undefined;
+        const costReport = this.activeRunId ? this.telemetry.getCostReport(this.activeRunId) : undefined;
+        return TuiDashboard.render({
+          repoRoot: this.repoRoot,
+          branch: gitStatus.currentBranch,
+          headCommit: gitStatus.headCommit,
+          isClean: gitStatus.isClean,
+          graph: this.currentGraph,
+          agents: reports,
+          runStats,
+          costReport,
+        });
       }
 
       case 'pause_execution': {

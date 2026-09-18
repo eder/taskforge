@@ -17,9 +17,10 @@ import { GitService, WorktreeManager, RepositoryAnalyzer } from '@taskforge/work
 import { AgentRegistry, AgentDetector, FakeAgent } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { VerificationRunner } from '@taskforge/verification';
-import { IntegrationService } from '@taskforge/integration';
+import { IntegrationService, GitHubWorkflowService } from '@taskforge/integration';
 import { DeterministicScheduler, RunOrchestrator } from '@taskforge/scheduler';
-import { InteractiveShell } from '@taskforge/conversation';
+import { InteractiveShell, TuiDashboard } from '@taskforge/conversation';
+import { TelemetryCollector } from '@taskforge/telemetry';
 
 export function createCli(): Command {
   const program = new Command();
@@ -342,6 +343,139 @@ export function createCli(): Command {
       console.log(`Duration: ${(result.durationMs / 1000).toFixed(2)}s`);
     });
 
+  // tf status / tf dash
+  program
+    .command('status')
+    .alias('dash')
+    .description('Display rich visual TUI dashboard of repository state, agents, worktrees, and tasks')
+    .action(async () => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      const gitService = new GitService(repoRoot);
+      const gitStatus = await gitService.getStatus().catch(() => ({
+        currentBranch: 'unknown',
+        headCommit: 'unknown',
+        isClean: true,
+      }));
+      const registry = new AgentRegistry();
+      const agents = await AgentDetector.detect(registry.list());
+
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+      const runs = runRepo.listAll();
+      const latestRun = runs[0];
+
+      const telemetry = new TelemetryCollector(db);
+      const runStats = latestRun ? telemetry.getRunSummary(latestRun.id) : undefined;
+      const costReport = latestRun ? telemetry.getCostReport(latestRun.id) : undefined;
+
+      const output = TuiDashboard.render({
+        repoRoot,
+        branch: gitStatus.currentBranch,
+        headCommit: gitStatus.headCommit,
+        isClean: gitStatus.isClean,
+        agents,
+        runStats,
+        costReport,
+      });
+
+      console.log(output);
+      db.close();
+    });
+
+  // tf pr create [run-id]
+  program
+    .command('pr create [run-id]')
+    .description('Create a pull request on GitHub with verified audit evidence summary')
+    .option('-b, --base <branch>', 'Base target branch', 'main')
+    .option('-d, --draft', 'Create PR as draft', false)
+    .action(async (runId?: string, options?: { base?: string; draft?: boolean }) => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+
+      const targetRunId = runId ?? runRepo.listAll()[0]?.id;
+      if (!targetRunId) {
+        console.error('Error: No run found. Specify a run-id: tf pr create <run-id>');
+        db.close();
+        process.exit(1);
+      }
+
+      const ghService = new GitHubWorkflowService(db, repoRoot);
+      console.log(`Creating Pull Request for run ${targetRunId}...`);
+      const result = await ghService.createPullRequest({
+        runId: targetRunId,
+        targetBranch: options?.base ?? 'main',
+        draft: options?.draft ?? false,
+      });
+
+      console.log(`\n${result.message}`);
+      if (!result.success && !result.prUrl) {
+        console.log('\n--- Generated PR Description Markdown ---');
+        console.log(result.summary);
+      }
+      db.close();
+    });
+
+  // tf issue <number>
+  program
+    .command('issue <number>')
+    .description('Import a GitHub issue and orchestrate a team to solve it')
+    .option('--fake', 'Force deterministic fake agent fallback', false)
+    .action(async (issueNum: string, options?: { fake?: boolean }) => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const ghService = new GitHubWorkflowService(db, repoRoot);
+
+      console.log(`Importing GitHub Issue #${issueNum}...`);
+      try {
+        const issue = await ghService.importIssue(issueNum);
+        console.log(`Imported Issue: "${issue.title}"`);
+
+        const orchestrator = new RunOrchestrator({
+          repoRoot,
+          config,
+          database: db,
+        });
+
+        const result = await orchestrator.run(issue.goalText, {
+          fakeFallback: options?.fake ?? true,
+          onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
+        });
+
+        console.log(`\nIssue run finished with status: ${result.status}`);
+        if (result.integrationBranch) {
+          console.log(`Integrated changes into branch: ${result.integrationBranch}`);
+        }
+      } catch (err) {
+        console.error(`Error importing issue: ${(err as Error).message}`);
+      } finally {
+        db.close();
+      }
+    });
+
+  // tf cost [run-id]
+  program
+    .command('cost [run-id]')
+    .description('View cost breakdown and token telemetry for a run')
+    .action((runId?: string) => {
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+      const targetRunId = runId ?? runRepo.listAll()[0]?.id;
+
+      if (!targetRunId) {
+        console.log('No runs recorded yet.');
+      } else {
+        const telemetry = new TelemetryCollector(db);
+        console.log(telemetry.formatCostReport(targetRunId));
+      }
+      db.close();
+    });
+
   return program;
 }
+
 

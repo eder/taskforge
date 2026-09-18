@@ -4,6 +4,7 @@ export type OperatorIntent =
   | { type: 'inspect_plan' }
   | { type: 'inspect_cost' }
   | { type: 'inspect_stats' }
+  | { type: 'inspect_dashboard' }
   | { type: 'pause_execution' }
   | { type: 'resume_execution' }
   | {
@@ -37,6 +38,7 @@ export class OperatorIntentParser {
     if (text.startsWith('/plan')) return { type: 'inspect_plan' };
     if (text.startsWith('/cost')) return { type: 'inspect_cost' };
     if (text.startsWith('/stats')) return { type: 'inspect_stats' };
+    if (text.startsWith('/dash') || text.startsWith('/graph')) return { type: 'inspect_dashboard' };
     if (text.startsWith('/pause')) return { type: 'pause_execution' };
     if (text.startsWith('/resume')) return { type: 'resume_execution' };
     if (text.startsWith('/approve')) return { type: 'approve_plan' };

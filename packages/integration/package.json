@@ -19,7 +19,8 @@
     "@taskforge/execution": "workspace:*",
     "@taskforge/workspace": "workspace:*",
     "@taskforge/persistence": "workspace:*",
-    "@taskforge/verification": "workspace:*"
+    "@taskforge/verification": "workspace:*",
+    "@taskforge/telemetry": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

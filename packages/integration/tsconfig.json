@@ -10,7 +10,8 @@
     { "path": "../execution" },
     { "path": "../workspace" },
     { "path": "../persistence" },
-    { "path": "../verification" }
+    { "path": "../verification" },
+    { "path": "../telemetry" }
   ],
   "include": ["src/**/*"]
 }

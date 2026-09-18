@@ -20,7 +20,9 @@
     { "path": "../../packages/router" },
     { "path": "../../packages/collaboration" },
     { "path": "../../packages/operator" },
-    { "path": "../../packages/conversation" }
+    { "path": "../../packages/conversation" },
+    { "path": "../../packages/plugins" },
+    { "path": "../../packages/telemetry" }
   ],
   "include": ["src/**/*"]
 }
