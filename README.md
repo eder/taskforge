@@ -186,21 +186,34 @@ $ tf doctor
   ✔ Diagnostic complete. Everything ready!
 ```
 
-### 2. Launch the Interactive REPL (`tf`)
+### 2. Launch the Interactive REPL (`tf`) — Primary Experience
 
-Launch the conversational shell from the root of any Git repository:
+The interactive terminal is the **flagship interface** of TaskForge. Instead of a one-shot CLI script, `tf` provides an interactive, full-duplex conversational terminal session where developers converse with the multi-agent control plane, review and approve task plans, monitor real-time worker execution across Git worktrees, and steer integration.
+
+#### Terminal Architecture & Layout
+
+The terminal operates with an advanced **split viewport layout**:
+
+- **Scroll Buffer (Top)**: Real-time agent outputs, structured task cards, verification progress, and conversational history stream upward cleanly without flickering.
+- **Persistent Bottom Prompt (`> `)**: The input prompt is always anchored to the bottom row of your terminal, remaining immediately accessible even when agents generate extensive test output or diffs.
 
 ```bash
 $ tf
 ```
 
-The interactive terminal features a **persistent bottom prompt**, full ANSI styling, command history navigation (Up/Down), autocomplete, and real-time agent output streaming.
+---
+
+#### Complete Interactive Lifecycle Walkthrough
+
+##### Phase 1: Environment & Agent Readiness Detection
+
+Upon launching `tf`, TaskForge immediately profiles your workspace, analyzes the Git repository, and detects available coding-agent harnesses along with live quota and rate-limit health:
 
 ```text
-╭─────────────────────────────────────────────────────────────────╮
-│  ✦ TaskForge Control Plane                              v0.1.0  │
-│  Autonomous multi-agent coordination & git-worktree engine      │
-╰─────────────────────────────────────────────────────────────────╯
+ ╭─────────────────────────────────────────────────────────────────╮
+ │  ✦ TaskForge Control Plane                              v0.1.0  │
+ │  Autonomous multi-agent coordination & git-worktree engine      │
+ ╰─────────────────────────────────────────────────────────────────╯
 
   Repository  /Users/developer/projects/payments-service
   Git Status  main (e89f10a) • clean
@@ -210,25 +223,131 @@ The interactive terminal features a **persistent bottom prompt**, full ANSI styl
     ● Codex CLI          [codex  ] ready
     ● Google Antigravity [agy    ] ready
 
-  Router      OpenAI       ● ready
+  Router      OpenAI       ● ready (OpenAI gpt-4o-mini)
+  ECC         ○ not detected
+ ─────────────────────────────────────────────────────────────────
 
-> add idempotency keys to Stripe webhook handler and write tests
+> █
 ```
 
-#### Slash Commands
+##### Phase 2: Natural Language Objective
 
-Inside the REPL, type `/` to access built-in deterministic commands:
+Type an objective in plain natural language. You can specify architectural goals, bug investigations, or refactoring constraints:
 
-| Command   | Description                                                      |
-| :-------- | :--------------------------------------------------------------- |
-| `/agents` | Inspect detected agent harnesses, binary paths, and quota health |
-| `/tasks`  | View active and completed tasks in the current run graph         |
-| `/status` | Display visual dashboard with repository, run, and agent state   |
-| `/cost`   | View token usage and dollar cost attribution for recent runs     |
-| `/pause`  | Pause execution of in-flight tasks                               |
-| `/resume` | Resume paused task execution                                     |
-| `/help`   | View interactive command palette                                 |
-| `/exit`   | Terminate session and clean up transient resources               |
+```text
+> investigate race condition in Stripe webhook and ensure idempotency with redis tests
+```
+
+##### Phase 3: Advisory Plan Proposal & Negotiation
+
+The advisory Router synthesizes the request, computes the **minimum sufficient team**, estimates token footprints, and bounds the task with an explicit contract. You are presented with a structured plan before any files are modified:
+
+```text
+✦ Plan Proposal
+Understood. Recommended strategy: PARALLEL (Complexity: high, Risk: high).
+Suggested team: Claude Code (architecture_reviewer), Codex CLI (reproduction_engineer), Google Antigravity (researcher).
+Estimated tokens: ~4,200 tokens.
+Total of 2 structured tasks:
+  1. 🛠 [FEATURE] Implement Redis-backed idempotency lock in Stripe webhook (~2,400 tokens)
+  2. 🧪 [TEST] Add concurrent integration tests reproducing duplicate charge (~1,800 tokens)
+
+  ● Do you want me to execute? (type "yes", "y" or "/approve" to start)
+
+> yes
+```
+
+##### Phase 4: Live Multi-Agent Execution in Ephemeral Worktrees
+
+Once approved, the deterministic scheduler spawns isolated Git worktrees under `.taskforge/worktrees/`. Agents work strictly in isolation without clobbering each other or your main working copy. Live execution streams directly into the upper viewport:
+
+```text
+╭── ✦ TaskForge Execution ───────────────────────────────────────╮
+│  ✔ Plan approved. Starting execution...
+│  ℹ Starting TaskForge orchestrator run: run-1789831200000
+│  ⚡ Scheduling 2 tasks across worktrees...
+│
+│  ✦ [TASK-01] Assigned to Claude Code: "Implement Redis-backed idempotency lock"
+│    📁 Created isolated worktree (taskforge/TASK-01/asgn-TASK-01-43e83a0f)
+│    ⚡ Agent Claude Code executing...
+│    ✔ Agent Claude Code completed (status: success in 42.1s)
+│    🧪 Running verification checks (pnpm test, pnpm lint, tsc)...
+│    ✔ Verified successfully ✓
+│
+│  ✦ [TASK-02] Assigned to Codex CLI: "Add concurrent integration tests"
+│    📁 Created isolated worktree (taskforge/TASK-02/asgn-TASK-02-b8f90c12)
+│    ⚡ Agent Codex CLI executing...
+│    ✔ Agent Codex CLI completed (status: success in 28.4s)
+│    🧪 Running verification checks...
+│    ✔ Verified successfully ✓
+│
+│  ✔ Integration branch ready: taskforge/integration-run-1789831200000
+╰────────────────────────────────────────────────────────────────╯
+
+> █
+```
+
+##### Phase 5: Continuous Conversation & Follow-up
+
+The session remains active! You can ask follow-up questions, inspect metrics, or direct next steps:
+
+```text
+> create a pull request with the audit summary targeting main
+```
+
+TaskForge generates the PR on GitHub complete with verified audit logs, test execution evidence, and token cost attribution.
+
+---
+
+#### Interactive Slash Commands & Live Autocomplete
+
+Type `/` at the prompt to trigger the **interactive command menu**. The palette automatically filters as you type (for example, typing `/e` instantly selects `/exit`), and you can navigate with the `Up`/`Down` arrow keys and press `Tab` or `Enter` to auto-complete:
+
+```text
+  ┌─────────────────────────────────────────────────────────────┐
+  │  /exit       Exit interactive session                       │
+  │  /help       Display command reference and guide            │
+  │  /plan       Inspect current proposed or active plan        │
+  │  /tasks      List status of all tasks in current run        │
+  │  /status     Open full visual TUI dashboard                 │
+  │  /agents     Inspect detected AI agent harnesses & quotas   │
+  │  /cost       Show tokens and financial cost report          │
+  │  /stats      Show run execution metrics                     │
+  │  /clean      Clean temporary worktrees and branches         │
+  │  /pending    View interactions awaiting approval            │
+  │  /approve    Approve plan or pending interaction            │
+  │  /deny       Deny pending interaction                       │
+  │  /pause      Pause orchestrator execution                   │
+  │  /resume     Resume paused execution                        │
+  └─────────────────────────────────────────────────────────────┘
+> /█
+```
+
+##### Command Reference
+
+| Slash Command        | Description                                                                          |
+| :------------------- | :----------------------------------------------------------------------------------- |
+| `/agents`            | View detected AI harnesses, binary paths, readiness, and real-time quota cooldowns   |
+| `/tasks`             | List all tasks in the current run DAG, dependencies, and execution status            |
+| `/status` / `/dash`  | Open the full-screen visual dashboard with repository, run, and agent metrics        |
+| `/cost`              | Display detailed token consumption breakdown (input, output) and estimated USD costs |
+| `/stats`             | View performance analytics, duration per agent, and verification cycle metrics       |
+| `/plan`              | Re-display the currently active or proposed task dependency graph                    |
+| `/approve`           | Confirm and launch the proposed execution plan or pending interaction                |
+| `/reject`            | Reject the proposed plan and provide conversational steering feedback                |
+| `/deny`              | Deny an agent's request for out-of-scope permissions or destructive commands         |
+| `/pause` / `/resume` | Pause and resume running agent workers on the fly                                    |
+| `/clean`             | Prune all orphaned Git worktrees and stale assignment branches                       |
+| `/help`              | Print complete interactive guide and keybindings                                     |
+| `/exit`              | Safely terminate the session, prune ephemeral resources, and close SQLite handles    |
+
+#### Terminal Navigation & Keybindings
+
+- **`Up` / `Down`**: Navigate through previous command history (or move selection inside the `/` slash menu).
+- **`Left` / `Right`**: Move cursor inline for rapid prompt editing.
+- **`Backspace` / `Delete`**: Edit current prompt buffer.
+- **`Tab`**: Auto-complete matching slash command from the popup menu.
+- **`Ctrl + C`**: Interrupt and cancel currently running agent execution or plan; if idle, safely prompts to exit.
+- **`Esc`**: Dismiss the slash command autocomplete popup.
 
 ---
 
