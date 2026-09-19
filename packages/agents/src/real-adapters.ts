@@ -175,13 +175,3 @@ export class AntigravityAdapter extends BaseCliAdapter {
   }
 }
 
-export class GeminiCliAdapter extends BaseCliAdapter {
-  readonly id = 'gemini';
-  readonly name = 'Gemini CLI';
-  readonly binaryName = 'gemini';
-
-  constructor(options: CliAdapterOptions = {}) {
-    super({ defaultArgs: ['-p'], ...options });
-  }
-}
-

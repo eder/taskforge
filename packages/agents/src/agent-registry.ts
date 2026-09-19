@@ -3,7 +3,6 @@ import {
   ClaudeCodeAdapter,
   CodexAdapter,
   AntigravityAdapter,
-  GeminiCliAdapter,
 } from './real-adapters.js';
 import { AgentQuotaTracker, AgentQuotaStatus } from './quota-tracker.js';
 
@@ -45,7 +44,6 @@ export class AgentRegistry {
     this.register(new ClaudeCodeAdapter());
     this.register(new CodexAdapter());
     this.register(new AntigravityAdapter());
-    this.register(new GeminiCliAdapter());
   }
 
   register(adapter: AgentAdapter): void {

@@ -44,7 +44,7 @@ export class StaticRoutingProvider implements RoutingProvider {
             role: 'researcher',
             requiredCapabilities: ['canRead'],
             objective: 'Trace flow paths and analyze idempotency/data flow',
-            preferredAgent: 'gemini',
+            preferredAgent: 'agy',
           },
           {
             role: 'architecture_reviewer',

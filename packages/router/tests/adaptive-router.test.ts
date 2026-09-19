@@ -47,7 +47,7 @@ describe('Phase 19: Adaptive Routing Provider', () => {
 
     const input: RoutingInput = {
       task,
-      availableAgents: ['claude', 'codex', 'gemini'],
+      availableAgents: ['claude', 'codex', 'agy'],
     };
 
     const decision = await adaptiveProvider.route(input);
@@ -113,7 +113,7 @@ describe('Phase 19: Adaptive Routing Provider', () => {
 
     const input: RoutingInput = {
       task,
-      availableAgents: ['claude', 'codex', 'gemini'],
+      availableAgents: ['claude', 'codex', 'agy'],
     };
 
     const decision = await adaptiveProvider.route(input);

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
-import { AgentRegistry, FakeAgent, ClaudeCodeAdapter, CodexAdapter, GeminiCliAdapter } from '@taskforge/agents';
+import { AgentRegistry, FakeAgent, ClaudeCodeAdapter, CodexAdapter, AntigravityAdapter } from '@taskforge/agents';
 import { RunOrchestrator } from '@taskforge/scheduler';
 import { PluginManager, ECCPlugin } from '@taskforge/plugins';
 import { getDefaultConfig, TaskForgeConfig } from '@taskforge/shared';
@@ -99,12 +99,12 @@ describe('Phases 14-16: Real-Agent E2E v0.1 & Plugin System', () => {
     expect(codex.id).toBe('codex');
     expect(await codex.detect()).toBe(true);
 
-    const gemini = new GeminiCliAdapter({
+    const agy = new AntigravityAdapter({
       binaryPath: 'echo',
-      defaultArgs: ['gemini-simulated'],
+      defaultArgs: ['agy-simulated'],
     });
-    expect(gemini.id).toBe('gemini');
-    expect(await gemini.detect()).toBe(true);
+    expect(agy.id).toBe('agy');
+    expect(await agy.detect()).toBe(true);
   });
 
   it('Phase 15 & 16: PluginManager and ECCPlugin work together in lifecycle', async () => {

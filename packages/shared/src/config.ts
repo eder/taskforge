@@ -70,7 +70,7 @@ export const TaskForgeConfigSchema = z.object({
     .default({
       claude: { enabled: true, maxParallel: 1 },
       codex: { enabled: true, maxParallel: 2 },
-      gemini: { enabled: true, maxParallel: 1 },
+      agy: { enabled: true, maxParallel: 1 },
     }),
   verification: z
     .object({
