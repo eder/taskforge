@@ -10,6 +10,7 @@
     { "path": "../core" },
     { "path": "../persistence" },
     { "path": "../workspace" },
+    { "path": "../execution" },
     { "path": "../agents" },
     { "path": "../operator" },
     { "path": "../planner" },

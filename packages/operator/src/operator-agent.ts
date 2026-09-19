@@ -1,3 +1,5 @@
+import { InteractionScope } from '@taskforge/shared';
+
 export type OperatorIntent =
   | { type: 'inspect_tasks'; taskId?: string }
   | { type: 'inspect_agents' }
@@ -17,6 +19,9 @@ export type OperatorIntent =
   | { type: 'add_constraint'; constraint: string; readOnlyScope?: string }
   | { type: 'approve_plan' }
   | { type: 'reject_plan'; feedback?: string }
+  | { type: 'approve_interaction'; requestId?: string; scope?: InteractionScope; rawAnswer?: string }
+  | { type: 'deny_interaction'; requestId?: string; reason?: string }
+  | { type: 'inspect_pending_interactions' }
   | { type: 'submit_goal'; goal: string }
   | { type: 'general_query'; query: string };
 
@@ -41,7 +46,25 @@ export class OperatorIntentParser {
     if (text.startsWith('/dash') || text.startsWith('/graph')) return { type: 'inspect_dashboard' };
     if (text.startsWith('/pause')) return { type: 'pause_execution' };
     if (text.startsWith('/resume')) return { type: 'resume_execution' };
-    if (text.startsWith('/approve')) return { type: 'approve_plan' };
+    if (text.startsWith('/pending')) return { type: 'inspect_pending_interactions' };
+
+    if (text.startsWith('/approve')) {
+      const parts = text.split(/\s+/);
+      if (parts.length > 1) {
+        return {
+          type: 'approve_interaction',
+          requestId: parts[1],
+          scope: (parts[2] as InteractionScope) ?? 'task',
+        };
+      }
+      return { type: 'approve_plan' };
+    }
+
+    if (text.startsWith('/deny')) {
+      const parts = text.split(/\s+/);
+      return { type: 'deny_interaction', requestId: parts[1], reason: parts.slice(2).join(' ') };
+    }
+
     if (text.startsWith('/reject')) return { type: 'reject_plan', feedback: text.replace('/reject', '').trim() };
 
     if (text.startsWith('/reassign')) {
@@ -175,6 +198,44 @@ export class OperatorIntentParser {
       };
     }
 
+    // Natural language approvals
+    if (
+      lower.includes('pode instalar') ||
+      lower.includes('pode executar') ||
+      lower.includes('pode rodar') ||
+      lower.includes('permitido') ||
+      lower.includes('autorizado') ||
+      lower.includes('autorizo') ||
+      lower.includes('pode fazer') ||
+      lower.includes('pode alterar') ||
+      lower.includes('allow installation') ||
+      lower.includes('approve')
+    ) {
+      let scope: import('@taskforge/shared').InteractionScope = 'task';
+      if (lower.includes('só para essa task') || lower.includes('apenas nesta task') || lower.includes('nesta tarefa')) {
+        scope = 'task';
+      } else if (lower.includes('sempre') || lower.includes('no projeto') || lower.includes('projeto todo')) {
+        scope = 'project';
+      } else if (lower.includes('nesta run') || lower.includes('nesta execução')) {
+        scope = 'run';
+      } else if (lower.includes('uma vez') || lower.includes('só agora')) {
+        scope = 'once';
+      }
+      return { type: 'approve_interaction', scope, rawAnswer: text };
+    }
+
+    if (
+      lower.includes('não pode') ||
+      lower.includes('proibido') ||
+      lower.includes('não autorizo') ||
+      lower.includes('negar') ||
+      lower.includes('rejeitar') ||
+      lower.includes('deny') ||
+      lower.includes('do not allow')
+    ) {
+      return { type: 'deny_interaction', reason: text };
+    }
+
     // New goal submission
     if (
       lower.startsWith('cria ') ||
@@ -247,6 +308,24 @@ export class OperatorAgent {
 
       case 'reject_plan':
         return 'Plano rejeitado. Aguardando novos parâmetros do operador.';
+
+      case 'approve_interaction':
+        return `✓ permitido${intent.scope ? ` para ${intent.scope}` : ''}. Agente retomou o trabalho.`;
+
+      case 'deny_interaction':
+        return 'Operação negada pelo operador.';
+
+      case 'inspect_pending_interactions': {
+        const pending = (state.pending as Array<{ id: string; agentId: string; prompt: string; resource?: string }>) || [];
+        if (pending.length === 0) return 'Nenhuma interação pendente de aprovação humana.';
+        return [
+          'Interações pendentes de aprovação:',
+          ...pending.map((p) => `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`),
+          '',
+          'Para aprovar: /approve <id> [task|run|project] ou responda naturalmente (ex: "pode instalar só para essa task")',
+          'Para negar: /deny <id>',
+        ].join('\n');
+      }
 
       case 'inspect_cost':
         return `Uso acumulado: ${state.tokensUsed || 0} tokens (Custo estimado: $${state.estimatedCost || '0.00'})`;

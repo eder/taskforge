@@ -6,6 +6,9 @@ export type TaskStatus =
   | 'ready'
   | 'assigned'
   | 'running'
+  | 'waiting_input'
+  | 'waiting_permission'
+  | 'waiting_auth'
   | 'completed'
   | 'verification'
   | 'verified'
@@ -49,6 +52,9 @@ export type CollaborationMode =
 export type AssignmentStatus =
   | 'pending'
   | 'running'
+  | 'waiting_input'
+  | 'waiting_permission'
+  | 'waiting_auth'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -122,6 +128,7 @@ export interface AgentContext {
   assignment: AgentAssignment;
   environment?: Record<string, string>;
   abortSignal?: AbortSignal;
+  onEvent?: (event: AgentRuntimeEvent) => Promise<void>;
 }
 
 export interface VerificationCheck {
@@ -200,3 +207,143 @@ export interface AgentMessage {
   artifactRefs?: string[];
   createdAt: Date;
 }
+
+export type PermissionDecision = 'allow' | 'deny' | 'ask_human';
+export type PermissionCategory = 'filesystem' | 'commands' | 'git' | 'tools' | 'network' | 'custom';
+export type InteractionType = 'permission' | 'question' | 'confirmation' | 'input' | 'auth' | 'tool_approval';
+export type InteractionStatus = 'pending' | 'resolved' | 'timed_out' | 'blocked' | 'denied';
+export type InteractionPriority = 'low' | 'normal' | 'high' | 'urgent';
+export type InteractionScope = 'once' | 'task' | 'run' | 'project';
+export type ResolutionSource = 'policy' | 'context' | 'agent' | 'human';
+
+export interface InteractionRequest {
+  id: string;
+  runId: string;
+  taskId: string;
+  assignmentId: string;
+  agentId: string;
+  type: InteractionType;
+  prompt: string;
+  category?: PermissionCategory | string;
+  resource?: string;
+  status: InteractionStatus;
+  priority: InteractionPriority;
+  timeoutMs?: number;
+  scope?: InteractionScope;
+  createdAt: string;
+  resolvedAt?: string;
+}
+
+export interface InteractionResponse {
+  id: string;
+  requestId: string;
+  decision: 'allow' | 'deny' | 'answer' | 'cancel';
+  payload?: string;
+  source: ResolutionSource;
+  scope: InteractionScope;
+  responderId?: string;
+  createdAt: string;
+}
+
+export interface BaseAgentRuntimeEvent {
+  type: string;
+  sessionId: string;
+  assignmentId: string;
+  agentId: string;
+  timestamp: string;
+}
+
+export interface AgentOutputEvent extends BaseAgentRuntimeEvent {
+  type: 'output';
+  channel: 'stdout' | 'stderr';
+  text: string;
+}
+
+export interface AgentQuestionEvent extends BaseAgentRuntimeEvent {
+  type: 'question';
+  requestId: string;
+  prompt: string;
+  options?: string[];
+}
+
+export interface PermissionRequestEvent extends BaseAgentRuntimeEvent {
+  type: 'permission_request';
+  requestId: string;
+  category: PermissionCategory | string;
+  operation: string;
+  resource: string;
+  prompt: string;
+}
+
+export interface ConfirmationRequestEvent extends BaseAgentRuntimeEvent {
+  type: 'confirmation_request';
+  requestId: string;
+  prompt: string;
+}
+
+export interface InputRequiredEvent extends BaseAgentRuntimeEvent {
+  type: 'input_required';
+  requestId: string;
+  prompt: string;
+}
+
+export interface AuthenticationRequiredEvent extends BaseAgentRuntimeEvent {
+  type: 'authentication_required';
+  requestId: string;
+  prompt: string;
+  service?: string;
+}
+
+export interface ToolApprovalEvent extends BaseAgentRuntimeEvent {
+  type: 'tool_approval';
+  requestId: string;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  prompt: string;
+}
+
+export interface AgentStatusEvent extends BaseAgentRuntimeEvent {
+  type: 'status';
+  status: AssignmentStatus;
+  message?: string;
+}
+
+export interface AgentErrorEvent extends BaseAgentRuntimeEvent {
+  type: 'error';
+  error: string;
+}
+
+export interface AgentCompletedEvent extends BaseAgentRuntimeEvent {
+  type: 'completed';
+  result: AgentResult;
+}
+
+export type AgentRuntimeEvent =
+  | AgentOutputEvent
+  | AgentQuestionEvent
+  | PermissionRequestEvent
+  | ConfirmationRequestEvent
+  | InputRequiredEvent
+  | AuthenticationRequiredEvent
+  | ToolApprovalEvent
+  | AgentStatusEvent
+  | AgentErrorEvent
+  | AgentCompletedEvent;
+
+export interface AgentSession {
+  readonly sessionId: string;
+  readonly assignmentId: string;
+  events(): AsyncIterable<AgentRuntimeEvent>;
+  send(message: AgentMessage | string): Promise<void>;
+  respond(response: InteractionResponse): Promise<void>;
+  cancel(): Promise<void>;
+}
+
+export type QuestionRoutingOutcome =
+  | 'AUTO_RESOLVE'
+  | 'ROUTE_TO_AGENT'
+  | 'ASK_HUMAN'
+  | 'POLICY_ALLOW'
+  | 'POLICY_DENY'
+  | 'BLOCK';
+

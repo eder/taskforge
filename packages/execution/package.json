@@ -15,7 +15,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@taskforge/shared": "workspace:*"
+    "@taskforge/shared": "workspace:*",
+    "@taskforge/persistence": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

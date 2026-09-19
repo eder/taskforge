@@ -298,6 +298,9 @@ importers:
       '@taskforge/core':
         specifier: workspace:*
         version: link:../core
+      '@taskforge/execution':
+        specifier: workspace:*
+        version: link:../execution
       '@taskforge/integration':
         specifier: workspace:*
         version: link:../integration
@@ -351,6 +354,9 @@ importers:
 
   packages/execution:
     dependencies:
+      '@taskforge/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../shared

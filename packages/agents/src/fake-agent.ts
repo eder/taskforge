@@ -6,10 +6,12 @@ import {
   AgentContext,
   AgentMessage,
   AgentResult,
+  AgentSession,
   ReviewFinding,
 } from '@taskforge/shared';
 import { GitService } from '@taskforge/workspace';
 import { AgentAdapter } from './adapter-interface.js';
+import { FakeAgentSession } from './agent-session.js';
 
 export interface FakeAgentAction {
   writeFile?: {
@@ -23,6 +25,23 @@ export interface FakeAgentAction {
   failMessage?: string;
   findings?: ReviewFinding[];
   collaborationProposal?: import('@taskforge/shared').CollaborationProposal;
+  requestPermission?: {
+    category: string;
+    operation: string;
+    resource: string;
+    prompt: string;
+  };
+  askQuestion?: {
+    prompt: string;
+    options?: string[];
+  };
+  requireConfirmation?: {
+    prompt: string;
+  };
+  requireAuth?: {
+    prompt: string;
+    service?: string;
+  };
 }
 
 export class FakeAgent implements AgentAdapter {
@@ -31,6 +50,7 @@ export class FakeAgent implements AgentAdapter {
   public actions: FakeAgentAction[] = [];
   public executedAssignments: AgentAssignment[] = [];
   public receivedMessages: AgentMessage[] = [];
+  public activeSessions: Map<string, FakeAgentSession> = new Map();
 
   constructor(
     id: string = 'fake-agent',
@@ -61,9 +81,17 @@ export class FakeAgent implements AgentAdapter {
     };
   }
 
+  async createSession(assignment: AgentAssignment, _context: AgentContext): Promise<AgentSession> {
+    const sessionId = `session-${assignment.id}`;
+    const session = new FakeAgentSession(sessionId, assignment.id);
+    this.activeSessions.set(assignment.id, session);
+    return session;
+  }
+
   async execute(assignment: AgentAssignment, context: AgentContext): Promise<AgentResult> {
     this.executedAssignments.push(assignment);
     const startTime = Date.now();
+    const session = this.activeSessions.get(assignment.id);
 
     // Default action if none specified
     const action = this.actions.shift() ?? {
@@ -80,6 +108,125 @@ export class FakeAgent implements AgentAdapter {
         message: 'Assignment cancelled',
         durationMs: Date.now() - startTime,
       };
+    }
+
+    // Interactive Trigger: Permission Request
+    if (action.requestPermission) {
+      const requestId = `req-perm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const permEvent: import('@taskforge/shared').PermissionRequestEvent = {
+        type: 'permission_request',
+        sessionId: session?.sessionId ?? `session-${assignment.id}`,
+        assignmentId: assignment.id,
+        agentId: this.id,
+        requestId,
+        category: action.requestPermission.category,
+        operation: action.requestPermission.operation,
+        resource: action.requestPermission.resource,
+        prompt: action.requestPermission.prompt,
+        timestamp: new Date().toISOString(),
+      };
+
+      if (session) {
+        session.pushEvent(permEvent);
+        const resp = await session.waitForResponse(requestId);
+        if (resp.decision === 'deny' || resp.decision === 'cancel') {
+          return {
+            success: false,
+            message: `Permission denied: ${action.requestPermission.operation}`,
+            output: resp.payload,
+            durationMs: Date.now() - startTime,
+          };
+        }
+      } else if (context.onEvent) {
+        await context.onEvent(permEvent);
+      }
+    }
+
+    // Interactive Trigger: Question
+    if (action.askQuestion) {
+      const requestId = `req-q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const qEvent: import('@taskforge/shared').AgentQuestionEvent = {
+        type: 'question',
+        sessionId: session?.sessionId ?? `session-${assignment.id}`,
+        assignmentId: assignment.id,
+        agentId: this.id,
+        requestId,
+        prompt: action.askQuestion.prompt,
+        options: action.askQuestion.options,
+        timestamp: new Date().toISOString(),
+      };
+
+      if (session) {
+        session.pushEvent(qEvent);
+        const resp = await session.waitForResponse(requestId);
+        if (resp.decision === 'deny' || resp.decision === 'cancel') {
+          return {
+            success: false,
+            message: `Question denied/cancelled`,
+            output: resp.payload,
+            durationMs: Date.now() - startTime,
+          };
+        }
+      } else if (context.onEvent) {
+        await context.onEvent(qEvent);
+      }
+    }
+
+    // Interactive Trigger: Confirmation
+    if (action.requireConfirmation) {
+      const requestId = `req-conf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const confEvent: import('@taskforge/shared').ConfirmationRequestEvent = {
+        type: 'confirmation_request',
+        sessionId: session?.sessionId ?? `session-${assignment.id}`,
+        assignmentId: assignment.id,
+        agentId: this.id,
+        requestId,
+        prompt: action.requireConfirmation.prompt,
+        timestamp: new Date().toISOString(),
+      };
+
+      if (session) {
+        session.pushEvent(confEvent);
+        const resp = await session.waitForResponse(requestId);
+        if (resp.decision === 'deny' || resp.decision === 'cancel') {
+          return {
+            success: false,
+            message: `Confirmation rejected`,
+            durationMs: Date.now() - startTime,
+          };
+        }
+      } else if (context.onEvent) {
+        await context.onEvent(confEvent);
+      }
+    }
+
+    // Interactive Trigger: Authentication Required
+    if (action.requireAuth) {
+      const requestId = `req-auth-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const authEvent: import('@taskforge/shared').AuthenticationRequiredEvent = {
+        type: 'authentication_required',
+        sessionId: session?.sessionId ?? `session-${assignment.id}`,
+        assignmentId: assignment.id,
+        agentId: this.id,
+        requestId,
+        prompt: action.requireAuth.prompt,
+        service: action.requireAuth.service,
+        timestamp: new Date().toISOString(),
+      };
+
+      if (session) {
+        session.pushEvent(authEvent);
+        const resp = await session.waitForResponse(requestId);
+        if (resp.decision === 'deny' || resp.decision === 'cancel') {
+          return {
+            success: false,
+            message: `Authentication failed or denied`,
+            durationMs: Date.now() - startTime,
+          };
+        }
+      } else if (context.onEvent) {
+        await context.onEvent(authEvent);
+      }
     }
 
     if (action.writeFile) {
@@ -139,5 +286,10 @@ export class FakeAgent implements AgentAdapter {
     this.receivedMessages.push(message);
   }
 
-  async cancel(_sessionId: string): Promise<void> {}
+  async cancel(sessionId: string): Promise<void> {
+    const session = this.activeSessions.get(sessionId);
+    if (session) {
+      await session.cancel();
+    }
+  }
 }

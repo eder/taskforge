@@ -11,7 +11,7 @@ import {
   EventRepository,
   VerificationRepository,
   WorkspaceRepository,
-  AuditService,
+  InteractionRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager, RepositoryAnalyzer } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, FakeAgent } from '@taskforge/agents';
@@ -90,47 +90,6 @@ export function createCli(): Command {
       console.log('\nDiagnostic complete.');
     });
 
-  // tf inspect <run-id>
-  program
-    .command('inspect <run-id>')
-    .description('Inspect run audit record, tasks, events and integration state')
-    .action((runId: string) => {
-      const config = loadConfig();
-      const db = new TaskForgeDatabase(config.execution.databasePath);
-      const runRepo = new RunRepository(db);
-      const goalRepo = new GoalRepository(db);
-      const taskRepo = new TaskRepository(db);
-      const eventRepo = new EventRepository(db);
-      const auditService = new AuditService(runRepo, goalRepo, taskRepo, eventRepo);
-
-      const audit = auditService.reconstructRun(runId);
-      if (!audit) {
-        console.error(`Run ${runId} not found.`);
-        process.exit(1);
-      }
-
-      console.log(`\n=== TaskForge Run ${audit.run.id} ===`);
-      console.log(`Status: ${audit.run.status}`);
-      console.log(`Created: ${audit.run.createdAt}`);
-      if (audit.goal) {
-        console.log(`Goal: ${audit.goal.description}`);
-      }
-
-      console.log('\nTasks:');
-      for (const t of audit.tasks) {
-        console.log(`  - [${t.status.toUpperCase()}] ${t.id}: ${t.title} (${t.type})`);
-        if (t.dependencies && t.dependencies.length > 0) {
-          console.log(`      Dependencies: ${t.dependencies.join(', ')}`);
-        }
-      }
-
-      console.log(`\nEvents (${audit.events.length}):`);
-      for (const e of audit.events) {
-        console.log(`  [${e.timestamp.toISOString()}] ${e.type}${e.taskId ? ` (${e.taskId})` : ''}`);
-      }
-      console.log('');
-      db.close();
-    });
 
   // tf cleanup
   program
@@ -170,10 +129,11 @@ export function createCli(): Command {
   // tf exec [goal]
   program
     .command('exec [goal]')
-    .description('Execute a goal in headless deterministic mode')
+    .description('Execute engineering objective in headless automation mode')
+    .option('-y, --yes', 'Automatically confirm plan and non-interactive permissions', false)
     .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
     .option('--fake', 'Use FakeAgents for deterministic execution', false)
-    .action(async (goalText?: string, options?: { concurrency?: string; fake?: boolean }) => {
+    .action(async (goalText?: string, options?: { yes?: boolean; concurrency?: string; fake?: boolean }) => {
       const repoRoot = process.cwd();
       const config = loadConfig();
       if (options?.concurrency) {
@@ -472,6 +432,87 @@ export function createCli(): Command {
         const telemetry = new TelemetryCollector(db);
         console.log(telemetry.formatCostReport(targetRunId));
       }
+      db.close();
+    });
+
+  // tf inspect <run-id>
+  program
+    .command('inspect [run-id]')
+    .description('Inspect detailed structured run state, tasks, assignments and interactions')
+    .option('--json', 'Output full run report as JSON', false)
+    .action((runId?: string, options?: { json?: boolean }) => {
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+      const targetRunId = runId ?? runRepo.listAll()[0]?.id;
+
+      if (!targetRunId) {
+        console.log(options?.json ? '{}' : 'No runs recorded yet.');
+        db.close();
+        return;
+      }
+
+      const run = runRepo.get(targetRunId);
+      const goalRepo = new GoalRepository(db);
+      const taskRepo = new TaskRepository(db);
+      const assignmentRepo = new AssignmentRepository(db);
+      const verificationRepo = new VerificationRepository(db);
+      const interactionRepo = new InteractionRepository(db);
+      const telemetry = new TelemetryCollector(db);
+
+      const goal = run?.goalId ? goalRepo.get(run.goalId) : undefined;
+      const tasks = taskRepo.listByRun(targetRunId);
+      const assignments = tasks.flatMap((t) => assignmentRepo.listByTask(t.id));
+      const interactions = interactionRepo.listAllRequests(targetRunId);
+      const metrics = telemetry.getRunSummary(targetRunId);
+      const cost = telemetry.getCostReport(targetRunId);
+
+      if (options?.json) {
+        console.log(
+          JSON.stringify(
+            {
+              run,
+              goal,
+              tasks,
+              assignments,
+              interactions,
+              metrics,
+              cost,
+            },
+            null,
+            2,
+          ),
+        );
+      } else {
+        console.log(`\n========================================`);
+        console.log(` RUN INSPECTION: ${targetRunId}`);
+        console.log(`========================================`);
+        console.log(`Status:       ${run?.status.toUpperCase()}`);
+        console.log(`Created:      ${run?.createdAt}`);
+        console.log(`Completed:    ${run?.completedAt ?? 'in progress / active'}`);
+        if (goal) {
+          console.log(`Goal:         ${goal.description}`);
+        }
+        console.log(`\nTasks (${tasks.length}):`);
+        for (const t of tasks) {
+          const ver = verificationRepo.getLatestByTask(t.id);
+          console.log(
+            `  ● ${t.id}: ${t.title} [${t.status.toUpperCase()}] (verificado: ${ver ? (ver.passed ? 'SIM' : 'NÃO') : 'N/A'})`,
+          );
+        }
+        if (interactions.length > 0) {
+          console.log(`\nInteractions (${interactions.length}):`);
+          for (const i of interactions) {
+            console.log(`  ● [${i.id}] ${i.type}: ${i.prompt} [${i.status.toUpperCase()}]`);
+          }
+        }
+        if (cost) {
+          console.log(
+            `\nCost: $${cost.totalCostUsd.toFixed(4)} (${cost.totalInputTokens + cost.totalOutputTokens} tokens)`,
+          );
+        }
+      }
+
       db.close();
     });
 

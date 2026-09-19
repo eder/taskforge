@@ -20,6 +20,7 @@ import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
 import { NegotiationManager } from '@taskforge/negotiation';
 import { CommunicationBus, EscalationHandler } from '@taskforge/collaboration';
+import { InteractionGateway } from '@taskforge/execution';
 import { ConcurrencyManager } from './concurrency-manager.js';
 
 export interface SchedulerContext {
@@ -39,6 +40,7 @@ export interface SchedulerContext {
   executionRepo: ExecutionRepository;
   eventRepo: EventRepository;
   workspaceRepo: WorkspaceRepository;
+  interactionGateway?: InteractionGateway;
   preferredAgentMapping?: Record<string, string>;
   abortSignal?: AbortSignal;
   negotiator?: NegotiationManager;
@@ -347,11 +349,74 @@ export class DeterministicScheduler {
       logPath,
     });
 
+    let session: import('@taskforge/shared').AgentSession | undefined;
+    if (agent.createSession) {
+      session = await agent.createSession(assignment, {
+        worktreePath: wt.path,
+        task: task.contract,
+        assignment,
+        abortSignal,
+      });
+
+      if (this.ctx.interactionGateway && session) {
+        (async () => {
+          try {
+            for await (const event of session.events()) {
+              if (event.type === 'permission_request') {
+                assignmentRepo.updateStatus(assignmentId, 'waiting_permission');
+                taskRepo.updateStatus(task.id, 'waiting_permission');
+                graph.updateTaskStatus(task.id, 'waiting_permission');
+              } else if (event.type === 'question') {
+                assignmentRepo.updateStatus(assignmentId, 'waiting_input');
+                taskRepo.updateStatus(task.id, 'waiting_input');
+                graph.updateTaskStatus(task.id, 'waiting_input');
+              } else if (event.type === 'authentication_required') {
+                assignmentRepo.updateStatus(assignmentId, 'waiting_auth');
+                taskRepo.updateStatus(task.id, 'waiting_auth');
+                graph.updateTaskStatus(task.id, 'waiting_auth');
+              }
+
+              await this.ctx.interactionGateway!.handleEvent(event, session, {
+                runId,
+                taskId: task.id,
+                assignmentId,
+                agentId,
+              });
+
+              assignmentRepo.updateStatus(assignmentId, 'running');
+              taskRepo.updateStatus(task.id, 'running');
+              graph.updateTaskStatus(task.id, 'running');
+            }
+          } catch {
+            // session closed
+          }
+        })();
+      }
+    }
+
     const agentResult = await agent.execute(assignment, {
       worktreePath: wt.path,
       task: task.contract,
       assignment,
       abortSignal,
+      onEvent: async (event) => {
+        if (this.ctx.interactionGateway && session) {
+          if (event.type === 'permission_request') {
+            assignmentRepo.updateStatus(assignmentId, 'waiting_permission');
+            taskRepo.updateStatus(task.id, 'waiting_permission');
+            graph.updateTaskStatus(task.id, 'waiting_permission');
+          }
+          await this.ctx.interactionGateway.handleEvent(event, session, {
+            runId,
+            taskId: task.id,
+            assignmentId,
+            agentId,
+          });
+          assignmentRepo.updateStatus(assignmentId, 'running');
+          taskRepo.updateStatus(task.id, 'running');
+          graph.updateTaskStatus(task.id, 'running');
+        }
+      },
     });
 
     executionRepo.complete(

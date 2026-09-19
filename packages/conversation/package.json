@@ -19,6 +19,7 @@
     "@taskforge/core": "workspace:*",
     "@taskforge/persistence": "workspace:*",
     "@taskforge/workspace": "workspace:*",
+    "@taskforge/execution": "workspace:*",
     "@taskforge/agents": "workspace:*",
     "@taskforge/operator": "workspace:*",
     "@taskforge/planner": "workspace:*",

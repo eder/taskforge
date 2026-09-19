@@ -9,6 +9,7 @@ import {
   EventRepository,
   VerificationRepository,
   WorkspaceRepository,
+  InteractionRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, FakeAgent } from '@taskforge/agents';
@@ -18,6 +19,7 @@ import { NegotiationManager } from '@taskforge/negotiation';
 import { StaticRoutingProvider, AgentSelector, RoutingProvider } from '@taskforge/router';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
+import { InteractionGateway } from '@taskforge/execution';
 import { DeterministicScheduler, SchedulerResult } from './deterministic-scheduler.js';
 
 export interface OrchestratorOptions {
@@ -33,6 +35,7 @@ export interface OrchestratorOptions {
   worktreeManager?: WorktreeManager;
   verificationRunner?: VerificationRunner;
   integrationService?: IntegrationService;
+  interactionGateway?: InteractionGateway;
 }
 
 export interface RunOptions {
@@ -76,6 +79,8 @@ export class RunOrchestrator {
   private eventRepo: EventRepository;
   private verificationRepo: VerificationRepository;
   private workspaceRepo: WorkspaceRepository;
+  private interactionRepo: InteractionRepository;
+  private interactionGateway: InteractionGateway;
 
   constructor(options: OrchestratorOptions) {
     this.repoRoot = options.repoRoot;
@@ -90,6 +95,14 @@ export class RunOrchestrator {
     this.eventRepo = new EventRepository(this.db);
     this.verificationRepo = new VerificationRepository(this.db);
     this.workspaceRepo = new WorkspaceRepository(this.db);
+    this.interactionRepo = new InteractionRepository(this.db);
+
+    this.interactionGateway =
+      options.interactionGateway ??
+      new InteractionGateway({
+        config: this.config,
+        interactionRepo: this.interactionRepo,
+      });
 
     this.agentRegistry = options.agentRegistry ?? new AgentRegistry();
     this.planner = options.planner ?? new HeuristicPlanner();
@@ -111,6 +124,10 @@ export class RunOrchestrator {
         this.verificationRunner,
         this.eventRepo,
       );
+  }
+
+  public getInteractionGateway(): InteractionGateway {
+    return this.interactionGateway;
   }
 
   async run(goalDescription: string, options: RunOptions = {}): Promise<OrchestrationResult> {
@@ -237,6 +254,7 @@ export class RunOrchestrator {
       executionRepo: this.executionRepo,
       eventRepo: this.eventRepo,
       workspaceRepo: this.workspaceRepo,
+      interactionGateway: this.interactionGateway,
     });
 
     const schedulerResult = await scheduler.run();

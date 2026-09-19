@@ -108,6 +108,106 @@ export const TaskForgeConfigSchema = z.object({
       allowAutomaticWriteOutsideWorktree: false,
       allowAutomaticPush: false,
     }),
+  permissions: z
+    .object({
+      filesystem: z
+        .object({
+          workspace_write: z.enum(['allow', 'deny', 'ask_human']).default('allow'),
+          outside_workspace: z.enum(['allow', 'deny', 'ask_human']).default('ask_human'),
+          delete_files: z.enum(['allow', 'deny', 'ask_human']).default('ask_human'),
+        })
+        .default({
+          workspace_write: 'allow',
+          outside_workspace: 'ask_human',
+          delete_files: 'ask_human',
+        }),
+      commands: z
+        .object({
+          tests: z.enum(['allow', 'deny', 'ask_human']).default('allow'),
+          lint: z.enum(['allow', 'deny', 'ask_human']).default('allow'),
+          package_install: z.enum(['allow', 'deny', 'ask_human']).default('ask_human'),
+          network: z.enum(['allow', 'deny', 'ask_human']).default('ask_human'),
+          sudo: z.enum(['allow', 'deny', 'ask_human']).default('deny'),
+        })
+        .default({
+          tests: 'allow',
+          lint: 'allow',
+          package_install: 'ask_human',
+          network: 'ask_human',
+          sudo: 'deny',
+        }),
+      git: z
+        .object({
+          commit: z.enum(['allow', 'deny', 'ask_human']).default('allow'),
+          push: z.enum(['allow', 'deny', 'ask_human']).default('ask_human'),
+          force_push: z.enum(['allow', 'deny', 'ask_human']).default('deny'),
+          merge_main: z.enum(['allow', 'deny', 'ask_human']).default('deny'),
+        })
+        .default({
+          commit: 'allow',
+          push: 'ask_human',
+          force_push: 'deny',
+          merge_main: 'deny',
+        }),
+      fallback: z.enum(['allow', 'deny', 'ask_human']).default('ask_human'),
+    })
+    .default({
+      filesystem: {
+        workspace_write: 'allow',
+        outside_workspace: 'ask_human',
+        delete_files: 'ask_human',
+      },
+      commands: {
+        tests: 'allow',
+        lint: 'allow',
+        package_install: 'ask_human',
+        network: 'ask_human',
+        sudo: 'deny',
+      },
+      git: {
+        commit: 'allow',
+        push: 'ask_human',
+        force_push: 'deny',
+        merge_main: 'deny',
+      },
+      fallback: 'ask_human',
+    }),
+  headless: z
+    .object({
+      onHumanQuestion: z.enum(['block', 'fail']).default('block'),
+      onUnknownPermission: z.enum(['deny', 'ask_human', 'allow']).default('deny'),
+      onAuthenticationRequired: z.enum(['fail', 'block']).default('fail'),
+      onConfirmationRequired: z.enum(['block', 'fail']).default('block'),
+    })
+    .default({
+      onHumanQuestion: 'block',
+      onUnknownPermission: 'deny',
+      onAuthenticationRequired: 'fail',
+      onConfirmationRequired: 'block',
+    }),
+  interactions: z
+    .object({
+      humanResponseTimeout: z.union([z.number(), z.string()]).default(1800000),
+      onTimeout: z
+        .object({
+          permission: z.enum(['deny', 'allow']).default('deny'),
+          question: z.enum(['block', 'fail']).default('block'),
+          confirmation: z.enum(['block', 'deny']).default('block'),
+        })
+        .default({
+          permission: 'deny',
+          question: 'block',
+          confirmation: 'block',
+        }),
+    })
+    .default({
+      humanResponseTimeout: 1800000,
+      onTimeout: {
+        permission: 'deny',
+        question: 'block',
+        confirmation: 'block',
+      },
+    }),
 });
 
 export type TaskForgeConfig = z.infer<typeof TaskForgeConfigSchema>;

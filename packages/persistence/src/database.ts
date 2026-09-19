@@ -270,12 +270,46 @@ export class TaskForgeDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS interaction_requests (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        task_id TEXT,
+        assignment_id TEXT,
+        agent_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        category TEXT,
+        resource TEXT,
+        status TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        timeout_ms INTEGER,
+        scope TEXT,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS interaction_responses (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        payload TEXT,
+        source TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        responder_id TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(request_id) REFERENCES interaction_requests(id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tasks_run_id ON tasks(run_id);
       CREATE INDEX IF NOT EXISTS idx_assignments_task_id ON assignments(task_id);
       CREATE INDEX IF NOT EXISTS idx_events_run_id ON events(run_id);
       CREATE INDEX IF NOT EXISTS idx_executions_task_id ON executions(task_id);
       CREATE INDEX IF NOT EXISTS idx_cost_run_id ON cost_tracking(run_id);
       CREATE INDEX IF NOT EXISTS idx_run_metrics_run_id ON run_metrics(run_id);
+      CREATE INDEX IF NOT EXISTS idx_interaction_req_run ON interaction_requests(run_id);
+      CREATE INDEX IF NOT EXISTS idx_interaction_req_task ON interaction_requests(task_id);
+      CREATE INDEX IF NOT EXISTS idx_interaction_req_status ON interaction_requests(status);
+      CREATE INDEX IF NOT EXISTS idx_interaction_resp_req ON interaction_responses(request_id);
     `);
   }
 

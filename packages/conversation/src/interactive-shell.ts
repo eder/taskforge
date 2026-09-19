@@ -9,8 +9,9 @@ import { NegotiationManager } from '@taskforge/negotiation';
 import { StaticRoutingProvider, AgentSelector } from '@taskforge/router';
 import { TaskGraph } from '@taskforge/core';
 import { RunOrchestrator } from '@taskforge/scheduler';
-import { TaskForgeDatabase } from '@taskforge/persistence';
+import { TaskForgeDatabase, InteractionRepository } from '@taskforge/persistence';
 import { TelemetryCollector } from '@taskforge/telemetry';
+import { InteractionGateway } from '@taskforge/execution';
 import { TuiDashboard } from './tui-dashboard.js';
 
 export interface ShellOptions {
@@ -33,6 +34,8 @@ export class InteractiveShell {
   private negotiator: NegotiationManager;
   private router: StaticRoutingProvider;
   private agentSelector: AgentSelector;
+  private interactionRepo: InteractionRepository;
+  private interactionGateway: InteractionGateway;
   private currentGraph?: TaskGraph;
   private lastGoalDescription?: string;
   private isPaused = false;
@@ -50,6 +53,11 @@ export class InteractiveShell {
     this.negotiator = new NegotiationManager();
     this.router = new StaticRoutingProvider();
     this.agentSelector = new AgentSelector(this.agentRegistry);
+    this.interactionRepo = new InteractionRepository(this.db);
+    this.interactionGateway = new InteractionGateway({
+      config: this.config,
+      interactionRepo: this.interactionRepo,
+    });
   }
 
   async renderBanner(): Promise<string> {
@@ -215,7 +223,49 @@ export class InteractiveShell {
         ].join('\n');
       }
 
+      case 'approve_interaction': {
+        const pending = this.interactionGateway.getPendingRequests();
+        const target = intent.requestId
+          ? pending.find((p) => p.id === intent.requestId)
+          : pending[0];
+
+        if (!target) {
+          return 'Nenhuma interação pendente encontrada para aprovação.';
+        }
+
+        const scope = intent.scope ?? 'task';
+        this.interactionGateway.resolve(target.id, 'allow', undefined, scope);
+        return `✓ permitido para ${target.taskId || target.id} (escopo: ${scope})\nAgente ${target.agentId} retomou o trabalho.`;
+      }
+
+      case 'deny_interaction': {
+        const pending = this.interactionGateway.getPendingRequests();
+        const target = intent.requestId
+          ? pending.find((p) => p.id === intent.requestId)
+          : pending[0];
+
+        if (!target) {
+          return 'Nenhuma interação pendente encontrada para rejeição.';
+        }
+
+        this.interactionGateway.resolve(target.id, 'deny', intent.reason, 'once');
+        return `✕ Operação negada para ${target.taskId || target.id}. Agente notificado.`;
+      }
+
+      case 'inspect_pending_interactions': {
+        const pending = this.interactionGateway.getPendingRequests();
+        return this.operator.formatResponse(intent, { pending });
+      }
+
       case 'approve_plan': {
+        // If there's an active interaction waiting for human approval, resolve it
+        const pending = this.interactionGateway.getPendingRequests();
+        if (pending.length > 0) {
+          const target = pending[0];
+          this.interactionGateway.resolve(target.id, 'allow', undefined, 'task');
+          return `✓ permitido para ${target.taskId || target.id} (escopo: task)\nAgente ${target.agentId} retomou o trabalho.`;
+        }
+
         if (!this.currentGraph) {
           return 'Nenhum plano pendente de aprovação.';
         }
@@ -229,6 +279,7 @@ export class InteractiveShell {
           router: this.router,
           agentSelector: this.agentSelector,
           gitService: this.gitService,
+          interactionGateway: this.interactionGateway,
         });
         const result = await orchestrator.run(this.lastGoalDescription ?? 'Execução aprovada', {
           preplannedGraph: this.currentGraph,
