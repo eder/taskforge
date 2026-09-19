@@ -230,14 +230,50 @@ export class FakeAgent implements AgentAdapter {
       }
     }
 
+    if (context.logPath) {
+      try {
+        const logDir = path.dirname(context.logPath);
+        if (!fs.existsSync(logDir)) {
+          fs.mkdirSync(logDir, { recursive: true });
+        }
+        fs.appendFileSync(
+          context.logPath,
+          `[FakeAgent] Starting assignment ${assignment.id} (${this.name})\n`,
+        );
+      } catch {
+        // ignore log error
+      }
+    }
+
     if (action.activitySteps && action.activitySteps.length > 0) {
       for (const step of action.activitySteps) {
         context.onActivity?.(step);
+        if (context.logPath) {
+          try {
+            fs.appendFileSync(context.logPath, `[FakeAgent] ${step}\n`);
+          } catch {
+            // ignore
+          }
+        }
       }
     } else if (action.writeFile) {
       context.onActivity?.(`Writing ${action.writeFile.path}...`);
+      if (context.logPath) {
+        try {
+          fs.appendFileSync(context.logPath, `[FakeAgent] Writing ${action.writeFile.path}\n`);
+        } catch {
+          // ignore
+        }
+      }
     } else {
       context.onActivity?.(`Analyzing workspace...`);
+      if (context.logPath) {
+        try {
+          fs.appendFileSync(context.logPath, `[FakeAgent] Analyzing workspace...\n`);
+        } catch {
+          // ignore
+        }
+      }
     }
 
     if (action.writeFile) {

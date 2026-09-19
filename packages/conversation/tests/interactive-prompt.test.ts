@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PassThrough } from 'node:stream';
+import { TaskForgeDatabase } from '@taskforge/persistence';
 import { InteractiveShell, findWordLeft, findWordRight } from '../src/interactive-shell.js';
 import { TerminalViewport } from '../src/terminal-viewport.js';
 
@@ -91,13 +92,14 @@ describe('Interactive Terminal Prompt & REPL', () => {
     it('processes natural language inputs without requiring CLI subcommands', async () => {
       const inStream = new PassThrough();
       const outStream = new PassThrough();
+      const db = new TaskForgeDatabase(':memory:');
 
       let captured = '';
       outStream.on('data', (d) => {
         captured += d.toString();
       });
 
-      const shell = new InteractiveShell({ input: inStream, output: outStream });
+      const shell = new InteractiveShell({ input: inStream, output: outStream, database: db });
       const runPromise = shell.start();
 
       // Feed natural language queries
@@ -105,29 +107,34 @@ describe('Interactive Terminal Prompt & REPL', () => {
       inStream.write('/exit\n');
 
       await runPromise;
+      shell.close();
 
       expect(captured).toContain('TaskForge');
       expect(captured).toContain('Recommended strategy:');
     });
 
     it('supports abortSignal cancellation in handleInput', async () => {
-      const shell = new InteractiveShell();
+      const db = new TaskForgeDatabase(':memory:');
+      const shell = new InteractiveShell({ database: db });
       const abortCtrl = new AbortController();
       abortCtrl.abort();
 
       const reply = await shell.handleInput('yes --fake', abortCtrl.signal);
+      shell.close();
       expect(reply).toBeDefined();
     });
 
     it('cleanly terminates conversational loop on /quit and closes resources', async () => {
       const inStream = new PassThrough();
       const outStream = new PassThrough();
+      const db = new TaskForgeDatabase(':memory:');
 
-      const shell = new InteractiveShell({ input: inStream, output: outStream });
+      const shell = new InteractiveShell({ input: inStream, output: outStream, database: db });
       const runPromise = shell.start();
 
       inStream.write('/quit\n');
       await runPromise;
+      shell.close();
 
       expect(true).toBe(true);
     });

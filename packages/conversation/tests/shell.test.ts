@@ -1,9 +1,40 @@
-import { describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { TaskForgeDatabase } from '@taskforge/persistence';
 import { InteractiveShell } from '../src/interactive-shell.js';
 
 describe('InteractiveShell (REPL)', () => {
+  let tmpDir: string;
+  let db: TaskForgeDatabase;
+  const shellsToClean: InteractiveShell[] = [];
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-shell-test-'));
+    db = new TaskForgeDatabase(path.join(tmpDir, 'test.db'));
+  });
+
+  afterEach(() => {
+    for (const shell of shellsToClean) {
+      shell.close();
+    }
+    shellsToClean.length = 0;
+    try {
+      db.close();
+    } catch {
+      // ignore db close error
+    }
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore directory cleanup error
+    }
+  });
+
   it('renders initial startup banner with repo and agent status', async () => {
-    const shell = new InteractiveShell();
+    const shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    shellsToClean.push(shell);
     const banner = await shell.renderBanner();
 
     expect(banner).toContain('TaskForge');
@@ -12,7 +43,8 @@ describe('InteractiveShell (REPL)', () => {
   });
 
   it('processes user commands in conversational REPL', async () => {
-    const shell = new InteractiveShell();
+    const shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    shellsToClean.push(shell);
 
     // Check agents command
     const defaultAgentsReply = await shell.handleInput('/agents');
@@ -70,5 +102,34 @@ describe('InteractiveShell (REPL)', () => {
     expect(streamActiveReply).toContain('task-test-stream');
     expect(streamActiveReply).toContain('Claude Code');
     expect(streamActiveReply).toContain('[1: task-test-stream]');
+
+    // Check /cancel command
+    const cancelReply = await shell.handleInput('/cancel');
+    expect(cancelReply).toBeDefined();
+
+    // Check background asyncExecution mode
+    const asyncDb = new TaskForgeDatabase(path.join(tmpDir, 'async.db'));
+    const asyncShell = new InteractiveShell({
+      asyncExecution: true,
+      repoRoot: tmpDir,
+      database: asyncDb,
+    });
+    shellsToClean.push(asyncShell);
+    await asyncShell.handleInput('create webhook router');
+    const asyncApproveReply = await asyncShell.handleInput('y --fake');
+    expect(asyncApproveReply).toContain('Execution running in background');
+    expect(asyncApproveReply).toContain('REPL is active');
+    expect(asyncShell.activeExecutionController).toBeDefined();
+
+    // Cancel active background execution
+    const bgCancelReply = await asyncShell.handleInput('/cancel');
+    expect(bgCancelReply).toContain('Plan execution cancelled by user');
+    expect(asyncShell.activeExecutionController).toBeUndefined();
+
+    // Check /runs command
+    const runsReply = await shell.handleInput('/runs');
+    expect(runsReply).toContain('TaskForge Runs History');
+    expect(runsReply).toContain('taskforge/run-');
+    expect(runsReply).toContain('git merge taskforge/run-');
   });
 });

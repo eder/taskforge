@@ -15,6 +15,8 @@ export interface ProcessRunOptions {
   logPath?: string;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  onSpawn?: (child: ChildProcess) => void;
+  stdin?: import('node:stream').Readable | string;
 }
 
 export interface ProcessRunResult {
@@ -40,6 +42,8 @@ export class ProcessRunner {
       logPath,
       onStdout,
       onStderr,
+      onSpawn,
+      stdin,
     } = options;
 
     const sanitizedEnv = sanitizeEnvironment(process.env, env, envPolicy);
@@ -65,13 +69,22 @@ export class ProcessRunner {
       const cleanup = () => {
         if (timer) clearTimeout(timer);
         if (logStream) logStream.end();
+        if (child?.stdin && !child.stdin.destroyed) {
+          try {
+            child.stdin.end();
+          } catch {
+            // ignore stdin end error
+          }
+        }
       };
+
+      const useStdinPipe = Boolean(stdin || onSpawn);
 
       try {
         child = spawn(command, args, {
           cwd,
           env: sanitizedEnv,
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: [useStdinPipe ? 'pipe' : 'ignore', 'pipe', 'pipe'],
           detached: process.platform !== 'win32',
         });
       } catch (err) {
@@ -83,6 +96,27 @@ export class ProcessRunner {
             error: err,
           }),
         );
+      }
+
+      if (onSpawn && child) {
+        try {
+          onSpawn(child);
+        } catch {
+          // ignore callback error
+        }
+      }
+
+      if (stdin && child?.stdin) {
+        try {
+          if (typeof stdin === 'string') {
+            child.stdin.write(stdin);
+            child.stdin.end();
+          } else {
+            stdin.pipe(child.stdin);
+          }
+        } catch {
+          // ignore stdin error
+        }
       }
 
       const pid = child.pid;

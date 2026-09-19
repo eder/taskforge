@@ -16,7 +16,7 @@ import {
 } from '@taskforge/router';
 import { TaskGraph } from '@taskforge/core';
 import { RunOrchestrator } from '@taskforge/scheduler';
-import { TaskForgeDatabase, InteractionRepository } from '@taskforge/persistence';
+import { TaskForgeDatabase, InteractionRepository, RunRepository, GoalRepository } from '@taskforge/persistence';
 import { TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { TuiDashboard } from './tui-dashboard.js';
@@ -74,6 +74,7 @@ export class InteractiveShell {
   public viewport: TerminalViewport;
   public slashMenu: SlashMenu;
   public activityTracker: AgentActivityTracker;
+  public activeExecutionController?: AbortController;
   private tickerTimer?: NodeJS.Timeout;
   private tickerFrameIndex = 0;
 
@@ -253,6 +254,25 @@ export class InteractiveShell {
         ].join('\n');
       }
 
+      case 'inspect_runs': {
+        const runRepo = new RunRepository(this.db);
+        const goalRepo = new GoalRepository(this.db);
+        const runs = runRepo.listAll();
+        if (runs.length === 0) {
+          return 'No execution runs recorded yet.';
+        }
+        const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
+        const header = `${colors.brand}✦ ${colors.bold}TaskForge Runs History${colors.reset}\n  ${divider}`;
+        const runLines = runs.slice(0, 10).map((r) => {
+          const goal = r.goalId ? goalRepo.get(r.goalId) : undefined;
+          const statusBadge = theme.statusBadge(r.status);
+          const branch = `taskforge/run-${r.id}`;
+          const goalDesc = goal ? `\n    ${colors.dim}Goal:${colors.reset}   ${goal.description}` : '';
+          return `  ● ${colors.bold}${r.id}${colors.reset} [${r.status.toUpperCase()}] ${statusBadge} ${colors.dim}(${r.createdAt.slice(0, 19).replace('T', ' ')})${colors.reset}${goalDesc}\n    ${colors.dim}Branch:${colors.reset} ${colors.cyan}${branch}${colors.reset}\n    ${colors.dim}Merge:${colors.reset}  ${colors.green}git merge ${branch}${colors.reset}`;
+        });
+        return [header, ...runLines, `  ${divider}`].join('\n');
+      }
+
       case 'inspect_cost': {
         if (!this.activeRunId) {
           return 'No active or recent runs for cost inquiry.';
@@ -307,6 +327,11 @@ export class InteractiveShell {
       }
 
       case 'cancel_and_reassign': {
+        if (this.activeExecutionController) {
+          this.activeExecutionController.abort();
+          this.activeExecutionController = undefined;
+          return 'Plan execution cancelled by user.';
+        }
         return this.operator.formatResponse(intent, {});
       }
 
@@ -454,9 +479,8 @@ export class InteractiveShell {
         });
 
         const isBackground =
-          Boolean(this.options.asyncExecution) ||
-          text.includes('--bg') ||
-          text.includes('--async');
+          this.options.asyncExecution ??
+          (this.viewport.isInteractive || text.includes('--bg') || text.includes('--async'));
 
         if (isBackground) {
           const runId = `run-${Date.now()}`;
@@ -464,18 +488,20 @@ export class InteractiveShell {
           const goalDesc = this.lastGoalDescription ?? 'Approved execution';
           this.activeRunId = runId;
           this.currentGraph = undefined;
+          this.activeExecutionController = new AbortController();
 
           orchestrator
             .run(goalDesc, {
               preplannedGraph: graphToRun,
               fakeFallback: isFakeRequested,
-              abortSignal,
+              abortSignal: this.activeExecutionController.signal,
               activityTracker: this.activityTracker,
               onProgress: (msg) => {
                 this.viewport.writeUpper(theme.formatProgressMessage(msg));
               },
             })
             .then((result) => {
+              this.activeExecutionController = undefined;
               this.telemetry.recordRunMetrics({
                 runId: result.runId,
                 durationMs: result.durationMs,
@@ -485,18 +511,70 @@ export class InteractiveShell {
                 reworkCount: 0,
                 escalationsCount: 0,
               });
-              const statusBadge =
+
+              const statusColor =
                 result.status === 'completed'
-                  ? `${colors.green}✔ Run ${result.runId} completed successfully!${colors.reset}`
-                  : `${colors.red}✕ Run ${result.runId} finished with status: ${result.status}${colors.reset}`;
-              this.viewport.writeUpper(
-                `\n  ${statusBadge} ${colors.dim}(${result.tasksCompleted} tasks completed, ${result.tasksFailed} failed in ${(result.durationMs / 1000).toFixed(1)}s)${colors.reset}\n`,
-              );
+                  ? colors.green
+                  : result.status === 'cancelled'
+                    ? colors.yellow
+                    : colors.red;
+
+              const outputs = Object.entries(result.taskOutputs ?? {})
+                .filter(([, text]) => text && text.trim().length > 0)
+                .map(([taskId, text]) => {
+                  const header = `Explanation & Analysis [${taskId}]`;
+                  const highlighted = theme.renderMarkdown(text.trim());
+                  const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
+                  return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
+                })
+                .join('\n\n');
+
+              const outputPrefix = outputs ? `${outputs}\n` : '';
+
+              const isSuccess = result.status === 'completed';
+              const isCancelled = result.status === 'cancelled';
+              const title = isSuccess
+                ? 'Plan executed successfully!'
+                : isCancelled
+                  ? 'Plan execution cancelled by user'
+                  : 'Plan execution encountered issues';
+              const titleIcon = isSuccess
+                ? `${colors.green}✔${colors.reset}`
+                : isCancelled
+                  ? `${colors.yellow}⊘${colors.reset}`
+                  : `${colors.red}✖${colors.reset}`;
+
+              const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
+
+              const summary = [
+                outputPrefix,
+                `  ${colors.brand}✦ ${colors.bold}Run Summary${colors.reset}`,
+                `  ${divider}`,
+                `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
+                '',
+                `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
+                `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
+                result.integrationBranch
+                  ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}\n    ${colors.dim}To merge:${colors.reset}           ${colors.green}git merge ${result.integrationBranch}${colors.reset}`
+                  : '',
+                result.error
+                  ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
+                  : '',
+                `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
+                `  ${divider}`,
+              ]
+                .filter(Boolean)
+                .join('\n');
+
+              this.viewport.writeUpper(`\n${summary}\n`);
+              this.viewport.drawFooter('');
             })
             .catch((err) => {
+              this.activeExecutionController = undefined;
               this.viewport.writeUpper(
                 `\n  ${colors.red}✕ Run execution error:${colors.reset} ${err.message}\n`,
               );
+              this.viewport.drawFooter('');
             });
 
           return [
@@ -575,7 +653,7 @@ export class InteractiveShell {
             `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
             `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
             result.integrationBranch
-              ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}`
+              ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}\n    ${colors.dim}To merge:${colors.reset}           ${colors.green}git merge ${result.integrationBranch}${colors.reset}`
               : '',
             result.error
               ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
@@ -615,6 +693,7 @@ export class InteractiveShell {
           `  ${colors.bold}Quick Commands:${colors.reset}`,
           `    ${colors.brand}/agents${colors.reset}   List available agent harnesses and status`,
           `    ${colors.brand}/tasks${colors.reset}    List active tasks in this run`,
+          `    ${colors.brand}/runs${colors.reset}     List past runs and their git branches`,
           `    ${colors.brand}/plan${colors.reset}     View current task plan`,
           `    ${colors.brand}/pending${colors.reset}  View interactions awaiting approval`,
           `    ${colors.brand}/stream${colors.reset}   Inspect real-time agent output stream`,
@@ -709,6 +788,10 @@ export class InteractiveShell {
     const cleanup = () => {
       if (closed) return;
       closed = true;
+      if (this.activeExecutionController) {
+        this.activeExecutionController.abort();
+        this.activeExecutionController = undefined;
+      }
       process.removeListener('SIGINT', cleanup);
       process.removeListener('exit', cleanup);
       this.slashMenu.close();
@@ -751,8 +834,20 @@ export class InteractiveShell {
         }
       }
 
-      // Ctrl+C: Cancel current running operation or exit safely
+      // Ctrl+C: Cancel active background execution, running operation, or exit safely
       if (key?.ctrl && key?.name === 'c') {
+        if (this.activeExecutionController) {
+          this.activeExecutionController.abort();
+          this.activeExecutionController = undefined;
+          this.viewport.writeUpper(
+            `\n${colors.red}^C Plan execution cancelled by user.${colors.reset}\n`,
+          );
+          buffer = '';
+          cursorIndex = 0;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          return;
+        }
+
         if (isRunning && activeAbortController) {
           activeAbortController.abort();
           this.viewport.writeUpper(
@@ -1063,6 +1158,14 @@ export class InteractiveShell {
     cleanup();
     if (!this.options.input) {
       process.exit(0);
+    }
+  }
+
+  public close(): void {
+    try {
+      this.db.close();
+    } catch {
+      // ignore if already closed
     }
   }
 }

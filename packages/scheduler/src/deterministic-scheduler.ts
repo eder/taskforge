@@ -293,9 +293,33 @@ export class DeterministicScheduler {
         // Verification
         graph.updateTaskStatus(task.id, 'verification');
         taskRepo.updateStatus(task.id, 'verification');
+        this.ctx.activityTracker?.updateStatus(task.id, 'Running automated verification checks...');
+        this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
+
+        const verifyPath = (res as any).worktreePath ?? this.ctx.repoRoot;
+        const verResult = await verificationRunner.verify({
+          taskId: task.id,
+          runId,
+          worktreePath: verifyPath,
+          config,
+          taskType: task.type,
+        });
+
+        if (!verResult.passed) {
+          const rework = taskRepo.incrementRework(task.id);
+          this.ctx.onProgress?.(
+            `[${task.id}] Collaborative verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
+          );
+          graph.updateTaskStatus(task.id, 'failed');
+          taskRepo.updateStatus(task.id, 'failed');
+          graph.updateTaskStatus(task.id, 'blocked');
+          taskRepo.updateStatus(task.id, 'blocked');
+          return;
+        }
 
         graph.updateTaskStatus(task.id, 'verified');
         taskRepo.updateStatus(task.id, 'verified');
+        this.ctx.onProgress?.(`[${task.id}] Verified successfully ✓`);
 
         if (res.commitHash && res.commitHash !== baseCommit) {
           await integrationService.integrateTaskCommit({
@@ -486,6 +510,7 @@ export class DeterministicScheduler {
         task: task.contract,
         assignment,
         abortSignal,
+        logPath,
         onActivity: (activity: string) => {
           this.ctx.activityTracker?.updateStatus(task.id, activity);
         },
@@ -530,6 +555,13 @@ export class DeterministicScheduler {
         workerAgentId: agentId,
         proposal: agentResult.collaborationProposal,
       });
+      assignmentRepo.updateStatus(assignmentId, 'failed');
+      graph.updateTaskStatus(task.id, 'blocked');
+      taskRepo.updateStatus(task.id, 'blocked');
+      this.ctx.onProgress?.(
+        `[${task.id}] Emergent collaboration escalated (${agentResult.collaborationProposal.reason})`,
+      );
+      return;
     }
 
     if (!agentResult.success) {

@@ -1,6 +1,50 @@
+import { z } from 'zod';
+import { PerformanceEngine } from '@taskforge/telemetry';
 import { RoutingProvider, RoutingInput, RoutingDecision } from './router-types.js';
 import { StaticRoutingProvider } from './static-routing-provider.js';
 import { AgentQuotaTracker } from '@taskforge/agents';
+
+export const RoleRequestSchema = z.object({
+  role: z.enum([
+    'lead',
+    'implementer',
+    'researcher',
+    'architecture_reviewer',
+    'reviewer',
+    'critic',
+    'tester',
+    'reproduction_engineer',
+    'security_reviewer',
+    'integrator',
+  ]),
+  requiredCapabilities: z.array(z.string()),
+  objective: z.string(),
+  preferredAgent: z.string().optional(),
+});
+
+export const RoutingDecisionSchema = z.object({
+  strategy: z.enum([
+    'single',
+    'pair',
+    'parallel',
+    'partitioned',
+    'competitive',
+    'review',
+    'collaborative',
+    'swarm',
+  ]),
+  complexity: z.enum(['low', 'medium', 'high']),
+  risk: z.enum(['low', 'medium', 'high']),
+  uncertainty: z.enum(['low', 'medium', 'high']),
+  teamSize: z.number().int().min(1),
+  roles: z.array(RoleRequestSchema).min(1),
+  communication: z.object({
+    required: z.boolean(),
+    initialAlignment: z.boolean(),
+    synthesisBeforeImplementation: z.boolean(),
+  }),
+  reason: z.string(),
+});
 
 export const ROUTING_DECISION_JSON_SCHEMA = {
   type: 'object',
@@ -78,12 +122,15 @@ export const ROUTING_DECISION_JSON_SCHEMA = {
 export class OpenAIRoutingProvider implements RoutingProvider {
   readonly id = 'openai';
   private fallbackProvider = new StaticRoutingProvider();
+  private performanceEngine?: PerformanceEngine;
 
   constructor(
     private apiKey?: string,
     private model: string = 'gpt-5.6-luna',
     private timeoutMs: number = 15000,
+    options: { performanceEngine?: PerformanceEngine } = {},
   ) {
+    this.performanceEngine = options.performanceEngine;
     if (!this.apiKey) {
       this.apiKey = process.env.OPENAI_API_KEY;
     }
@@ -102,6 +149,32 @@ export class OpenAIRoutingProvider implements RoutingProvider {
       const quotaTracker = AgentQuotaTracker.getInstance();
       const healthyAgents = input.availableAgents.filter((id) => quotaTracker.isAvailable(id));
       const agentsForRouting = healthyAgents.length > 0 ? healthyAgents : input.availableAgents;
+
+      // Extract historical performance if performanceEngine is configured
+      const historicalPerformance: Record<string, unknown> = {};
+      if (this.performanceEngine) {
+        for (const agentId of agentsForRouting) {
+          try {
+            const stats = this.performanceEngine.getAgentStats({
+              agentId,
+              role: 'implementer',
+              taskType: input.task.type,
+            });
+            historicalPerformance[agentId] = {
+              sampleSize: stats.sampleSize,
+              successRate: stats.successRate,
+              firstPassRate: stats.firstPassRate,
+              avgDurationMs: stats.averageDurationMs,
+              costPerSuccessfulTask: stats.costPerSuccessfulTask,
+              reworkRate: stats.reworkRate,
+              compositeScore: stats.compositeScore,
+              confidence: stats.confidence,
+            };
+          } catch {
+            // ignore telemetry query failure
+          }
+        }
+      }
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -130,6 +203,8 @@ export class OpenAIRoutingProvider implements RoutingProvider {
                 repository: input.repository,
                 signals: input.signals,
                 availableAgents: agentsForRouting,
+                historicalPerformance:
+                  Object.keys(historicalPerformance).length > 0 ? historicalPerformance : undefined,
               }),
             },
           ],
@@ -157,12 +232,14 @@ export class OpenAIRoutingProvider implements RoutingProvider {
         return this.fallbackProvider.route(input);
       }
 
-      return JSON.parse(content) as RoutingDecision;
+      const parsed = JSON.parse(content);
+      return RoutingDecisionSchema.parse(parsed) as RoutingDecision;
     } catch {
-      // Fallback cleanly on error or timeout
+      // Fallback cleanly on error, Zod validation failure, or timeout
       return this.fallbackProvider.route(input);
     } finally {
       clearTimeout(timeout);
     }
   }
 }
+

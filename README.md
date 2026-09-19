@@ -280,7 +280,8 @@ Once approved, the deterministic scheduler spawns isolated Git worktrees under `
 │    🧪 Running verification checks...
 │    ✔ Verified successfully ✓
 │
-│  ✔ Integration branch ready: taskforge/integration-run-1789831200000
+│  ✔ Integration branch ready: taskforge/run-1789831200000
+│    To merge: git merge taskforge/run-1789831200000
 ╰────────────────────────────────────────────────────────────────╯
 
 > █
@@ -306,16 +307,19 @@ Type `/` at the prompt to trigger the **interactive command menu**. The palette 
   ┌─────────────────────────────────────────────────────────────┐
   │  /exit       Exit interactive session                       │
   │  /help       Display command reference and guide            │
+  │  /runs       List past execution runs & integration branches│
   │  /plan       Inspect current proposed or active plan        │
   │  /tasks      List status of all tasks in current run        │
   │  /status     Open full visual TUI dashboard                 │
   │  /agents     Inspect detected AI agent harnesses & quotas   │
+  │  /stream     Inspect live real-time output stream of agent  │
   │  /cost       Show tokens and financial cost report          │
   │  /stats      Show run execution metrics                     │
   │  /clean      Clean temporary worktrees and branches         │
   │  /pending    View interactions awaiting approval            │
   │  /approve    Approve plan or pending interaction            │
   │  /deny       Deny pending interaction                       │
+  │  /cancel     Cancel active plan execution or running agent  │
   │  /pause      Pause orchestrator execution                   │
   │  /resume     Resume paused execution                        │
   └─────────────────────────────────────────────────────────────┘
@@ -326,15 +330,18 @@ Type `/` at the prompt to trigger the **interactive command menu**. The palette 
 
 | Slash Command        | Description                                                                          |
 | :------------------- | :----------------------------------------------------------------------------------- |
+| `/runs`              | List past execution runs, their completion status, and Git integration branch names  |
 | `/agents`            | View detected AI harnesses, binary paths, readiness, and real-time quota cooldowns   |
 | `/tasks`             | List all tasks in the current run DAG, dependencies, and execution status            |
 | `/status` / `/dash`  | Open the full-screen visual dashboard with repository, run, and agent metrics        |
+| `/stream`            | View real-time line-by-line streaming terminal output from an active agent worker    |
 | `/cost`              | Display detailed token consumption breakdown (input, output) and estimated USD costs |
 | `/stats`             | View performance analytics, duration per agent, and verification cycle metrics       |
 | `/plan`              | Re-display the currently active or proposed task dependency graph                    |
 | `/approve`           | Confirm and launch the proposed execution plan or pending interaction                |
 | `/reject`            | Reject the proposed plan and provide conversational steering feedback                |
 | `/deny`              | Deny an agent's request for out-of-scope permissions or destructive commands         |
+| `/cancel`            | Safely cancel the active task execution and restore worktree state                   |
 | `/pause` / `/resume` | Pause and resume running agent workers on the fly                                    |
 | `/clean`             | Prune all orphaned Git worktrees and stale assignment branches                       |
 | `/help`              | Print complete interactive guide and keybindings                                     |
@@ -375,9 +382,12 @@ tf issue 42
 tf pr create --base main
 ```
 
-### Run Inspection & Cost Auditing
+### Run Inspection, History & Cost Auditing
 
 ```bash
+# List past execution runs and their git integration branches
+tf runs
+
 # Inspect structured run state as human-readable report
 tf inspect run-1789794456374
 
@@ -394,6 +404,45 @@ tf cost run-1789794456374
 # Clean up orphaned worktrees and stale assignment branches
 tf clean
 ```
+
+---
+
+## Git Branch Lifecycle & Zero-Risk Integration Model
+
+> [!IMPORTANT]
+> **TaskForge will NEVER commit unverified code directly to your `main` branch.**
+> All multi-agent operations run inside ephemeral Git worktrees, and completed work is integrated into dedicated, reproducible integration branches.
+
+### The 5-Step Lifecycle
+
+1. **Isolated Worktrees**: When a task is scheduled, TaskForge creates an isolated worktree under `.taskforge/worktrees/<task-id>/asgn-...` based on the latest base commit. Your active branch and working files are never dirtied.
+2. **Autonomous Task Commits**: Once the assigned agent finishes writing code, TaskForge stages and commits the worktree changes: `feat(<task-id>): completed by <agent-name>`.
+3. **Deterministic Verification Gate**: The test suite, linter, and typechecker run inside the worktree sandbox. Unverified changes trigger bounded rework cycles and are never integrated.
+4. **Integration Branch (`taskforge/run-<runId>`)**: Upon successful verification, TaskForge creates a run-specific integration branch:
+   ```text
+   taskforge/run-<runId>    (e.g., taskforge/run-1789852516195)
+   ```
+   Each verified task commit is cherry-picked onto this branch in dependency order.
+5. **Developer Merge & PR**: When the run concludes, TaskForge prints the branch name and merge command. You retain complete authority over your codebase:
+   ```bash
+   # Inspect changes
+   git diff main..taskforge/run-1789852516195
+
+   # Merge directly into main
+   git checkout main && git merge taskforge/run-1789852516195
+
+   # Or open a pull request with audit evidence
+   tf pr create --base main
+   ```
+
+### Finding Lost or Background Branches
+
+If you close TaskForge, restart your machine, or switch terminal tabs, you never have to worry about where your code went:
+- **CLI**: Run `tf runs` to see all runs, completion statuses, and branch names.
+- **REPL**: Type `/runs` inside the interactive shell.
+- **Git**: Run `git branch --list 'taskforge/*'` or `git log taskforge/run-<runId>`.
+
+*For an in-depth architecture deep-dive, see the [Git Branch Lifecycle & Hardening Guide](docs/git-branch-lifecycle-and-hardening.md).*
 
 ---
 
@@ -440,11 +489,17 @@ router:
 
 ---
 
-## Security & Sandboxing Model
+## Security, Sandboxing & Real-Agent Hardening (v0.1)
 
+TaskForge coordinates real external coding CLIs without sacrificing system security or developer sanity:
+
+- **No Silent CLI Bypass**: Dangerous bypass flags (such as `--dangerously-skip-permissions` or `--dangerously-bypass-approvals-and-sandbox`) are permanently eliminated from default configurations.
+- **Strict Environment Allowlist & Redaction**: Child processes do not inherit arbitrary environment variables. Only essential system paths (`PATH`, `HOME`, `USER`) and necessary API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) are passed. Variables matching `*PASSWORD*`, `*SECRET*`, or `*TOKEN*` (e.g. AWS/GitHub tokens) are strictly denied to prevent secret leakage.
+- **Bidirectional I/O Mediation (`RealCliAgentSession`)**: TaskForge intercepts child process `stdout`/`stderr` line-by-line, parses JSON permission/question events, detects interactive terminal prompts (`(y/n)`), and safely responds via `stdin` through the `InteractionGateway` and `PermissionEngine`.
+- **Preflight Contract Negotiation (`AgentPreflightEvaluator`)**: Validates tasks before dispatch. Unbounded or overly broad refactoring scopes automatically recommend collaborative multi-agent teams instead of uncontrolled single-worker execution.
+- **Mandatory Collaborative Verification**: Solutions produced by collaborative agent teams must pass `verificationRunner.verify()` prior to integration.
+- **Telemetry-Guided Routing & Zod Validation**: Advisory team routing incorporates live agent performance telemetry (success rates, sample size, composite scores) and validates LLM responses with runtime Zod schemas.
 - **Isolation Guarantee**: Agents execute exclusively inside isolated Git worktrees (`.taskforge/worktrees/`). Code modifications never touch the active working branch until all automated verification checks pass.
-- **Scope Boundary Enforcement**: Contracts establish strict allowed paths (e.g. `src/auth/**`). File modifications outside the negotiated scope fail pre-merge verification audits.
-- **Destructive Command Protection**: TaskForge execution engines intercept subprocess commands, preventing dangerous operations such as arbitrary root modifications (`rm -rf /`), forced Git pushes, or untracked file deletion.
 - **Audit Trail**: Every interaction, contract amendment, agent stdout/stderr stream, and test result is immutably recorded in SQLite.
 
 ---

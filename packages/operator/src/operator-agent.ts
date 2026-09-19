@@ -19,14 +19,14 @@ export type OperatorIntent =
   | { type: 'add_constraint'; constraint: string; readOnlyScope?: string }
   | { type: 'approve_plan' }
   | { type: 'reject_plan'; feedback?: string }
-  | {
-      type: 'approve_interaction';
+  | { type: 'approve_interaction';
       requestId?: string;
       scope?: InteractionScope;
       rawAnswer?: string;
     }
   | { type: 'deny_interaction'; requestId?: string; reason?: string }
   | { type: 'inspect_pending_interactions' }
+  | { type: 'inspect_runs' }
   | { type: 'stream_logs'; taskId?: string }
   | { type: 'submit_goal'; goal: string }
   | { type: 'general_query'; query: string };
@@ -40,6 +40,9 @@ export class OperatorIntentParser {
     if (text.startsWith('/stream')) {
       const parts = text.split(/\s+/);
       return { type: 'stream_logs', taskId: parts[1] };
+    }
+    if (text.startsWith('/runs') || text === 'runs' || lower.includes('show runs') || lower.includes('list runs')) {
+      return { type: 'inspect_runs' };
     }
     if (text.startsWith('/tasks')) {
       const parts = text.split(/\s+/);
@@ -87,6 +90,16 @@ export class OperatorIntentParser {
         fromAgent: 'current',
         preferredReplacement: parts[2] ?? 'auto',
         targetAgentId: parts[2],
+      };
+    }
+
+    if (text === '/cancel' || text.startsWith('/cancel ')) {
+      const parts = text.split(/\s+/);
+      return {
+        type: 'cancel_and_reassign',
+        taskId: parts[1] ?? 'CURRENT',
+        fromAgent: 'current',
+        preferredReplacement: 'auto',
       };
     }
 
