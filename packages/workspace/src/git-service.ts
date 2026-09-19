@@ -16,6 +16,12 @@ export class GitService {
       command: 'git',
       args,
       cwd,
+      env: {
+        GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || 'TaskForge Bot',
+        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || 'bot@taskforge.dev',
+        GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || 'TaskForge Bot',
+        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || 'bot@taskforge.dev',
+      },
       timeoutMs: 30000,
     });
 
