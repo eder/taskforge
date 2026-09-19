@@ -23,6 +23,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   { cmd: '/reassign', desc: 'Reassign task to another agent' },
   { cmd: '/pause', desc: 'Pause orchestrator execution' },
   { cmd: '/resume', desc: 'Resume paused execution' },
+  { cmd: '/stream', desc: 'Inspect live real-time output stream of an agent' },
 ];
 
 export class SlashMenu {

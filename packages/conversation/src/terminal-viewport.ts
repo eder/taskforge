@@ -15,6 +15,7 @@ export class TerminalViewport {
   private currentBuffer = '';
   private currentCursorIndex = 0;
   private currentStatus = '';
+  private currentPanelLines: string[] = [];
   private repoName: string;
   private branch: string;
   private resizeListener?: () => void;
@@ -56,7 +57,7 @@ export class TerminalViewport {
     this.outStream.write(`\x1b[1;${this.scrollBottom}r`);
     // Clear entire screen and position at top left
     this.outStream.write('\x1b[2J\x1b[1;1H');
-    this.renderInputLine('', 0, '');
+    this.renderInputLine('', 0, '', []);
   }
 
   public cleanup() {
@@ -76,7 +77,7 @@ export class TerminalViewport {
     this.cols = streamAny.columns || 80;
     this.scrollBottom = Math.max(3, this.rows - 1);
     this.outStream.write(`\x1b[1;${this.scrollBottom}r`);
-    this.renderInputLine(this.currentBuffer, this.currentCursorIndex, this.currentStatus);
+    this.renderInputLine(this.currentBuffer, this.currentCursorIndex, this.currentStatus, this.currentPanelLines);
     onResize?.();
   }
 
@@ -91,7 +92,7 @@ export class TerminalViewport {
     }
     // Save cursor position
     this.outStream.write('\x1b7');
-    // Position cursor at bottom line of scrolling region (rows - 1)
+    // Position cursor at bottom line of scrolling region
     this.outStream.write(`\x1b[${this.scrollBottom};1H`);
     const lines = content.split('\n');
     for (const line of lines) {
@@ -101,7 +102,7 @@ export class TerminalViewport {
     this.outStream.write('\x1b8');
 
     // Immediately re-anchor and redraw the persistent bottom input line
-    this.renderInputLine(this.currentBuffer, this.currentCursorIndex, this.currentStatus);
+    this.renderInputLine(this.currentBuffer, this.currentCursorIndex, this.currentStatus, this.currentPanelLines);
   }
 
   /**
@@ -109,12 +110,31 @@ export class TerminalViewport {
    * The line begins with `> `.
    * Cursor is placed right after `> ` + cursorIndex.
    */
-  public renderInputLine(buffer: string, cursorIndex: number, status = '') {
+  public renderInputLine(buffer: string, cursorIndex: number, status = '', panelLines?: string[]) {
     this.currentBuffer = buffer;
     this.currentCursorIndex = cursorIndex;
     this.currentStatus = status;
+    if (panelLines !== undefined) {
+      this.currentPanelLines = panelLines;
+    }
 
     if (!this.isInteractive) return;
+
+    const panelHeight = Math.min(this.currentPanelLines.length, Math.max(0, this.rows - 6));
+    const targetScrollBottom = Math.max(3, this.rows - panelHeight - 1);
+    if (targetScrollBottom !== this.scrollBottom) {
+      this.scrollBottom = targetScrollBottom;
+      this.outStream.write(`\x1b[1;${this.scrollBottom}r`);
+    }
+
+    // Render panel lines if any
+    if (panelHeight > 0) {
+      const startRow = this.rows - panelHeight;
+      for (let i = 0; i < panelHeight; i++) {
+        const row = startRow + i;
+        this.outStream.write(`\x1b[${row};1H\x1b[2K${this.currentPanelLines[i]}`);
+      }
+    }
 
     const promptStr = `${colors.bold}${colors.green}>${colors.reset} `;
     const promptLen = 2; // length of "> " without ANSI escape codes
@@ -135,11 +155,11 @@ export class TerminalViewport {
   /**
    * Backward-compatible helper for code expecting drawFooter / preparePrompt
    */
-  public drawFooter(status = '') {
-    this.renderInputLine(this.currentBuffer, this.currentCursorIndex, status);
+  public drawFooter(status = '', panelLines?: string[]) {
+    this.renderInputLine(this.currentBuffer, this.currentCursorIndex, status, panelLines);
   }
 
   public preparePrompt(_rl?: readline.Interface) {
-    this.renderInputLine('', 0, '');
+    this.renderInputLine('', 0, '', this.currentPanelLines);
   }
 }

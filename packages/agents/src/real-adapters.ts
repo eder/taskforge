@@ -73,6 +73,20 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     return ['-p', prompt];
   }
 
+  protected extractActivity(chunk: string, callback?: (activity: string) => void): void {
+    if (!callback) return;
+    const lines = chunk
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length === 0) return;
+    const lastLine = lines[lines.length - 1];
+    const cleaned = lastLine.length > 64 ? `${lastLine.slice(0, 61)}...` : lastLine;
+    callback(cleaned);
+  }
+
   async execute(assignment: AgentAssignment, context: AgentContext): Promise<AgentResult> {
     const startTime = Date.now();
     const isAvailable = await this.detect();
@@ -102,6 +116,12 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       },
       abortSignal: context.abortSignal,
       timeoutMs,
+      onStdout: (chunk) => {
+        this.extractActivity(chunk, context.onActivity);
+      },
+      onStderr: (chunk) => {
+        this.extractActivity(chunk, context.onActivity);
+      },
     });
 
     const git = new GitService(context.worktreePath);

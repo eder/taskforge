@@ -42,6 +42,7 @@ export interface FakeAgentAction {
     prompt: string;
     service?: string;
   };
+  activitySteps?: string[];
 }
 
 export class FakeAgent implements AgentAdapter {
@@ -227,6 +228,16 @@ export class FakeAgent implements AgentAdapter {
       } else if (context.onEvent) {
         await context.onEvent(authEvent);
       }
+    }
+
+    if (action.activitySteps && action.activitySteps.length > 0) {
+      for (const step of action.activitySteps) {
+        context.onActivity?.(step);
+      }
+    } else if (action.writeFile) {
+      context.onActivity?.(`Writing ${action.writeFile.path}...`);
+    } else {
+      context.onActivity?.(`Analyzing workspace...`);
     }
 
     if (action.writeFile) {

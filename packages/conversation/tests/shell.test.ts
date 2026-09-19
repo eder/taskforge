@@ -51,5 +51,24 @@ describe('InteractiveShell (REPL)', () => {
     await shell.handleInput('create metrics dashboard');
     const yReply = await shell.handleInput('y --fake');
     expect(yReply).toContain('Plan executed successfully!');
+
+    // Check /stream when idle
+    const streamIdleReply = await shell.handleInput('/stream');
+    expect(streamIdleReply).toContain('No active agent tasks currently streaming');
+
+    // Check /stream when an agent is actively tracked
+    shell.activityTracker.register({
+      taskId: 'task-test-stream',
+      agentId: 'claude',
+      agentName: 'Claude Code',
+      status: 'Building packages...',
+      startedAt: new Date(),
+      lastActiveAt: new Date(),
+    });
+    const streamActiveReply = await shell.handleInput('/stream');
+    expect(streamActiveReply).toContain('Live Stream:');
+    expect(streamActiveReply).toContain('task-test-stream');
+    expect(streamActiveReply).toContain('Claude Code');
+    expect(streamActiveReply).toContain('[1: task-test-stream]');
   });
 });

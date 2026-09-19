@@ -112,6 +112,24 @@ export interface AgentResult {
   collaborationProposal?: CollaborationProposal;
 }
 
+export interface ActiveAgentState {
+  taskId: string;
+  assignmentId: string;
+  taskTitle: string;
+  agentId: string;
+  agentName: string;
+  role: string;
+  status: string;
+  startedAt: Date;
+  lastActiveAt: Date;
+  logPath?: string;
+  attentionRequired?: {
+    type: 'permission' | 'question' | 'auth';
+    prompt: string;
+    resource?: string;
+  };
+}
+
 export interface AgentContext {
   worktreePath: string;
   task: TaskContract;
@@ -119,6 +137,7 @@ export interface AgentContext {
   environment?: Record<string, string>;
   abortSignal?: AbortSignal;
   onEvent?: (event: AgentRuntimeEvent) => Promise<void>;
+  onActivity?: (activity: string) => void;
 }
 
 export interface VerificationCheck {

@@ -27,6 +27,7 @@ export type OperatorIntent =
     }
   | { type: 'deny_interaction'; requestId?: string; reason?: string }
   | { type: 'inspect_pending_interactions' }
+  | { type: 'stream_logs'; taskId?: string }
   | { type: 'submit_goal'; goal: string }
   | { type: 'general_query'; query: string };
 
@@ -36,6 +37,10 @@ export class OperatorIntentParser {
     const lower = text.toLowerCase();
 
     // 1. Slash commands shortcuts
+    if (text.startsWith('/stream')) {
+      const parts = text.split(/\s+/);
+      return { type: 'stream_logs', taskId: parts[1] };
+    }
     if (text.startsWith('/tasks')) {
       const parts = text.split(/\s+/);
       return { type: 'inspect_tasks', taskId: parts[1] };

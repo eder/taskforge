@@ -5,3 +5,4 @@ export * from './real-adapters.js';
 export * from './remote-adapters.js';
 export * from './agent-registry.js';
 export * from './quota-tracker.js';
+export * from './activity-tracker.js';
