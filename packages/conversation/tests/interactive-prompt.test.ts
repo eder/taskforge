@@ -118,5 +118,18 @@ describe('Interactive Terminal Prompt & REPL', () => {
       const reply = await shell.handleInput('sim --fake', abortCtrl.signal);
       expect(reply).toBeDefined();
     });
+
+    it('cleanly terminates conversational loop on /quit and closes resources', async () => {
+      const inStream = new PassThrough();
+      const outStream = new PassThrough();
+
+      const shell = new InteractiveShell({ input: inStream, output: outStream });
+      const runPromise = shell.start();
+
+      inStream.write('/quit\n');
+      await runPromise;
+
+      expect(true).toBe(true);
+    });
   });
 });

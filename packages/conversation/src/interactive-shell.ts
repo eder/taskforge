@@ -654,6 +654,9 @@ export class InteractiveShell {
           outStream.write(`${reply}\n`);
         }
       }
+      try {
+        this.db.close();
+      } catch {}
       return;
     }
 
@@ -694,6 +697,8 @@ export class InteractiveShell {
     const cleanup = () => {
       if (closed) return;
       closed = true;
+      process.removeListener('SIGINT', cleanup);
+      process.removeListener('exit', cleanup);
       this.slashMenu.close();
       this.viewport.cleanup();
       inStream.removeListener('keypress', onKeypress);
@@ -702,6 +707,12 @@ export class InteractiveShell {
           inStreamAny.setRawMode(false);
         } catch {}
       }
+      try {
+        inStreamAny.pause?.();
+      } catch {}
+      try {
+        this.db.close();
+      } catch {}
       worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
     };
 
@@ -737,7 +748,9 @@ export class InteractiveShell {
         const res = pendingResolve;
         pendingResolve = null;
         res?.(null);
-        process.exit(0);
+        if (!this.options.input) {
+          process.exit(0);
+        }
         return;
       }
 
@@ -753,7 +766,9 @@ export class InteractiveShell {
           const res = pendingResolve;
           pendingResolve = null;
           res?.(null);
-          process.exit(0);
+          if (!this.options.input) {
+            process.exit(0);
+          }
           return;
         }
 
@@ -990,6 +1005,10 @@ export class InteractiveShell {
             ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
             : `\n${colors.brand}✦${colors.reset} Até logo!\n`;
         this.viewport.writeUpper(exitMsg);
+        cleanup();
+        if (!this.options.input) {
+          process.exit(0);
+        }
         break;
       }
 
@@ -1018,5 +1037,8 @@ export class InteractiveShell {
     }
 
     cleanup();
+    if (!this.options.input) {
+      process.exit(0);
+    }
   }
 }

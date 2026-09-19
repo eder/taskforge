@@ -33,6 +33,7 @@ export function createCli(): Command {
     .action(async () => {
       const shell = new InteractiveShell();
       await shell.start();
+      process.exit(0);
     });
 
   // tf clean
