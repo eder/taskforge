@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "pnpm -r build",
+    "tf": "node apps/cli/dist/bin.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
