@@ -637,19 +637,40 @@ export class VerificationRepository {
   save(taskId: string, runId: string, result: VerificationResult): void {
     const id = `ver-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date().toISOString();
-    this.db
-      .prepare(
-        'INSERT INTO verification_results (id, run_id, task_id, passed, checks_json, failure_reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      )
-      .run(
-        id,
-        runId,
-        taskId,
-        result.passed ? 1 : 0,
-        JSON.stringify(result.checks),
-        result.failureReason ?? null,
-        now,
-      );
+    try {
+      this.db
+        .prepare(
+          'INSERT INTO verification_results (id, run_id, task_id, passed, checks_json, failure_reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(
+          id,
+          runId,
+          taskId,
+          result.passed ? 1 : 0,
+          JSON.stringify(result.checks),
+          result.failureReason ?? null,
+          now,
+        );
+    } catch {
+      // Fallback for legacy databases where task_id might fail foreign key check
+      try {
+        this.db
+          .prepare(
+            'INSERT INTO verification_results (id, run_id, task_id, passed, checks_json, failure_reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          )
+          .run(
+            id,
+            runId,
+            null,
+            result.passed ? 1 : 0,
+            JSON.stringify(result.checks),
+            result.failureReason ?? null,
+            now,
+          );
+      } catch {
+        // Silently skip if DB rejects null on legacy table
+      }
+    }
   }
 
   getLatestByTask(taskId: string): VerificationResult | undefined {

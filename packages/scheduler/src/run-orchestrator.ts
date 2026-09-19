@@ -56,6 +56,7 @@ export interface OrchestrationResult {
   taskOutputs?: Record<string, string>;
   durationMs: number;
   graph: TaskGraph;
+  error?: string;
   schedulerResult: SchedulerResult;
 }
 
@@ -285,6 +286,7 @@ export class RunOrchestrator {
       taskOutputs: schedulerResult.taskOutputs,
       durationMs,
       graph,
+      error: schedulerResult.error,
       schedulerResult,
     };
   }

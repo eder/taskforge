@@ -120,7 +120,9 @@ export class GitHubWorkflowService {
 
   async createPullRequest(options: CreatePROptions): Promise<PRCreationResult> {
     const runId = options.runId;
-    const branchName = `taskforge/${runId}`;
+    const branchName = options.runId.startsWith('taskforge/')
+      ? options.runId
+      : `taskforge/${options.runId.startsWith('run-') ? options.runId : `run-${options.runId}`}`;
     const targetBranch = options.targetBranch ?? 'main';
     const audit = this.auditService.reconstructRun(runId);
     const title =

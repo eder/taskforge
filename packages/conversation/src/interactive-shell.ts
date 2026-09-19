@@ -678,6 +678,9 @@ export class InteractiveShell {
               result.integrationBranch
                 ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}`
                 : '',
+              result.error
+                ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
+                : '',
               `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
               `  ${divider}`,
             ]
@@ -695,6 +698,9 @@ export class InteractiveShell {
             `    ${colors.dim}Tarefas concluídas:${colors.reset} ${colors.bold}${result.tasksCompleted}${colors.reset}, falhas: ${result.tasksFailed}`,
             result.integrationBranch
               ? `    ${colors.dim}Branch de integração:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}`
+              : '',
+            result.error
+              ? `    ${colors.dim}Erro:${colors.reset}               ${colors.red}${result.error}${colors.reset}`
               : '',
             `    ${colors.dim}Tempo total:${colors.reset}        ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
             `  ${divider}`,
@@ -807,7 +813,9 @@ export class InteractiveShell {
       }
       try {
         this.db.close();
-      } catch {}
+      } catch {
+        /* ignore */
+      }
       return;
     }
 
@@ -823,7 +831,9 @@ export class InteractiveShell {
     if (typeof inStreamAny.setRawMode === 'function') {
       try {
         inStreamAny.setRawMode(true);
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
     inStreamAny.resume?.();
 
@@ -856,14 +866,20 @@ export class InteractiveShell {
       if (typeof inStreamAny.setRawMode === 'function') {
         try {
           inStreamAny.setRawMode(false);
-        } catch {}
+        } catch {
+          /* ignore */
+        }
       }
       try {
         inStreamAny.pause?.();
-      } catch {}
+      } catch {
+        /* ignore */
+      }
       try {
         this.db.close();
-      } catch {}
+      } catch {
+        /* ignore */
+      }
       worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
     };
 
