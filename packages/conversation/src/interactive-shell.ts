@@ -94,10 +94,16 @@ export class InteractiveShell {
     this.gitService = new GitService(this.repoRoot);
     this.planner = new HeuristicPlanner();
     this.negotiator = new NegotiationManager();
+    const performanceEngine = new PerformanceEngine(this.db);
     if (this.config.router.adaptive) {
-      this.router = new AdaptiveRoutingProvider(new PerformanceEngine(this.db));
+      this.router = new AdaptiveRoutingProvider(performanceEngine);
     } else if (this.config.router.provider === 'openai' && process.env.OPENAI_API_KEY) {
-      this.router = new OpenAIRoutingProvider(process.env.OPENAI_API_KEY, this.config.router.model);
+      this.router = new OpenAIRoutingProvider(
+        process.env.OPENAI_API_KEY,
+        this.config.router.model,
+        15000,
+        { performanceEngine },
+      );
     } else {
       this.router = new StaticRoutingProvider();
     }
@@ -571,6 +577,9 @@ export class InteractiveShell {
             })
             .catch((err) => {
               this.activeExecutionController = undefined;
+              if (abortSignal?.aborted || err.message?.includes('database is not open')) {
+                return;
+              }
               this.viewport.writeUpper(
                 `\n  ${colors.red}✕ Run execution error:${colors.reset} ${err.message}\n`,
               );
@@ -1162,6 +1171,18 @@ export class InteractiveShell {
   }
 
   public close(): void {
+    if (this.activeExecutionController) {
+      try {
+        this.activeExecutionController.abort();
+      } catch {
+        // ignore
+      }
+      this.activeExecutionController = undefined;
+    }
+    if (this.tickerTimer) {
+      clearInterval(this.tickerTimer);
+      this.tickerTimer = undefined;
+    }
     try {
       this.db.close();
     } catch {

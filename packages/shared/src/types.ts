@@ -69,6 +69,7 @@ export interface TaskContract {
   forbiddenChanges: string[];
   acceptanceCriteria: string[];
   dependencies: string[];
+  metadata?: Record<string, any>;
 }
 
 export interface AgentCapabilities {
@@ -139,6 +140,7 @@ export interface AgentContext {
   logPath?: string;
   onEvent?: (event: AgentRuntimeEvent) => Promise<void>;
   onActivity?: (activity: string) => void;
+  onProgress?: (progress: string) => void;
 }
 
 export interface VerificationCheck {

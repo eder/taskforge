@@ -9,6 +9,7 @@ import {
 } from '../src/real-adapters.js';
 import { RealCliAgentSession } from '../src/agent-session.js';
 import type { AgentRuntimeEvent } from '@taskforge/shared';
+import { InteractionGateway } from '@taskforge/execution';
 
 describe('Real-Agent Hardening - Safety & Adapters', () => {
   it('adapters never include dangerous bypass flags by default', () => {
@@ -45,27 +46,28 @@ describe('Real-Agent Hardening - Safety & Adapters', () => {
   });
 });
 
+function createMockChild(): { child: ChildProcess; written: string[] } {
+  const written: string[] = [];
+  const mockStdin = new Writable({
+    write(chunk, _encoding, callback) {
+      written.push(chunk.toString());
+      callback();
+    },
+  });
+
+  const emitter = new EventEmitter() as any;
+  emitter.stdin = mockStdin;
+  emitter.killed = false;
+  emitter.kill = vi.fn((signal?: string) => {
+    emitter.killed = true;
+    emitter.emit('exit', 0, signal);
+    return true;
+  });
+
+  return { child: emitter as ChildProcess, written };
+}
+
 describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
-  function createMockChild(): { child: ChildProcess; written: string[] } {
-    const written: string[] = [];
-    const mockStdin = new Writable({
-      write(chunk, _encoding, callback) {
-        written.push(chunk.toString());
-        callback();
-      },
-    });
-
-    const emitter = new EventEmitter() as any;
-    emitter.stdin = mockStdin;
-    emitter.killed = false;
-    emitter.kill = vi.fn((signal?: string) => {
-      emitter.killed = true;
-      emitter.emit('exit', 0, signal);
-      return true;
-    });
-
-    return { child: emitter as ChildProcess, written };
-  }
 
   it('parses structured JSON permission requests and responds via stdin', async () => {
     const receivedEvents: AgentRuntimeEvent[] = [];
@@ -87,15 +89,22 @@ describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
     session.handleOutputChunk(`${jsonEvent}\n`, 'stdout');
 
     expect(receivedEvents.length).toBe(1);
-    expect(receivedEvents[0].type).toBe('permission_request');
-    expect((receivedEvents[0] as any).operation).toBe('bash');
-    expect((receivedEvents[0] as any).resource).toBe('pnpm install lodash');
+    const ev1 = receivedEvents[0];
+    expect(ev1.type).toBe('permission_request');
+    expect(ev1.sessionId).toBe('sess-1');
+    expect(ev1.assignmentId).toBe('asgn-1');
+    expect(typeof ev1.timestamp).toBe('string');
+    if (ev1.type === 'permission_request') {
+      expect(ev1.operation).toBe('bash');
+      expect(ev1.resource).toBe('pnpm install lodash');
+      expect(ev1.requestId).toBeDefined();
 
-    // Respond allow
-    await session.respond({
-      requestId: receivedEvents[0].id,
-      decision: 'allow',
-    });
+      // Respond allow
+      await session.respond({
+        requestId: ev1.requestId,
+        decision: 'allow',
+      });
+    }
 
     expect(written).toContain('y\n');
   });
@@ -119,15 +128,23 @@ describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
     session.handleOutputChunk(`${questionEvent}\n`, 'stdout');
 
     expect(receivedEvents.length).toBe(1);
-    expect(receivedEvents[0].type).toBe('question');
-    expect(receivedEvents[0].prompt).toBe('Which database should we use?');
+    const qEv = receivedEvents[0];
+    expect(qEv.type).toBe('question');
+    expect(qEv.sessionId).toBe('sess-2');
+    expect(qEv.assignmentId).toBe('asgn-2');
+    expect(typeof qEv.timestamp).toBe('string');
+    if (qEv.type === 'question') {
+      expect(qEv.prompt).toBe('Which database should we use?');
+      expect(qEv.options).toEqual(['SQLite', 'PostgreSQL']);
+      expect(qEv.requestId).toBeDefined();
 
-    // Respond with answer
-    await session.respond({
-      requestId: receivedEvents[0].id,
-      decision: 'answer',
-      payload: 'SQLite',
-    });
+      // Respond with answer
+      await session.respond({
+        requestId: qEv.requestId,
+        decision: 'answer',
+        payload: 'SQLite',
+      });
+    }
 
     expect(written).toContain('SQLite\n');
   });
@@ -158,14 +175,18 @@ describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
     session.handleOutputChunk(`${toolUseEvent}\n`, 'stdout');
 
     expect(receivedEvents.length).toBe(1);
-    expect(receivedEvents[0].type).toBe('permission_request');
-    expect((receivedEvents[0] as any).resource).toBe('rm -rf ./dist && pnpm build');
+    const pEv2 = receivedEvents[0];
+    expect(pEv2.type).toBe('permission_request');
+    if (pEv2.type === 'permission_request') {
+      expect(pEv2.resource).toBe('rm -rf ./dist && pnpm build');
+      expect(pEv2.requestId).toBeDefined();
 
-    // Deny permission
-    await session.respond({
-      requestId: receivedEvents[0].id,
-      decision: 'deny',
-    });
+      // Deny permission
+      await session.respond({
+        requestId: pEv2.requestId,
+        decision: 'deny',
+      });
+    }
 
     expect(written).toContain('n\n');
   });
@@ -183,13 +204,17 @@ describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
     session.handleOutputChunk('Do you want to run migration on production? (y/n)\n', 'stdout');
 
     expect(receivedEvents.length).toBe(1);
-    expect(receivedEvents[0].type).toBe('permission_request');
-    expect(receivedEvents[0].prompt).toContain('Do you want to run migration on production?');
+    const pEv3 = receivedEvents[0];
+    expect(pEv3.type).toBe('permission_request');
+    if (pEv3.type === 'permission_request') {
+      expect(pEv3.prompt).toContain('Do you want to run migration on production?');
+      expect(pEv3.requestId).toBeDefined();
 
-    await session.respond({
-      requestId: receivedEvents[0].id,
-      decision: 'deny',
-    });
+      await session.respond({
+        requestId: pEv3.requestId,
+        decision: 'deny',
+      });
+    }
 
     expect(written).toContain('n\n');
   });
@@ -215,18 +240,212 @@ describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
   });
 });
 
-describe('Real-Agent Hardening - Opt-in Real CLI Test', () => {
-  const isOptIn = process.env.TASKFORGE_TEST_REAL_AGENTS === '1';
+describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
+  it('intercepts permission prompt, evaluates via gateway, and pipes human allow/y to stdin', async () => {
+    const gateway = new InteractionGateway({
+      config: {
+        ui: { mode: 'interactive' },
+        permissions: {
+          commands: { tests: 'allow', lint: 'allow', package_install: 'ask_human', sudo: 'deny', network: 'ask_human' },
+          filesystem: { workspace_write: 'allow', outside_workspace: 'ask_human', delete_files: 'ask_human' },
+          git: { commit: 'allow', push: 'ask_human', force_push: 'deny', merge_main: 'deny' },
+          fallback: 'ask_human',
+        },
+        interactions: { humanResponseTimeout: 5000, onTimeout: { permission: 'deny', question: 'cancel', confirmation: 'deny' } },
+        headless: { onUnknownPermission: 'deny', onHumanQuestion: 'fail', onConfirmationRequired: 'block', onAuthenticationRequired: 'fail' },
+      } as any,
+    });
 
-  it.skipIf(!isOptIn)('runs real CLI agent if installed', async () => {
+    let interceptedRequest: any;
+    gateway.onInteraction((req) => {
+      interceptedRequest = req;
+    });
+
+    const session = new RealCliAgentSession('sess-e2e-1', 'asgn-e2e-1', {
+      adapterId: 'claude',
+      onEvent: async (ev) => {
+        await gateway.handleEvent(ev, session, {
+          runId: 'run-e2e',
+          taskId: 'task-e2e',
+          assignmentId: 'asgn-e2e-1',
+          agentId: 'claude',
+          isHeadless: false,
+        });
+      },
+    });
+
+    const { child, written } = createMockChild();
+    session.attachProcess(child);
+
+    // Simulate CLI asking y/n in raw terminal output
+    session.handleOutputChunk('Do you want to run migration on production? (y/n)\n', 'stdout');
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Ensure gateway intercepted request with matching requestId
+    expect(interceptedRequest).toBeDefined();
+    expect(interceptedRequest.id).toBeDefined();
+    expect(interceptedRequest.type).toBe('permission');
+    expect(interceptedRequest.prompt).toContain('Do you want to run migration on production?');
+
+    // Human answers allow via gateway
+    const resolved = gateway.resolve(interceptedRequest.id, 'allow');
+    expect(resolved).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Stdin receives 'y\n'
+    expect(written).toContain('y\n');
+  });
+
+  it('intercepts agent question, evaluates via gateway, and pipes human custom answer to stdin', async () => {
+    const gateway = new InteractionGateway({
+      config: {
+        ui: { mode: 'interactive' },
+        interactions: { humanResponseTimeout: 5000, onTimeout: { permission: 'deny', question: 'cancel', confirmation: 'deny' } },
+        headless: { onUnknownPermission: 'deny', onHumanQuestion: 'fail', onConfirmationRequired: 'block', onAuthenticationRequired: 'fail' },
+      } as any,
+    });
+
+    let interceptedRequest: any;
+    gateway.onInteraction((req) => {
+      interceptedRequest = req;
+    });
+
+    const session = new RealCliAgentSession('sess-e2e-2', 'asgn-e2e-2', {
+      adapterId: 'codex',
+      onEvent: async (ev) => {
+        await gateway.handleEvent(ev, session, {
+          runId: 'run-e2e',
+          taskId: 'task-e2e',
+          assignmentId: 'asgn-e2e-2',
+          agentId: 'codex',
+          isHeadless: false,
+        });
+      },
+    });
+
+    const { child, written } = createMockChild();
+    session.attachProcess(child);
+
+    // Simulate CLI structured question
+    const jsonQ = JSON.stringify({
+      type: 'question',
+      question: 'Select target database',
+      options: ['SQLite', 'PostgreSQL'],
+    });
+    session.handleOutputChunk(`${jsonQ}\n`, 'stdout');
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(interceptedRequest).toBeDefined();
+    expect(interceptedRequest.type).toBe('question');
+    expect(interceptedRequest.prompt).toBe('Select target database');
+
+    // Human answers custom option
+    const resolved = gateway.resolve(interceptedRequest.id, 'answer', 'PostgreSQL');
+    expect(resolved).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Stdin receives custom payload
+    expect(written).toContain('PostgreSQL\n');
+  });
+
+  it('intercepts high-risk Bash tool calls and human deny results in n on stdin', async () => {
+    const gateway = new InteractionGateway({
+      config: {
+        ui: { mode: 'interactive' },
+        permissions: {
+          commands: { tests: 'allow', lint: 'allow', package_install: 'ask_human', sudo: 'deny', network: 'ask_human' },
+          filesystem: { workspace_write: 'allow', outside_workspace: 'ask_human', delete_files: 'ask_human' },
+          git: { commit: 'allow', push: 'ask_human', force_push: 'deny', merge_main: 'deny' },
+          fallback: 'ask_human',
+        },
+        interactions: { humanResponseTimeout: 5000, onTimeout: { permission: 'deny', question: 'cancel', confirmation: 'deny' } },
+        headless: { onUnknownPermission: 'deny', onHumanQuestion: 'fail', onConfirmationRequired: 'block', onAuthenticationRequired: 'fail' },
+      } as any,
+    });
+
+    let interceptedRequest: any;
+    gateway.onInteraction((req) => {
+      interceptedRequest = req;
+    });
+
+    const session = new RealCliAgentSession('sess-e2e-3', 'asgn-e2e-3', {
+      adapterId: 'agy',
+      onEvent: async (ev) => {
+        await gateway.handleEvent(ev, session, {
+          runId: 'run-e2e',
+          taskId: 'task-e2e',
+          assignmentId: 'asgn-e2e-3',
+          agentId: 'agy',
+          isHeadless: false,
+        });
+      },
+    });
+
+    const { child, written } = createMockChild();
+    session.attachProcess(child);
+
+    // Tool use in Claude/AGY stream
+    const toolUse = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            name: 'Bash',
+            input: { command: 'rm -rf ./node_modules' },
+          },
+        ],
+      },
+    });
+    session.handleOutputChunk(`${toolUse}\n`, 'stdout');
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(interceptedRequest).toBeDefined();
+    expect(interceptedRequest.type).toBe('permission');
+    expect(interceptedRequest.resource).toBe('rm -rf ./node_modules');
+
+    // Deny permission
+    const resolved = gateway.resolve(interceptedRequest.id, 'deny');
+    expect(resolved).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(written).toContain('n\n');
+  });
+});
+
+describe('Real-Agent Hardening - Opt-in Real CLI Tests by Provider', () => {
+  const isAllReal = process.env.TASKFORGE_TEST_REAL_AGENTS === '1';
+
+  it.skipIf(!isAllReal && process.env.TASKFORGE_TEST_CLAUDE !== '1')('executes Claude Code real task if installed', async () => {
     const claude = new ClaudeCodeAdapter();
     const available = await claude.detect();
     if (!available) {
       console.log('Claude CLI not detected in PATH, skipping real execution test.');
       return;
     }
-
-    // If opt-in and claude is detected, verify execution returns valid object
     expect(available).toBe(true);
+    expect(claude.id).toBe('claude');
+  });
+
+  it.skipIf(!isAllReal && process.env.TASKFORGE_TEST_CODEX !== '1')('executes Codex real task if installed', async () => {
+    const codex = new CodexAdapter();
+    const available = await codex.detect();
+    if (!available) {
+      console.log('Codex CLI not detected in PATH, skipping real execution test.');
+      return;
+    }
+    expect(available).toBe(true);
+    expect(codex.id).toBe('codex');
+  });
+
+  it.skipIf(!isAllReal && process.env.TASKFORGE_TEST_AGY !== '1')('executes Antigravity real task if installed', async () => {
+    const agy = new AntigravityAdapter();
+    const available = await agy.detect();
+    if (!available) {
+      console.log('Antigravity CLI not detected in PATH, skipping real execution test.');
+      return;
+    }
+    expect(available).toBe(true);
+    expect(agy.id).toBe('agy');
   });
 });

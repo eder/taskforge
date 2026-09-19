@@ -3,6 +3,9 @@ import {
   AgentRuntimeEvent,
   AgentSession,
   InteractionResponse,
+  PermissionRequestEvent,
+  AgentQuestionEvent,
+  AuthenticationRequiredEvent,
 } from '@taskforge/shared';
 
 export class FakeAgentSession implements AgentSession {
@@ -148,6 +151,20 @@ export class RealCliAgentSession implements AgentSession {
     });
   }
 
+  private createBaseEvent(): {
+    sessionId: string;
+    assignmentId: string;
+    agentId: string;
+    timestamp: string;
+  } {
+    return {
+      sessionId: this.sessionId,
+      assignmentId: this.assignmentId,
+      agentId: this.options?.adapterId ?? 'unknown',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   public handleOutputChunk(chunk: string, _stream: 'stdout' | 'stderr'): void {
     const lines = chunk.split('\n');
     for (const line of lines) {
@@ -163,41 +180,44 @@ export class RealCliAgentSession implements AgentSession {
           if (obj.type === 'permission_request' || obj.event === 'permission_request') {
             const reqId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
             this.pendingRequestId = reqId;
-            this.pushEvent({
-              id: reqId,
+            const event: PermissionRequestEvent = {
+              ...this.createBaseEvent(),
               type: 'permission_request',
+              requestId: reqId,
               category: obj.category || 'commands',
               operation: obj.operation || obj.command || 'execute',
-              resource: obj.resource || obj.path,
+              resource: obj.resource || obj.path || '',
               prompt: obj.prompt || 'Permission requested by agent',
-              timestamp: new Date(),
-            } as any);
+            };
+            this.pushEvent(event);
             return;
           }
 
           if (obj.type === 'question' || obj.event === 'question' || obj.type === 'ask_user') {
             const reqId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
             this.pendingRequestId = reqId;
-            this.pushEvent({
-              id: reqId,
+            const event: AgentQuestionEvent = {
+              ...this.createBaseEvent(),
               type: 'question',
+              requestId: reqId,
               prompt: obj.question || obj.prompt || 'Agent requested input',
-              options: obj.options,
-              timestamp: new Date(),
-            } as any);
+              options: Array.isArray(obj.options) ? obj.options : undefined,
+            };
+            this.pushEvent(event);
             return;
           }
 
           if (obj.type === 'authentication_required' || obj.event === 'auth_required') {
             const reqId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
             this.pendingRequestId = reqId;
-            this.pushEvent({
-              id: reqId,
+            const event: AuthenticationRequiredEvent = {
+              ...this.createBaseEvent(),
               type: 'authentication_required',
+              requestId: reqId,
               service: obj.service || 'unknown',
               prompt: obj.prompt || 'Authentication required',
-              timestamp: new Date(),
-            } as any);
+            };
+            this.pushEvent(event);
             return;
           }
 
@@ -240,15 +260,16 @@ export class RealCliAgentSession implements AgentSession {
       ) {
         const reqId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         this.pendingRequestId = reqId;
-        this.pushEvent({
-          id: reqId,
+        const event: PermissionRequestEvent = {
+          ...this.createBaseEvent(),
           type: 'permission_request',
+          requestId: reqId,
           category: 'commands',
           operation: 'bash',
           resource: cmd,
           prompt: `Agent requested permission to execute command: "${cmd}"`,
-          timestamp: new Date(),
-        } as any);
+        };
+        this.pushEvent(event);
       }
     }
   }
@@ -266,15 +287,16 @@ export class RealCliAgentSession implements AgentSession {
       if (this.pendingRequestId) return;
       const reqId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       this.pendingRequestId = reqId;
-      this.pushEvent({
-        id: reqId,
+      const event: PermissionRequestEvent = {
+        ...this.createBaseEvent(),
         type: 'permission_request',
+        requestId: reqId,
         category: 'commands',
         operation: 'interactive_prompt',
         resource: stripped,
         prompt: stripped,
-        timestamp: new Date(),
-      } as any);
+      };
+      this.pushEvent(event);
     }
   }
 

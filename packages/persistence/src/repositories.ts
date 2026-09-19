@@ -270,10 +270,10 @@ export class TaskRepository {
         .run(
           task.id,
           task.contract.objective,
-          JSON.stringify(task.contract.allowedScope),
-          JSON.stringify(task.contract.forbiddenChanges),
-          JSON.stringify(task.contract.acceptanceCriteria),
-          JSON.stringify(task.contract.dependencies),
+          JSON.stringify(task.contract.allowedScope ?? []),
+          JSON.stringify(task.contract.forbiddenChanges ?? []),
+          JSON.stringify(task.contract.acceptanceCriteria ?? []),
+          JSON.stringify(task.contract.dependencies ?? []),
         );
     }
 
