@@ -63,8 +63,13 @@ describe('InteractiveShell (REPL)', () => {
     const planReply = await shell.handleInput('/plan');
     expect(planReply).toContain('Current task plan:');
 
-    // Check approval and execution in English
+    // Check approval and execution in English with 'yes --fake'
     const approveReply = await shell.handleInput('yes --fake');
     expect(approveReply).toContain('Plan executed successfully!');
+
+    // Check second plan and approve with 'y --fake'
+    await shell.handleInput('create metrics dashboard');
+    const yReply = await shell.handleInput('y --fake');
+    expect(yReply).toContain('Plan executed successfully!');
   });
 });

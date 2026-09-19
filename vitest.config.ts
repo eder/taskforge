@@ -27,6 +27,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['**/*.test.ts'],
+    exclude: ['**/node_modules/**', '**/.taskforge/**', '**/dist/**'],
     testTimeout: 30000,
   },
 });

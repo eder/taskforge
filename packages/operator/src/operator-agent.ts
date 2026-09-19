@@ -171,8 +171,10 @@ export class OperatorIntentParser {
       lower === 's' ||
       lower === 'yes' ||
       lower === 'y' ||
-      lower.startsWith('sim') ||
-      lower.startsWith('yes') ||
+      lower.startsWith('sim ') ||
+      lower.startsWith('yes ') ||
+      lower.startsWith('y ') ||
+      lower.startsWith('s ') ||
       lower.startsWith('pode executar') ||
       lower.startsWith('executar') ||
       lower.startsWith('executa') ||
@@ -191,15 +193,19 @@ export class OperatorIntentParser {
       lower === 'nao' ||
       lower === 'n' ||
       lower === 'no' ||
-      lower.includes('não,') ||
-      lower.includes('nao,') ||
+      lower.startsWith('não,') ||
+      lower.startsWith('nao,') ||
+      lower.startsWith('no,') ||
+      lower.startsWith('no ') ||
+      lower.startsWith('n ') ||
       lower.includes('cancela o plano') ||
       lower.includes('descartar') ||
       lower.includes('refaz') ||
       lower.includes('cancel plan') ||
       lower.includes('discard plan') ||
       lower.includes('abort plan') ||
-      lower.includes('reject')
+      lower === 'reject' ||
+      lower.startsWith('reject ')
     ) {
       return { type: 'reject_plan', feedback: text };
     }
@@ -410,16 +416,16 @@ export class OperatorAgent {
             'Pending interactions awaiting approval:',
             ...pending.map((p) => `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`),
             '',
-            'To approve: /approve <id> [task|run|project] or respond naturally (e.g. "allow install for this task")',
-            'To deny: /deny <id>',
+            'To approve: type "y", "yes", /approve <id> [task|run|project] or respond naturally (e.g. "allow install for this task")',
+            'To deny: type "n", "no" or /deny <id>',
           ].join('\n');
         }
         return [
           'Interações pendentes de aprovação:',
           ...pending.map((p) => `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`),
           '',
-          'Para aprovar: /approve <id> [task|run|project] ou responda naturalmente (ex: "pode instalar só para essa task")',
-          'Para negar: /deny <id>',
+          'Para aprovar: digite "y", "yes", /approve <id> [task|run|project] ou responda naturalmente (ex: "pode instalar")',
+          'Para negar: digite "n", "no" ou /deny <id>',
         ].join('\n');
       }
 

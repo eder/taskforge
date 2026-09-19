@@ -306,7 +306,7 @@ export class InteractiveShell {
             `Total of ${tasks.length} structured tasks:`,
             ...tasks.map((t, idx) => `  ${idx + 1}. [${t.type.toUpperCase()}] ${t.title}`),
             '',
-            'Do you want me to execute? (type "yes" or "/approve" to start)',
+            'Do you want me to execute? (type "yes", "y" or "/approve" to start)',
           ].join('\n');
         }
 
@@ -316,7 +316,7 @@ export class InteractiveShell {
           `Total de ${tasks.length} tarefas estruturadas:`,
           ...tasks.map((t, idx) => `  ${idx + 1}. [${t.type.toUpperCase()}] ${t.title}`),
           '',
-          'Deseja que eu execute? (digite "sim" ou "/approve" para iniciar)',
+          'Deseja que eu execute? (digite "yes", "y" ou "/approve" para iniciar)',
         ].join('\n');
       }
 
@@ -440,11 +440,19 @@ export class InteractiveShell {
           if (isEn) {
             return `Error during plan execution: ${(err as Error).message}\n(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)`;
           }
-          return `Erro durante a execução do plano: ${(err as Error).message}\n(Dica: digite "sim --fake" para testar com agentes simulados caso os agentes reais não estejam configurados com chaves de API)`;
+          return `Erro durante a execução do plano: ${(err as Error).message}\n(Dica: digite "yes --fake" para testar com agentes simulados caso os agentes reais não estejam configurados com chaves de API)`;
         }
       }
 
       case 'reject_plan': {
+        const pending = this.interactionGateway.getPendingRequests();
+        if (pending.length > 0) {
+          const target = pending[0];
+          this.interactionGateway.resolve(target.id, 'deny', intent.feedback, 'once');
+          return isEn
+            ? `✕ Operation denied for ${target.taskId || target.id}. Agent notified.`
+            : `✕ Operação negada para ${target.taskId || target.id}. Agente notificado.`;
+        }
         this.currentGraph = undefined;
         this.lastGoalDescription = undefined;
         return isEn ? 'Plan discarded as requested.' : 'Plano descartado conforme solicitado.';
