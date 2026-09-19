@@ -170,11 +170,15 @@ export function createCli(): Command {
 
       runRepo.create(runId, goal.id);
 
+      const taskId = `TASK-${Date.now().toString().slice(-4)}`;
       const agentRegistry = new AgentRegistry();
+      const preferredAgentMapping: Record<string, string> = {};
       if (options?.fake) {
         config.verification.tests = false;
         config.verification.lint = false;
         config.verification.typecheck = false;
+        config.verification.review = false;
+        preferredAgentMapping[taskId] = 'fake-agent';
         agentRegistry.register(
           new FakeAgent('fake-agent', 'Fake Agent', [
             {
@@ -198,7 +202,6 @@ export function createCli(): Command {
         eventRepo,
       );
 
-      const taskId = `TASK-${Date.now().toString().slice(-4)}`;
       // Define default task
       const defaultTask: Task = {
         id: taskId,
@@ -241,6 +244,7 @@ export function createCli(): Command {
         config,
         graph,
         agentRegistry,
+        preferredAgentMapping,
         worktreeManager,
         gitService,
         verificationRunner,
