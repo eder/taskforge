@@ -21,6 +21,7 @@ import { TelemetryCollector, PerformanceEngine } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { TuiDashboard } from './tui-dashboard.js';
 import { theme, colors } from './theme.js';
+import { TerminalViewport } from './terminal-viewport.js';
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -100,10 +101,14 @@ export class InteractiveShell {
   private activeRunId?: string;
   private sessionLanguage?: ShellLanguage;
   private outStream: Writable;
+  public viewport: TerminalViewport;
 
   constructor(private options: ShellOptions = {}) {
     this.repoRoot = options.repoRoot ?? process.cwd();
     this.outStream = options.output ?? process.stdout;
+    this.viewport = new TerminalViewport(this.outStream, {
+      repoName: path.basename(this.repoRoot),
+    });
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
     this.telemetry = new TelemetryCollector(this.db);
@@ -412,11 +417,11 @@ export class InteractiveShell {
 
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
 
-        this.outStream.write(
-          isEn
-            ? `\n${colors.brand}╭── ✦ TaskForge Execution ───────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Starting execution...\n`
-            : `\n${colors.brand}╭── ✦ Execução TaskForge ────────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plano aprovado.${colors.reset} Iniciando execução...\n`,
-        );
+        const approvedMsg = isEn
+          ? `\n${colors.brand}╭── ✦ TaskForge Execution ───────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Starting execution...\n`
+          : `\n${colors.brand}╭── ✦ Execução TaskForge ────────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plano aprovado.${colors.reset} Iniciando execução...\n`;
+        this.viewport.writeUpper(approvedMsg);
+        this.viewport.drawFooter(isEn ? '⚡ Executing plan...' : '⚡ Executando plano...');
 
         const orchestrator = new RunOrchestrator({
           repoRoot: this.repoRoot,
@@ -438,7 +443,7 @@ export class InteractiveShell {
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
               onProgress: (msg) => {
-                this.outStream.write(`${theme.formatProgressMessage(msg)}\n`);
+                this.viewport.writeUpper(theme.formatProgressMessage(msg));
               },
             },
           );
@@ -572,54 +577,91 @@ export class InteractiveShell {
   }
 
   async start(): Promise<void> {
-    const banner = await this.renderBanner();
-    const inStream = this.options.input ?? process.stdin;
-    const outStream = this.options.output ?? process.stdout;
-
-    outStream.write(banner);
-
     const gitStatus = await this.gitService.getStatus().catch(() => ({
       currentBranch: 'main',
     }));
     const repoName = path.basename(this.repoRoot);
+    this.viewport.updateContext(repoName, gitStatus.currentBranch);
+
+    const banner = await this.renderBanner();
+    const inStream = this.options.input ?? process.stdin;
+    const outStream = this.options.output ?? process.stdout;
+
+    // Initialize viewport (if interactive, sets DECSTBM scrolling margin, clears screen, draws fixed footer)
+    this.viewport.init();
+    this.viewport.writeUpper(banner);
+
     const promptStr = theme.prompt(gitStatus.currentBranch, repoName);
 
     const rl = readline.createInterface({
       input: inStream,
       output: outStream,
-      prompt: promptStr,
+      prompt: this.viewport.isInteractive ? `${colors.brand}╰─${colors.green}❯${colors.reset} ` : promptStr,
+    });
+
+    const cleanup = () => {
+      this.viewport.cleanup();
+    };
+
+    process.on('SIGINT', cleanup);
+    process.on('exit', cleanup);
+    rl.on('SIGINT', () => {
+      cleanup();
+      process.exit(0);
     });
 
     let closed = false;
     rl.on('close', () => {
       closed = true;
+      cleanup();
     });
 
-    rl.prompt();
+    this.viewport.preparePrompt(rl);
 
     for await (const line of rl) {
       const trimmed = line.trim();
       if (trimmed === '/exit' || trimmed === '/quit') {
-        outStream.write(
+        const exitMsg =
           this.sessionLanguage === 'en'
             ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
-            : `\n${colors.brand}✦${colors.reset} Até logo!\n`,
-        );
+            : `\n${colors.brand}✦${colors.reset} Até logo!\n`;
+        this.viewport.writeUpper(exitMsg);
+        cleanup();
         break;
       }
+
+      if (!trimmed) {
+        if (!closed) {
+          try {
+            this.viewport.preparePrompt(rl);
+          } catch {
+            closed = true;
+          }
+        }
+        continue;
+      }
+
+      if (this.viewport.isInteractive) {
+        // Echo entered user prompt to upper scrolling history
+        const userPromptEcho = `${colors.brand}╭─${colors.reset} ${colors.bold}✦ TaskForge${colors.reset} ${colors.gray}[${colors.cyan}${repoName}${colors.gray} • ${colors.yellow}${gitStatus.currentBranch}${colors.gray}]${colors.reset}\n${colors.brand}╰─${colors.green}❯${colors.reset} ${trimmed}`;
+        this.viewport.writeUpper(userPromptEcho);
+        this.viewport.drawFooter(this.sessionLanguage === 'en' ? 'Thinking...' : 'Processando...');
+      }
+
       const reply = await this.handleInput(trimmed);
       if (reply) {
-        outStream.write(`\n${reply}\n\n`);
+        this.viewport.writeUpper(`\n${reply}\n`);
       }
       if (!closed) {
         try {
-          rl.prompt();
+          this.viewport.preparePrompt(rl);
         } catch {
           closed = true;
         }
       }
     }
 
+    cleanup();
     if (!closed) {
       try {
         rl.close();
