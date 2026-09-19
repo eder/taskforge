@@ -72,7 +72,9 @@ export class ProcessRunner {
         if (child?.stdin && !child.stdin.destroyed) {
           try {
             child.stdin.end();
-          } catch {}
+          } catch {
+            // ignore stdin end error
+          }
         }
       };
 

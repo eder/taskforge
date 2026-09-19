@@ -22,10 +22,14 @@ describe('InteractiveShell (REPL)', () => {
     shellsToClean.length = 0;
     try {
       db.close();
-    } catch {}
+    } catch {
+      // ignore db close error
+    }
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {}
+    } catch {
+      // ignore directory cleanup error
+    }
   });
 
   it('renders initial startup banner with repo and agent status', async () => {

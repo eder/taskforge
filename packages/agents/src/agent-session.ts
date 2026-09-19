@@ -254,6 +254,7 @@ export class RealCliAgentSession implements AgentSession {
   }
 
   private detectTerminalPrompt(line: string): void {
+    // eslint-disable-next-line no-control-regex
     const stripped = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
     if (!stripped) return;
 
@@ -286,7 +287,9 @@ export class RealCliAgentSession implements AgentSession {
     if (this.child && !this.child.killed) {
       try {
         this.child.kill('SIGTERM');
-      } catch {}
+      } catch {
+        // ignore error on kill
+      }
     }
   }
 }
