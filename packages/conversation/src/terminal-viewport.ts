@@ -114,6 +114,7 @@ export class TerminalViewport {
     this.currentBuffer = buffer;
     this.currentCursorIndex = cursorIndex;
     this.currentStatus = status;
+    const prevPanelHeight = Math.min(this.currentPanelLines.length, Math.max(0, this.rows - 6));
     if (panelLines !== undefined) {
       this.currentPanelLines = panelLines;
     }
@@ -125,6 +126,13 @@ export class TerminalViewport {
     if (targetScrollBottom !== this.scrollBottom) {
       this.scrollBottom = targetScrollBottom;
       this.outStream.write(`\x1b[1;${this.scrollBottom}r`);
+    }
+
+    // Clear old panel rows if panel shrunk
+    if (panelHeight < prevPanelHeight) {
+      for (let r = this.rows - prevPanelHeight; r < this.rows; r++) {
+        this.outStream.write(`\x1b[${r};1H\x1b[2K`);
+      }
     }
 
     // Render panel lines if any

@@ -75,4 +75,54 @@ describe('StreamViewer', () => {
     expect(snapshot).toContain('line 4: done');
     expect(snapshot).not.toContain('line 1: start');
   });
+
+  it('formats NDJSON lines from Claude, AGY, and Codex cleanly', () => {
+    const claudeToolLine = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', name: 'Bash', input: { command: 'pnpm test' } },
+        ],
+      },
+    });
+    expect(StreamViewer.formatLine(claudeToolLine)).toContain('💻 [Bash] pnpm test');
+
+    const claudeEditLine = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', name: 'Edit', input: { file_path: 'src/services/memory.ts' } },
+        ],
+      },
+    });
+    expect(StreamViewer.formatLine(claudeEditLine)).toContain('✏️ [Edit] memory.ts');
+
+    const claudeResultLine = JSON.stringify({
+      type: 'result',
+      result: 'All tasks completed successfully.',
+    });
+    expect(StreamViewer.formatLine(claudeResultLine)).toContain('✔ [Completed] All tasks completed');
+
+    const agyStepLine = JSON.stringify({
+      event: 'step_update',
+      step_update: { description: 'Running typecheck' },
+    });
+    expect(StreamViewer.formatLine(agyStepLine)).toContain('⚙️ [Step] Running typecheck');
+
+    const codexItemLine = JSON.stringify({
+      type: 'item',
+      item: { command: 'git diff' },
+    });
+    expect(StreamViewer.formatLine(codexItemLine)).toContain('💻 [Codex] git diff');
+
+    // Ignores internal metadata lines
+    const internalMeta = JSON.stringify({
+      type: 'rate_limit_event',
+      rate_limit_info: {},
+    });
+    expect(StreamViewer.formatLine(internalMeta)).toBeNull();
+
+    // Plain text is preserved
+    expect(StreamViewer.formatLine('plain log message')).toBe('plain log message');
+  });
 });

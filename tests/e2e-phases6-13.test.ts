@@ -466,6 +466,7 @@ describe('TaskForge Phases 6-13 End-to-End Orchestration', () => {
       return {
         success: true,
         commitHash: implRes.commitHash,
+        worktreePath: implWt.path,
       };
     });
 

@@ -8,6 +8,111 @@ export interface PreflightEvaluator {
   evaluate(task: Task, agent?: AgentAdapter): Promise<TaskPreflightResult>;
 }
 
+export interface AgentPreflightOptions {
+  evaluateWorkerFn?: (task: Task, agent: AgentAdapter) => Promise<TaskPreflightResult>;
+}
+
+export class AgentPreflightEvaluator implements PreflightEvaluator {
+  constructor(private options: AgentPreflightOptions = {}) {}
+
+  async evaluate(task: Task, agent?: AgentAdapter): Promise<TaskPreflightResult> {
+    if (this.options.evaluateWorkerFn && agent) {
+      return this.options.evaluateWorkerFn(task, agent);
+    }
+
+    const contract = task.contract;
+    const missingContext: string[] = [];
+    const concerns: string[] = [];
+    const suggestedDependencies: string[] = [];
+
+    // Check 1: Missing acceptance criteria
+    if (!contract.acceptanceCriteria || contract.acceptanceCriteria.length === 0) {
+      missingContext.push('Acceptance criteria are missing or empty');
+    }
+
+    // Check 2: Missing objective
+    if (!contract.objective || contract.objective.trim().length === 0) {
+      missingContext.push('Contract objective is undefined');
+    }
+
+    // If critical context is missing, return 'need_context'
+    if (missingContext.length > 0) {
+      return {
+        decision: 'need_context',
+        understanding: `Insufficient context to safely execute task ${task.id}`,
+        concerns: ['Cannot determine completion without acceptance criteria or objective'],
+        missingContext,
+        suggestedDependencies,
+      };
+    }
+
+    // Check 3: Agent capabilities compatibility if agent provided
+    if (agent) {
+      const caps = await agent.capabilities();
+      if (task.type === 'implementation' && !caps.canWrite) {
+        concerns.push(`Assigned agent ${agent.name} does not possess write capabilities`);
+        return {
+          decision: 'challenge',
+          understanding: `Task requires code edits but agent ${agent.name} is read-only`,
+          concerns,
+          missingContext: [],
+          suggestedDependencies,
+        };
+      }
+    }
+
+    // Check 4: Unbounded scope for refactor / cross-cutting architecture tasks -> recommend collaboration
+    const isUnboundedScope =
+      contract.allowedScope.length === 0 ||
+      contract.allowedScope.includes('*') ||
+      contract.allowedScope.includes('**/*');
+
+    if (
+      (task.type === 'refactoring' || task.type === 'architecture') &&
+      isUnboundedScope &&
+      task.description.toLowerCase().includes('architecture')
+    ) {
+      return {
+        decision: 'recommend_collaboration',
+        understanding: `Cross-cutting architecture overhaul requires collaborative review and verification`,
+        concerns: ['Scope is unbounded across entire repository for an architecture refactor'],
+        missingContext: [],
+        suggestedDependencies,
+        collaboration: {
+          reason: 'Unbounded architecture refactor requires pairing with architecture reviewer',
+          requestedRoles: ['implementer', 'architecture_reviewer'],
+          expectedBenefit: 'Avoid unintended regression across repository modules',
+          urgency: 'high',
+        },
+      };
+    }
+
+    // Check 5: Implicit dependency detection (e.g. integration test without prerequisites)
+    if (
+      task.dependencies.length === 0 &&
+      task.description.toLowerCase().includes('integration test')
+    ) {
+      suggestedDependencies.push('TASK-IMPL');
+      return {
+        decision: 'need_dependency',
+        understanding: `Integration test requires underlying implementation before execution`,
+        concerns: ['No prerequisites specified for integration testing task'],
+        missingContext: [],
+        suggestedDependencies,
+      };
+    }
+
+    // Default: accept
+    return {
+      decision: 'accept',
+      understanding: `Understood and validated objective: "${contract.objective}"`,
+      concerns: [],
+      missingContext: [],
+      suggestedDependencies: [],
+    };
+  }
+}
+
 export class DefaultPreflightEvaluator implements PreflightEvaluator {
   async evaluate(task: Task): Promise<TaskPreflightResult> {
     // Default safe preflight acceptance
@@ -23,7 +128,7 @@ export class DefaultPreflightEvaluator implements PreflightEvaluator {
 
 export class NegotiationManager {
   constructor(
-    private evaluator: PreflightEvaluator = new DefaultPreflightEvaluator(),
+    private evaluator: PreflightEvaluator = new AgentPreflightEvaluator(),
     private eventRepo?: EventRepository,
     private db?: TaskForgeDatabase,
   ) {}

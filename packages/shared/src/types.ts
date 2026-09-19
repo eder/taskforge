@@ -136,6 +136,7 @@ export interface AgentContext {
   assignment: AgentAssignment;
   environment?: Record<string, string>;
   abortSignal?: AbortSignal;
+  logPath?: string;
   onEvent?: (event: AgentRuntimeEvent) => Promise<void>;
   onActivity?: (activity: string) => void;
 }

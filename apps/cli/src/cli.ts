@@ -50,6 +50,45 @@ export function createCli(): Command {
       );
     });
 
+  // tf runs
+  program
+    .command('runs')
+    .description('List past execution runs and their git integration branches')
+    .action(() => {
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+      const goalRepo = new GoalRepository(db);
+      const runs = runRepo.listAll();
+      if (runs.length === 0) {
+        console.log('\n  No execution runs recorded yet.\n');
+        db.close();
+        return;
+      }
+      console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge Runs History${colors.reset}`);
+      console.log(`  ${colors.darkGray}${'─'.repeat(64)}${colors.reset}`);
+      for (const r of runs.slice(0, 10)) {
+        const goal = r.goalId ? goalRepo.get(r.goalId) : undefined;
+        const branch = `taskforge/run-${r.id}`;
+        const statusColor =
+          r.status === 'completed'
+            ? colors.green
+            : r.status === 'failed'
+              ? colors.red
+              : colors.yellow;
+        console.log(
+          `  ● ${colors.bold}${r.id}${colors.reset} [${statusColor}${r.status.toUpperCase()}${colors.reset}] ${colors.dim}(${r.createdAt.slice(0, 19).replace('T', ' ')})${colors.reset}`,
+        );
+        if (goal) {
+          console.log(`    ${colors.dim}Goal:${colors.reset}   ${goal.description}`);
+        }
+        console.log(`    ${colors.dim}Branch:${colors.reset} ${colors.cyan}${branch}${colors.reset}`);
+        console.log(`    ${colors.dim}Merge:${colors.reset}  ${colors.green}git merge ${branch}${colors.reset}\n`);
+      }
+      console.log(`  ${colors.darkGray}${'─'.repeat(64)}${colors.reset}\n`);
+      db.close();
+    });
+
   // tf doctor
   program
     .command('doctor')

@@ -19,7 +19,8 @@
     "@taskforge/core": "workspace:*",
     "@taskforge/agents": "workspace:*",
     "@taskforge/persistence": "workspace:*",
-    "@taskforge/telemetry": "workspace:*"
+    "@taskforge/telemetry": "workspace:*",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

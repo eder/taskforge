@@ -126,4 +126,131 @@ describe('Agents - FakeAgent and Registry', () => {
     const fakeReport = reports.find((r) => r.id === 'custom-fake');
     expect(fakeReport?.ready).toBe(true);
   });
+
+  it('FakeAgent writes to context.logPath when provided', async () => {
+    const agent = new FakeAgent('fake-logger', 'Fake Logger', [
+      {
+        activitySteps: ['Compiling sources...', 'Running tests...'],
+      },
+    ]);
+    const logFile = path.join(testDir, 'fake-run.log');
+
+    await agent.execute(
+      {
+        id: 'ASGN-LOG',
+        taskId: 'TASK-LOG',
+        agentId: 'fake-logger',
+        role: 'implementer',
+        objective: 'Test logging',
+        status: 'running',
+      },
+      {
+        worktreePath: testDir,
+        logPath: logFile,
+        task: {
+          objective: 'Test logging',
+          allowedScope: [],
+          forbiddenChanges: [],
+          acceptanceCriteria: [],
+          dependencies: [],
+        },
+        assignment: {
+          id: 'ASGN-LOG',
+          taskId: 'TASK-LOG',
+          agentId: 'fake-logger',
+          role: 'implementer',
+          objective: 'Test logging',
+          status: 'running',
+        },
+      },
+    );
+
+    expect(fs.existsSync(logFile)).toBe(true);
+    const content = fs.readFileSync(logFile, 'utf8');
+    expect(content).toContain('[FakeAgent] Starting assignment');
+    expect(content).toContain('[FakeAgent] Compiling sources...');
+    expect(content).toContain('[FakeAgent] Running tests...');
+  });
+
+  it('CLI adapters parse real-time stream activity and clean output', async () => {
+    const { ClaudeCodeAdapter, AntigravityAdapter, CodexAdapter } = await import(
+      '../src/real-adapters.js'
+    );
+
+    const claude = new ClaudeCodeAdapter();
+    const agy = new AntigravityAdapter();
+    const codex = new CodexAdapter();
+
+    // Check streaming flags
+    expect((claude as any).options.defaultArgs).toContain('--output-format=stream-json');
+    expect((agy as any).options.defaultArgs).toContain('stream-json');
+    expect((codex as any).options.defaultArgs).toContain('--json');
+
+    // Test extractActivity
+    const activities: string[] = [];
+    const callback = (act: string) => activities.push(act);
+
+    // 1. Claude tool_use Bash
+    (claude as any).extractActivity(
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', name: 'Bash', input: { command: 'pnpm test' } }],
+        },
+      }),
+      callback,
+    );
+    expect(activities[activities.length - 1]).toBe('Bash: pnpm test');
+
+    // 2. Claude tool_use Edit
+    (claude as any).extractActivity(
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Edit', input: { file_path: 'packages/core/src/graph.ts' } },
+          ],
+        },
+      }),
+      callback,
+    );
+    expect(activities[activities.length - 1]).toBe('Edit graph.ts');
+
+    // 3. AGY step_update
+    (agy as any).extractActivity(
+      JSON.stringify({
+        event: 'step_update',
+        step_update: { description: 'Analyzing workspace' },
+      }),
+      callback,
+    );
+    expect(activities[activities.length - 1]).toBe('Analyzing workspace');
+
+    // 4. Codex item
+    (codex as any).extractActivity(
+      JSON.stringify({
+        type: 'item',
+        item: { command: 'git diff' },
+      }),
+      callback,
+    );
+    expect(activities[activities.length - 1]).toBe('git diff');
+
+    // 5. Raw text fallback
+    (claude as any).extractActivity('Running linter...\nAll passed\n', callback);
+    expect(activities[activities.length - 1]).toBe('All passed');
+
+    // Test extractOutput
+    const streamOutput = [
+      JSON.stringify({ type: 'system', subtype: 'init' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Partial text' }] },
+      }),
+      JSON.stringify({ type: 'result', result: 'Clean final markdown answer' }),
+    ].join('\n');
+
+    const cleanResult = (claude as any).extractOutput(streamOutput, '');
+    expect(cleanResult).toBe('Clean final markdown answer');
+  });
 });
