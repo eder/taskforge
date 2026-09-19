@@ -116,7 +116,7 @@ export class InteractiveShell {
   private lastGoalDescription?: string;
   private isPaused = false;
   private activeRunId?: string;
-  private sessionLanguage?: ShellLanguage;
+  private sessionLanguage: ShellLanguage = 'en';
   private outStream: Writable;
   public viewport: TerminalViewport;
   public slashMenu: SlashMenu;
@@ -127,7 +127,7 @@ export class InteractiveShell {
     this.viewport = new TerminalViewport(this.outStream, {
       repoName: path.basename(this.repoRoot),
     });
-    this.slashMenu = new SlashMenu(this.outStream, this.sessionLanguage ?? 'en');
+    this.slashMenu = new SlashMenu(this.outStream, this.sessionLanguage);
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
     this.telemetry = new TelemetryCollector(this.db);
@@ -202,16 +202,17 @@ export class InteractiveShell {
     const text = input.trim();
     if (!text) return '';
 
-    if (!text.startsWith('/')) {
-      if (isPortugueseText(text)) {
+    const nonSlashText = text.startsWith('/') ? text.replace(/^\/\w+\s*/, '') : text;
+    if (nonSlashText.length > 0) {
+      if (isPortugueseText(nonSlashText)) {
         this.sessionLanguage = 'pt';
-      } else if (text.length > 0) {
+      } else if (!text.startsWith('/')) {
         this.sessionLanguage = 'en';
       }
-      this.slashMenu.setLanguage(this.sessionLanguage ?? 'en');
+      this.slashMenu.setLanguage(this.sessionLanguage);
     }
 
-    const isEn = this.sessionLanguage === 'en';
+    const isEn = this.sessionLanguage !== 'pt';
 
     if (text === '/exit' || text === '/quit') {
       return isEn ? 'Session closed.' : 'Sessão encerrada.';

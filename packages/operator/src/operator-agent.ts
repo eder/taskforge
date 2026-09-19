@@ -341,9 +341,9 @@ export class OperatorAgent {
   public formatResponse(
     intent: OperatorIntent,
     state: Record<string, unknown>,
-    lang?: 'en' | 'pt',
+    lang: 'en' | 'pt' = 'en',
   ): string {
-    const isEn = lang === 'en';
+    const isEn = lang !== 'pt';
 
     switch (intent.type) {
       case 'inspect_tasks': {

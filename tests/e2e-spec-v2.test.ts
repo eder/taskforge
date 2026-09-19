@@ -435,9 +435,9 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
         createdAt: new Date().toISOString(),
       });
 
-      // Query /pending
+      // Query /pending (defaults to English)
       const pendingResponse = await shell.handleInput('/pending');
-      expect(pendingResponse).toContain('Interações pendentes de aprovação');
+      expect(pendingResponse).toContain('Pending interactions awaiting approval');
       expect(pendingResponse).toContain('@fastify/oauth2');
 
       // Operator natural approval

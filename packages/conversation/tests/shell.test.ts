@@ -14,9 +14,13 @@ describe('InteractiveShell (REPL)', () => {
   it('processes user commands in conversational REPL', async () => {
     const shell = new InteractiveShell();
 
-    // Check agents command
-    const agentReply = await shell.handleInput('/agents');
-    expect(agentReply).toContain('Agentes disponíveis:');
+    // Default language is English
+    const defaultAgentsReply = await shell.handleInput('/agents');
+    expect(defaultAgentsReply).toContain('Available agents:');
+
+    // Switches dynamically when user speaks Portuguese
+    const agentReplyPt = await shell.handleInput('quais agentes estão disponíveis?');
+    expect(agentReplyPt).toContain('Agentes disponíveis:');
 
     // Check pause and resume
     const pauseReply = await shell.handleInput('pausar a execução');
