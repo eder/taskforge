@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentQuotaTracker } from '../src/quota-tracker.js';
-import { AgentDetector, AgentRegistry } from '../src/agent-registry.js';
+import { AgentDetector } from '../src/agent-registry.js';
 import { FakeAgent } from '../src/fake-agent.js';
 
 describe('AgentQuotaTracker and Quota-Aware Detection', () => {

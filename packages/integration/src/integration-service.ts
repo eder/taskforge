@@ -23,7 +23,7 @@ export class IntegrationService {
   private queueLock: Promise<void> = Promise.resolve();
 
   getBranchName(runId: string): string {
-    return `taskforge/${runId.startsWith('run-') ? runId : `run-${runId}`}`;
+    return `taskforge/run-${runId}`;
   }
 
   async initIntegrationBranch(runId: string, baseCommit: string): Promise<string> {

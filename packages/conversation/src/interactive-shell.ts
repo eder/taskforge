@@ -813,7 +813,9 @@ export class InteractiveShell {
       }
       try {
         this.db.close();
-      } catch {}
+      } catch {
+        /* ignore */
+      }
       return;
     }
 
@@ -829,7 +831,9 @@ export class InteractiveShell {
     if (typeof inStreamAny.setRawMode === 'function') {
       try {
         inStreamAny.setRawMode(true);
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
     inStreamAny.resume?.();
 
@@ -862,14 +866,20 @@ export class InteractiveShell {
       if (typeof inStreamAny.setRawMode === 'function') {
         try {
           inStreamAny.setRawMode(false);
-        } catch {}
+        } catch {
+          /* ignore */
+        }
       }
       try {
         inStreamAny.pause?.();
-      } catch {}
+      } catch {
+        /* ignore */
+      }
       try {
         this.db.close();
-      } catch {}
+      } catch {
+        /* ignore */
+      }
       worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
     };
 
