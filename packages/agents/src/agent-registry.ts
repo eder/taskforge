@@ -35,11 +35,17 @@ export class AgentDetector {
 export class AgentRegistry {
   private adapters: Map<string, AgentAdapter> = new Map();
 
-  constructor() {
-    // Register default known harnesses
-    this.register(new ClaudeCodeAdapter());
-    this.register(new CodexAdapter());
-    this.register(new AntigravityAdapter());
+  constructor(registerDefaults: boolean = true) {
+    if (registerDefaults) {
+      // Register default known harnesses
+      this.register(new ClaudeCodeAdapter());
+      this.register(new CodexAdapter());
+      this.register(new AntigravityAdapter());
+    }
+  }
+
+  clear(): void {
+    this.adapters.clear();
   }
 
   register(adapter: AgentAdapter): void {
