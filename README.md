@@ -138,7 +138,7 @@ taskforge/
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/edereduardo/taskforge.git
+git clone https://github.com/eder/taskforge.git
 cd taskforge
 
 # 2. Install dependencies
