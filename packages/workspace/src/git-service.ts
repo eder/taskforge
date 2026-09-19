@@ -78,7 +78,41 @@ export class GitService {
     try {
       return await this.exec(['rev-parse', 'HEAD'], cwd);
     } catch {
-      return 'EMPTY_TREE';
+      return await this.ensureInitialCommit(cwd);
+    }
+  }
+
+  async ensureInitialCommit(cwd: string = this.repoRoot): Promise<string> {
+    try {
+      return await this.exec(['rev-parse', 'HEAD'], cwd);
+    } catch {
+      const isRepo = await this.isGitRepo();
+      if (!isRepo) {
+        await this.exec(['init', '-b', 'main'], cwd);
+      }
+
+      let hasUser = false;
+      try {
+        const userName = await this.exec(['config', 'user.name'], cwd);
+        if (userName.trim()) hasUser = true;
+      } catch {
+        hasUser = false;
+      }
+
+      if (!hasUser) {
+        await this.exec(['config', 'user.name', 'TaskForge Bot'], cwd);
+        await this.exec(['config', 'user.email', 'bot@taskforge.dev'], cwd);
+      }
+
+      const statusOutput = await this.exec(['status', '--porcelain'], cwd).catch(() => '');
+      if (statusOutput.trim().length > 0) {
+        await this.exec(['add', '-A'], cwd);
+        await this.exec(['commit', '-m', 'chore: initial commit by TaskForge'], cwd);
+      } else {
+        await this.exec(['commit', '--allow-empty', '-m', 'chore: initial commit by TaskForge'], cwd);
+      }
+
+      return await this.exec(['rev-parse', 'HEAD'], cwd);
     }
   }
 

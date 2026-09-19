@@ -13,7 +13,14 @@ export class HeuristicPlanner implements Planner {
       desc.includes('bug') ||
       desc.includes('duplica') ||
       desc.includes('flaky') ||
-      desc.includes('reproduce');
+      desc.includes('reproduce') ||
+      desc.includes('explique') ||
+      desc.includes('explain') ||
+      desc.includes('analis') ||
+      desc.includes('analyz') ||
+      desc.includes('audit') ||
+      desc.includes('entenda') ||
+      desc.includes('understand');
 
     const isFullStack =
       (desc.includes('frontend') && desc.includes('backend')) ||
@@ -21,12 +28,13 @@ export class HeuristicPlanner implements Planner {
         (desc.includes('auth') || desc.includes('oauth') || desc.includes('endpoint')));
 
     if (isInvestigationNeeded) {
+      const isExplanation = desc.includes('explique') || desc.includes('explain') || desc.includes('entenda');
       // 1. Investigation task
       const task1: Task = {
         id: 'TASK-01',
         goalId: goal.id,
-        title: 'Investigate Root Cause and Architecture',
-        description: `Analyze flow and reproduce issues related to: ${goal.description}`,
+        title: isExplanation ? 'Analyze Architecture and Project Scope' : 'Investigate Root Cause and Architecture',
+        description: `Analyze flow and structure related to: ${goal.description}`,
         type: 'investigation',
         status: 'proposed',
         dependencies: [],

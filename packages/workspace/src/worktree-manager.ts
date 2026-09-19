@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { ProcessRunner } from '@taskforge/execution';
 import { WorkspaceCreationError } from '@taskforge/shared';
+import { GitService } from './git-service.js';
 
 export interface WorktreeInfo {
   taskId: string;
@@ -60,9 +61,15 @@ export class WorktreeManager {
       }
     }
 
+    let targetBaseCommit = baseCommit;
+    if (targetBaseCommit === 'EMPTY_TREE' || !targetBaseCommit) {
+      const git = new GitService(this.repoRoot);
+      targetBaseCommit = await git.ensureInitialCommit();
+    }
+
     const addResult = await ProcessRunner.run({
       command: 'git',
-      args: ['worktree', 'add', '-B', branchName, targetPath, baseCommit],
+      args: ['worktree', 'add', '-B', branchName, targetPath, targetBaseCommit],
       cwd: this.repoRoot,
       timeoutMs: 30000,
     });
