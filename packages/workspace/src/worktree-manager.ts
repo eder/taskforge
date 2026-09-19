@@ -12,6 +12,10 @@ export interface WorktreeInfo {
   baseCommit: string;
 }
 
+export interface CreateWorktreeOptions {
+  detached?: boolean;
+}
+
 export class WorktreeManager {
   private activeWorktrees: Map<string, WorktreeInfo> = new Map();
 
@@ -28,6 +32,7 @@ export class WorktreeManager {
     taskId: string,
     assignmentId: string,
     baseCommit: string,
+    options?: CreateWorktreeOptions,
   ): Promise<WorktreeInfo> {
     const key = `${taskId}:${assignmentId}`;
     if (this.activeWorktrees.has(key)) {
@@ -35,7 +40,8 @@ export class WorktreeManager {
     }
 
     const targetPath = this.getWorktreePath(taskId, assignmentId);
-    const branchName = `taskforge/${taskId}/${assignmentId}`;
+    const isDetached = Boolean(options?.detached);
+    const branchName = isDetached ? '' : `taskforge/${taskId}/${assignmentId}`;
 
     // Safety rule: never allow two parallel assignments to share the exact same path
     for (const [existingKey, existing] of this.activeWorktrees.entries()) {
@@ -55,7 +61,7 @@ export class WorktreeManager {
 
     // If dir exists from previous run, remove worktree if git knows it
     if (fs.existsSync(targetPath)) {
-      await this.removeWorktree(taskId, assignmentId, true).catch(() => {});
+      await this.removeWorktree(taskId, assignmentId, true, true).catch(() => {});
       if (fs.existsSync(targetPath)) {
         fs.rmSync(targetPath, { recursive: true, force: true });
       }
@@ -67,9 +73,13 @@ export class WorktreeManager {
       targetBaseCommit = await git.ensureInitialCommit();
     }
 
+    const gitArgs = isDetached
+      ? ['worktree', 'add', '--detach', targetPath, targetBaseCommit]
+      : ['worktree', 'add', '-B', branchName, targetPath, targetBaseCommit];
+
     const addResult = await ProcessRunner.run({
       command: 'git',
-      args: ['worktree', 'add', '-B', branchName, targetPath, targetBaseCommit],
+      args: gitArgs,
       cwd: this.repoRoot,
       timeoutMs: 30000,
     });
@@ -91,7 +101,7 @@ export class WorktreeManager {
       taskId,
       assignmentId,
       path: targetPath,
-      branchName,
+      branchName: isDetached ? 'HEAD (detached)' : branchName,
       baseCommit,
     };
 
@@ -103,9 +113,12 @@ export class WorktreeManager {
     taskId: string,
     assignmentId: string,
     force: boolean = false,
+    deleteBranch: boolean = true,
   ): Promise<void> {
     const key = `${taskId}:${assignmentId}`;
+    const info = this.activeWorktrees.get(key);
     const targetPath = this.getWorktreePath(taskId, assignmentId);
+    const branchName = info?.branchName;
 
     const removeResult = await ProcessRunner.run({
       command: 'git',
@@ -126,6 +139,14 @@ export class WorktreeManager {
       }
     }
 
+    if (deleteBranch && branchName && branchName.startsWith('taskforge/')) {
+      await ProcessRunner.run({
+        command: 'git',
+        args: ['branch', '-D', branchName],
+        cwd: this.repoRoot,
+      }).catch(() => {});
+    }
+
     this.activeWorktrees.delete(key);
   }
 
@@ -139,5 +160,60 @@ export class WorktreeManager {
       args: ['worktree', 'prune'],
       cwd: this.repoRoot,
     });
+  }
+
+  async cleanOrphanedWorktreesAndBranches(): Promise<number> {
+    // 1. Remove all linked worktrees located inside .taskforge
+    const wtListRes = await ProcessRunner.run({
+      command: 'git',
+      args: ['worktree', 'list', '--porcelain'],
+      cwd: this.repoRoot,
+    });
+    if (wtListRes.exitCode === 0) {
+      const lines = wtListRes.stdout.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('worktree ')) {
+          const wtPath = line.replace('worktree ', '').trim();
+          if (wtPath !== this.repoRoot && wtPath.includes('.taskforge')) {
+            await ProcessRunner.run({
+              command: 'git',
+              args: ['worktree', 'remove', '--force', wtPath],
+              cwd: this.repoRoot,
+            }).catch(() => {});
+            if (fs.existsSync(wtPath)) {
+              try {
+                fs.rmSync(wtPath, { recursive: true, force: true });
+              } catch {
+                // ignore
+              }
+            }
+          }
+        }
+      }
+    }
+    await this.prune().catch(() => {});
+
+    // 2. Delete dangling temporary assignment & integration worker branches
+    let deleted = 0;
+    const branchRes = await ProcessRunner.run({
+      command: 'git',
+      args: ['branch', '--list', 'taskforge/*'],
+      cwd: this.repoRoot,
+    });
+    if (branchRes.exitCode === 0) {
+      const branches = branchRes.stdout
+        .split('\n')
+        .map((b) => b.replace(/^[*+\s]+/, '').trim())
+        .filter((b) => b.startsWith('taskforge/TASK-') || b.startsWith('taskforge/integration-'));
+      for (const b of branches) {
+        await ProcessRunner.run({
+          command: 'git',
+          args: ['branch', '-D', b],
+          cwd: this.repoRoot,
+        }).catch(() => {});
+        deleted++;
+      }
+    }
+    return deleted;
   }
 }

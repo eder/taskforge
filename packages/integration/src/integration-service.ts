@@ -97,42 +97,48 @@ export class IntegrationService {
     baseCommit: string,
   ): Promise<{ branchName: string; verified: boolean }> {
     const branchName = await this.initIntegrationBranch(runId, baseCommit);
-    const wt = await this.worktreeManager.createWorktree(`integration-${runId}`, 'main-worker', branchName);
+    const wt = await this.worktreeManager.createWorktree(`integration-${runId}`, 'main-worker', branchName, {
+      detached: true,
+    });
 
-    let verified = true;
-    if (this.verificationRunner && config.verification.tests) {
-      const verResult = await this.verificationRunner.verify({
-        taskId: `FINAL-${runId}`,
-        runId,
-        worktreePath: wt.path,
-        config,
-      });
-      verified = verResult.passed;
-      if (!verified) {
-        throw new IntegrationError(
-          `Final integration verification failed for branch ${branchName}: ${verResult.failureReason}`,
-          { runId, branchName, failureReason: verResult.failureReason },
-        );
+    try {
+      let verified = true;
+      if (this.verificationRunner && config.verification.tests) {
+        const verResult = await this.verificationRunner.verify({
+          taskId: `FINAL-${runId}`,
+          runId,
+          worktreePath: wt.path,
+          config,
+        });
+        verified = verResult.passed;
+        if (!verified) {
+          throw new IntegrationError(
+            `Final integration verification failed for branch ${branchName}: ${verResult.failureReason}`,
+            { runId, branchName, failureReason: verResult.failureReason },
+          );
+        }
       }
-    }
 
-    if (this.eventRepo) {
-      this.eventRepo.append({
-        id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        runId,
-        type: 'INTEGRATION_COMPLETED',
-        payload: {
-          branchName,
-          baseCommit,
-          verified,
-        },
-        timestamp: new Date(),
-      });
-    }
+      if (this.eventRepo) {
+        this.eventRepo.append({
+          id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          runId,
+          type: 'INTEGRATION_COMPLETED',
+          payload: {
+            branchName,
+            baseCommit,
+            verified,
+          },
+          timestamp: new Date(),
+        });
+      }
 
-    return {
-      branchName,
-      verified,
-    };
+      return {
+        branchName,
+        verified,
+      };
+    } finally {
+      await this.worktreeManager.removeWorktree(`integration-${runId}`, 'main-worker', true, true).catch(() => {});
+    }
   }
 }

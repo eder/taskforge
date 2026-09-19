@@ -179,6 +179,7 @@ export class DeterministicScheduler {
     }
 
     runRepo.updateStatus(runId, status);
+    await this.ctx.worktreeManager.prune().catch(() => {});
 
     return {
       runId,
@@ -317,10 +318,17 @@ export class DeterministicScheduler {
     });
 
     // 2. Create isolated worktree for this assignment
-    const wt = await worktreeManager.createWorktree(task.id, assignmentId, baseCommit);
+    const isInvestigation = task.type === 'investigation';
+    const wt = await worktreeManager.createWorktree(task.id, assignmentId, baseCommit, {
+      detached: isInvestigation,
+    });
     assignment.worktreePath = wt.path;
     assignment.branchName = wt.branchName;
-    this.ctx.onProgress?.(`[${task.id}] Created isolated worktree (${wt.branchName})`);
+    if (isInvestigation) {
+      this.ctx.onProgress?.(`[${task.id}] Created isolated read-only workspace`);
+    } else {
+      this.ctx.onProgress?.(`[${task.id}] Created isolated worktree (${wt.branchName})`);
+    }
 
     workspaceRepo.register({
       id: `ws-${task.id}-${randomUUID().slice(0, 8)}`,
@@ -521,6 +529,7 @@ export class DeterministicScheduler {
         taskRepo.updateStatus(task.id, 'failed');
         graph.updateTaskStatus(task.id, 'blocked');
         taskRepo.updateStatus(task.id, 'blocked');
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
       }
       return;
     }
@@ -541,6 +550,9 @@ export class DeterministicScheduler {
       this.hasIntegratedCommits = true;
       this.ctx.onProgress?.(`[${task.id}] Integrated successfully ✓`);
     }
+
+    // 6. Cleanup: remove assignment worktree and delete intermediate branch
+    await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
 
     graph.updateTaskStatus(task.id, 'integrated');
     taskRepo.updateStatus(task.id, 'integrated');

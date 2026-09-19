@@ -2,7 +2,7 @@ import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
 import { TaskForgeConfig, loadConfig } from '@taskforge/shared';
-import { GitService, RepositoryAnalyzer } from '@taskforge/workspace';
+import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
 import { HeuristicPlanner } from '@taskforge/planner';
@@ -583,6 +583,9 @@ export class InteractiveShell {
   }
 
   async start(): Promise<void> {
+    const worktreeManager = new WorktreeManager(this.repoRoot);
+    await worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
+
     const gitStatus = await this.gitService.getStatus().catch(() => ({
       currentBranch: 'main',
     }));
@@ -607,6 +610,7 @@ export class InteractiveShell {
 
     const cleanup = () => {
       this.viewport.cleanup();
+      worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
     };
 
     process.on('SIGINT', cleanup);

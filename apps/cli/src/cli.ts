@@ -35,6 +35,19 @@ export function createCli(): Command {
       await shell.start();
     });
 
+  // tf clean
+  program
+    .command('clean')
+    .description('Clean up all orphaned TaskForge worktrees and temporary assignment branches')
+    .action(async () => {
+      const repoRoot = process.cwd();
+      const wtManager = new WorktreeManager(repoRoot);
+      const count = await wtManager.cleanOrphanedWorktreesAndBranches();
+      console.log(`\n${colors.brand}╭── ✦ TaskForge Workspace Cleanup ──────────────────────────────╮${colors.reset}`);
+      console.log(`  ${colors.green}✔${colors.reset} Cleaned up ${count} temporary TaskForge branches and worktrees.`);
+      console.log(`${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`);
+    });
+
   // tf doctor
   program
     .command('doctor')
