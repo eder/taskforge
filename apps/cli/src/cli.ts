@@ -19,7 +19,7 @@ import { TaskGraph, Task } from '@taskforge/core';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService, GitHubWorkflowService } from '@taskforge/integration';
 import { DeterministicScheduler, RunOrchestrator } from '@taskforge/scheduler';
-import { InteractiveShell, TuiDashboard } from '@taskforge/conversation';
+import { InteractiveShell, TuiDashboard, theme, colors } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
 
 export function createCli(): Command {
@@ -40,22 +40,25 @@ export function createCli(): Command {
     .command('doctor')
     .description('Run environment, provider and workspace diagnostic checks')
     .action(async () => {
-      console.log('TaskForge Doctor Diagnosing Environment...\n');
+      console.log(`\n${colors.brand}╭── ✦ TaskForge Environment Doctor ──────────────────────────────╮${colors.reset}`);
+      console.log(`${colors.brand}│${colors.reset}  ${colors.dim}System and harness diagnostic verification${colors.reset}                   ${colors.brand}│${colors.reset}`);
+      console.log(`${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`);
 
       // 1. Node check
       const nodeVer = process.version;
-      console.log(`Node.js Runtime: ${nodeVer} (>= 22.0.0 required) - OK`);
+      console.log(`  ${colors.bold}Node.js Runtime:${colors.reset}    ${nodeVer} (>= 22.0.0 required) - ${colors.green}✔ OK${colors.reset}`);
 
       // 2. Git check
       const repoRoot = process.cwd();
       const gitService = new GitService(repoRoot);
       const isGit = await gitService.isGitRepo();
       if (!isGit) {
-        console.log('Git Repository: NOT A GIT REPOSITORY (Run inside a git project)');
+        console.log(`  ${colors.bold}Git Repository:${colors.reset}     ${colors.red}✖ NOT A GIT REPOSITORY${colors.reset} (Run inside a git project)`);
       } else {
         const status = await gitService.getStatus();
+        const cleanBadge = status.isClean ? `${colors.green}clean${colors.reset}` : `${colors.yellow}modified${colors.reset}`;
         console.log(
-          `Git Repository: OK (Branch: ${status.currentBranch}, HEAD: ${status.headCommit.slice(0, 7)}, Clean: ${status.isClean})`,
+          `  ${colors.bold}Git Repository:${colors.reset}     ${colors.green}✔ OK${colors.reset} (${colors.yellow}${status.currentBranch}${colors.reset} • ${status.headCommit.slice(0, 7)} • ${cleanBadge})`,
         );
       }
 
@@ -63,18 +66,18 @@ export function createCli(): Command {
       try {
         const db = new TaskForgeDatabase(':memory:');
         db.close();
-        console.log('SQLite Persistence: OK');
+        console.log(`  ${colors.bold}SQLite Database:${colors.reset}    ${colors.green}✔ OK${colors.reset}`);
       } catch (err) {
-        console.log(`SQLite Persistence: FAILED (${(err as Error).message})`);
+        console.log(`  ${colors.bold}SQLite Database:${colors.reset}    ${colors.red}✖ FAILED (${(err as Error).message})${colors.reset}`);
       }
 
       // 4. Repository Analyzer
       try {
         const analyzer = new RepositoryAnalyzer(repoRoot, gitService);
         const profile = await analyzer.analyze();
-        console.log(`Repository Profile: ${profile.summary}`);
+        console.log(`  ${colors.bold}Workspace Profile:${colors.reset}  ${profile.summary}`);
         if (profile.testCommands.length > 0) {
-          console.log(`Test command: ${profile.testCommands[0]}`);
+          console.log(`  ${colors.bold}Test Command:${colors.reset}       ${colors.dim}${profile.testCommands[0]}${colors.reset}`);
         }
       } catch {
         // ignore
@@ -83,11 +86,11 @@ export function createCli(): Command {
       // 5. Agent Detection
       const registry = new AgentRegistry();
       const reports = await AgentDetector.detect(registry.list());
-      console.log('\nAgent Harness Detection:');
+      console.log(`\n  ${colors.bold}Agent Harness Detection:${colors.reset}`);
       for (const rep of reports) {
-        console.log(`  ${rep.name.padEnd(16)} [${rep.id.padEnd(8)}]: ${rep.ready ? '● ready' : '○ not detected'}`);
+        console.log(`    ${theme.agentPill(rep.id, rep.name, rep.ready)}`);
       }
-      console.log('\nDiagnostic complete.');
+      console.log(`\n  ${colors.green}✔${colors.reset} ${colors.bold}Diagnostic complete. Everything ready!${colors.reset}\n`);
     });
 
 

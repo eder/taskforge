@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
 import { TaskForgeConfig, loadConfig } from '@taskforge/shared';
@@ -19,6 +20,7 @@ import { TaskForgeDatabase, InteractionRepository } from '@taskforge/persistence
 import { TelemetryCollector, PerformanceEngine } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { TuiDashboard } from './tui-dashboard.js';
+import { theme, colors } from './theme.js';
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -145,21 +147,27 @@ export class InteractiveShell {
     }));
 
     const reports = await AgentDetector.detect(this.agentRegistry.list());
+    const cleanLabel = gitStatus.isClean ? `${colors.green}clean${colors.reset}` : `${colors.yellow}modified${colors.reset}`;
+    const routerStatus = this.config.router.provider === 'openai' && Boolean(process.env.OPENAI_API_KEY)
+      ? `${colors.green}● ready${colors.reset} ${colors.dim}(OpenAI gpt-4o)${colors.reset}`
+      : `${colors.gray}● static fallback${colors.reset}`;
 
     const lines = [
       '',
-      ' TaskForge',
-      ` ${this.repoRoot}  •  ${gitStatus.currentBranch}  •  ${gitStatus.isClean ? 'clean' : 'modified'}`,
+      ` ${colors.brand}╭─────────────────────────────────────────────────────────────────╮${colors.reset}`,
+      ` ${colors.brand}│${colors.reset}  ${colors.brand}${colors.bold}✦ TaskForge Control Plane${colors.reset}                              ${colors.dim}v0.1.0${colors.reset}  ${colors.brand}│${colors.reset}`,
+      ` ${colors.brand}│${colors.reset}  ${colors.dim}Autonomous multi-agent coordination & git-worktree engine${colors.reset}      ${colors.brand}│${colors.reset}`,
+      ` ${colors.brand}╰─────────────────────────────────────────────────────────────────╯${colors.reset}`,
       '',
-      ' Agents',
-      ...reports.map((r) => ` ${r.name.padEnd(16)} ● ${r.ready ? 'ready' : 'not detected'}`),
+      `  ${colors.dim}Repository${colors.reset}  ${colors.bold}${this.repoRoot}${colors.reset}`,
+      `  ${colors.dim}Git Status${colors.reset}  ${colors.yellow}${gitStatus.currentBranch}${colors.reset} ${colors.dim}(${gitStatus.headCommit.slice(0, 7)})${colors.reset} • ${cleanLabel}`,
       '',
-      ' Router',
-      ` OpenAI       ● ${this.config.router.provider === 'openai' && Boolean(process.env.OPENAI_API_KEY) ? 'ready' : 'static fallback'}`,
+      `  ${colors.bold}Agents${colors.reset}`,
+      ...reports.map((r) => `    ${theme.agentPill(r.id, r.name, r.ready)}`),
       '',
-      ' ECC',
-      ` ${profile.hasECC ? '● detected' : '○ not detected'}`,
-      '────────────────────────────────────',
+      `  ${colors.bold}Router${colors.reset}      OpenAI       ${routerStatus}`,
+      `  ${colors.bold}ECC${colors.reset}         ${profile.hasECC ? `${colors.green}● detected${colors.reset}` : `${colors.gray}○ not detected${colors.reset}`}`,
+      ` ${colors.brand}─────────────────────────────────────────────────────────────────${colors.reset}`,
       '',
     ];
 
@@ -211,11 +219,13 @@ export class InteractiveShell {
         const header = isEn ? 'Current task plan:' : 'Plano atual de tarefas:';
         const depPrefix = isEn ? 'Depends on: ' : 'Depende de: ';
         return [
-          header,
-          ...tasks.map(
-            (t) =>
-              `  - ${t.id}: ${t.title} [${t.status.toUpperCase()}]${t.dependencies.length > 0 ? ` (${depPrefix}${t.dependencies.join(', ')})` : ''}`,
-          ),
+          `${colors.brand}✦ ${header}${colors.reset}`,
+          ...tasks.map((t) => {
+            const icon = theme.taskTypeIcon(t.type);
+            const badge = theme.statusBadge(t.status);
+            const depText = t.dependencies.length > 0 ? ` ${colors.dim}(${depPrefix}${t.dependencies.join(', ')})${colors.reset}` : '';
+            return `  ${icon} ${colors.cyan}${t.id}${colors.reset}: ${colors.bold}${t.title}${colors.reset} [${t.status.toUpperCase()}] ${badge}${depText}`;
+          }),
         ].join('\n');
       }
 
@@ -301,24 +311,43 @@ export class InteractiveShell {
 
         const selected = await this.agentSelector.selectAgents(routing.roles);
 
+        const strategyUpper = routing.strategy.toUpperCase();
+        const strategyColor = strategyUpper === 'PARALLEL' ? colors.cyan : colors.green;
+        const teamFormatted = selected
+          .map((s) => `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`)
+          .join(', ');
+
+        const taskFormattedList = tasks.map((t, idx) => {
+          const icon = theme.taskTypeIcon(t.type);
+          const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
+          const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
+          return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled}`;
+        });
+
         if (isEn) {
           return [
-            `Understood. Recommended strategy: ${routing.strategy.toUpperCase()} (Complexity: ${routing.complexity}, Risk: ${routing.risk}).`,
-            `Suggested team: ${selected.map((s) => `${s.agent.name} (${s.roleRequest.role})`).join(', ')}.`,
+            `${colors.brand}✦ Plan Proposal${colors.reset}`,
+            `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
+            `Suggested team: ${teamFormatted}.`,
             `Total of ${tasks.length} structured tasks:`,
-            ...tasks.map((t, idx) => `  ${idx + 1}. [${t.type.toUpperCase()}] ${t.title}`),
+            ...taskFormattedList,
             '',
-            'Do you want me to execute? (type "yes", "y" or "/approve" to start)',
+            `${colors.brand}╭─────────────────────────────────────────────────────────────────╮${colors.reset}`,
+            `${colors.brand}│${colors.reset}  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}  ${colors.brand}│${colors.reset}`,
+            `${colors.brand}╰─────────────────────────────────────────────────────────────────╯${colors.reset}`,
           ].join('\n');
         }
 
         return [
-          `Entendi. Estratégia recomendada: ${routing.strategy.toUpperCase()} (Complexidade: ${routing.complexity}, Risco: ${routing.risk}).`,
-          `Time sugerido: ${selected.map((s) => `${s.agent.name} (${s.roleRequest.role})`).join(', ')}.`,
+          `${colors.brand}✦ Proposta de Plano${colors.reset}`,
+          `Entendi. Estratégia recomendada: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexidade: ${routing.complexity}, Risco: ${routing.risk})${colors.reset}.`,
+          `Time sugerido: ${teamFormatted}.`,
           `Total de ${tasks.length} tarefas estruturadas:`,
-          ...tasks.map((t, idx) => `  ${idx + 1}. [${t.type.toUpperCase()}] ${t.title}`),
+          ...taskFormattedList,
           '',
-          'Deseja que eu execute? (digite "yes", "y" ou "/approve" para iniciar)',
+          `${colors.brand}╭─────────────────────────────────────────────────────────────────╮${colors.reset}`,
+          `${colors.brand}│${colors.reset}  ${colors.green}●${colors.reset} ${colors.bold}Deseja que eu execute?${colors.reset} ${colors.dim}(digite "yes", "y" ou "/approve" para iniciar)${colors.reset}  ${colors.brand}│${colors.reset}`,
+          `${colors.brand}╰─────────────────────────────────────────────────────────────────╯${colors.reset}`,
         ].join('\n');
       }
 
@@ -385,8 +414,8 @@ export class InteractiveShell {
 
         this.outStream.write(
           isEn
-            ? '\n[TaskForge] Plan approved. Starting execution...\n'
-            : '\n[TaskForge] Plano aprovado. Iniciando execução...\n',
+            ? `\n${colors.brand}╭── ✦ TaskForge Execution ───────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Starting execution...\n`
+            : `\n${colors.brand}╭── ✦ Execução TaskForge ────────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plano aprovado.${colors.reset} Iniciando execução...\n`,
         );
 
         const orchestrator = new RunOrchestrator({
@@ -409,7 +438,7 @@ export class InteractiveShell {
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
               onProgress: (msg) => {
-                this.outStream.write(`[TaskForge] ${msg}\n`);
+                this.outStream.write(`${theme.formatProgressMessage(msg)}\n`);
               },
             },
           );
@@ -426,32 +455,40 @@ export class InteractiveShell {
             escalationsCount: 0,
           });
 
+          const statusColor = result.status === 'completed' ? colors.green : colors.red;
+
           if (isEn) {
             return [
-              'Plan executed successfully!',
-              `Status: ${result.status.toUpperCase()}`,
-              `Tasks completed: ${result.tasksCompleted}, failed: ${result.tasksFailed}`,
-              result.integrationBranch ? `Integration branch: ${result.integrationBranch}` : '',
-              `Total time: ${(result.durationMs / 1000).toFixed(1)}s`,
+              `${colors.brand}╭── ✦ Run Complete ──────────────────────────────────────────────╮${colors.reset}`,
+              `${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plan executed successfully!${colors.reset}`,
+              `${colors.brand}│${colors.reset}`,
+              `${colors.brand}│${colors.reset}  ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
+              `${colors.brand}│${colors.reset}  ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
+              result.integrationBranch ? `${colors.brand}│${colors.reset}  ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}` : '',
+              `${colors.brand}│${colors.reset}  ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
+              `${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}`,
             ]
               .filter(Boolean)
               .join('\n');
           }
 
           return [
-            'Plano executado com sucesso!',
-            `Status: ${result.status.toUpperCase()}`,
-            `Tarefas concluídas: ${result.tasksCompleted}, falhas: ${result.tasksFailed}`,
-            result.integrationBranch ? `Branch de integração: ${result.integrationBranch}` : '',
-            `Tempo total: ${(result.durationMs / 1000).toFixed(1)}s`,
+            `${colors.brand}╭── ✦ Execução Concluída ────────────────────────────────────────╮${colors.reset}`,
+            `${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plano executado com sucesso!${colors.reset}`,
+            `${colors.brand}│${colors.reset}`,
+            `${colors.brand}│${colors.reset}  ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
+            `${colors.brand}│${colors.reset}  ${colors.dim}Tarefas concluídas:${colors.reset} ${colors.bold}${result.tasksCompleted}${colors.reset}, falhas: ${result.tasksFailed}`,
+            result.integrationBranch ? `${colors.brand}│${colors.reset}  ${colors.dim}Branch de integração:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}` : '',
+            `${colors.brand}│${colors.reset}  ${colors.dim}Tempo total:${colors.reset}        ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
+            `${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}`,
           ]
             .filter(Boolean)
             .join('\n');
         } catch (err) {
           if (isEn) {
-            return `Error during plan execution: ${(err as Error).message}\n(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)`;
+            return `${colors.red}✕ Error during plan execution: ${(err as Error).message}${colors.reset}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
           }
-          return `Erro durante a execução do plano: ${(err as Error).message}\n(Dica: digite "yes --fake" para testar com agentes simulados caso os agentes reais não estejam configurados com chaves de API)`;
+          return `${colors.red}✕ Erro durante a execução do plano: ${(err as Error).message}${colors.reset}\n${colors.dim}(Dica: digite "yes --fake" para testar com agentes simulados caso os agentes reais não estejam configurados com chaves de API)${colors.reset}`;
         }
       }
 
@@ -472,39 +509,45 @@ export class InteractiveShell {
       case 'general_query': {
         if (isEn) {
           return [
-            'Hello! I am TaskForge, conversational control plane for autonomous coding-agent teams.',
+            `${colors.brand}╭── ✦ TaskForge Control Plane ───────────────────────────────────╮${colors.reset}`,
+            `${colors.brand}│${colors.reset}  Hello! I am TaskForge, conversational control plane for       ${colors.brand}│${colors.reset}`,
+            `${colors.brand}│${colors.reset}  autonomous coding-agent teams (Claude, Codex, Antigravity).   ${colors.brand}│${colors.reset}`,
+            `${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}`,
             '',
-            'To start work, simply describe your engineering objective in natural language. Examples:',
-            '  > investigate why checkout charges twice',
-            '  > create a JWT authentication endpoint',
-            '  > refactor API routes adding input validation',
+            `  ${colors.bold}To start work, describe your engineering objective:${colors.reset}`,
+            `    ${colors.cyan}›${colors.reset} investigate why checkout charges twice`,
+            `    ${colors.cyan}›${colors.reset} create a JWT authentication endpoint`,
+            `    ${colors.cyan}›${colors.reset} refactor API routes adding input validation`,
             '',
-            'Quick commands:',
-            '  /agents   - List available agents and readiness status',
-            '  /tasks    - List active tasks',
-            '  /plan     - View current task plan',
-            '  /pending  - View interactions awaiting approval',
-            '  /status   - Full TUI dashboard',
-            '  /cost     - Token cost and telemetry report',
-            '  /exit     - Exit shell',
+            `  ${colors.bold}Quick Commands:${colors.reset}`,
+            `    ${colors.brand}/agents${colors.reset}   List available agent harnesses and status`,
+            `    ${colors.brand}/tasks${colors.reset}    List active tasks in this run`,
+            `    ${colors.brand}/plan${colors.reset}     View current task plan`,
+            `    ${colors.brand}/pending${colors.reset}  View interactions awaiting approval`,
+            `    ${colors.brand}/status${colors.reset}   Full TUI dashboard`,
+            `    ${colors.brand}/cost${colors.reset}     Token cost and telemetry report`,
+            `    ${colors.brand}/exit${colors.reset}     Exit session`,
           ].join('\n');
         }
         return [
-          'Olá! Eu sou o TaskForge, control plane conversacional para equipes de agentes autônomos.',
+          `${colors.brand}╭── ✦ TaskForge Control Plane ───────────────────────────────────╮${colors.reset}`,
+          `${colors.brand}│${colors.reset}  Olá! Eu sou o TaskForge, control plane conversacional para    ${colors.brand}│${colors.reset}`,
+          `${colors.brand}│${colors.reset}  equipes de agentes autônomos (Claude, Codex, Antigravity).    ${colors.brand}│${colors.reset}`,
+          `${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}`,
           '',
-          'Para iniciar um trabalho, basta descrever seu objetivo em linguagem natural. Exemplos:',
-          '  > investiga porque o checkout cobra duas vezes',
-          '  > cria um endpoint de autenticação JWT',
-          '  > refatore as rotas da API adicionando validação',
+          `  ${colors.bold}Para iniciar um trabalho, descreva seu objetivo em linguagem natural:${colors.reset}`,
+          `    ${colors.cyan}›${colors.reset} investiga porque o checkout cobra duas vezes`,
+          `    ${colors.cyan}›${colors.reset} cria um endpoint de autenticação JWT`,
+          `    ${colors.cyan}›${colors.reset} refatore as rotas da API adicionando validação`,
           '',
-          'Comandos rápidos disponíveis:',
-          '  /agents   - Listar agentes disponíveis e status',
-          '  /tasks    - Listar tarefas ativas',
-          '  /plan     - Visualizar plano atual',
-          '  /pending  - Visualizar interações aguardando aprovação',
-          '  /status   - Painel TUI completo',
-          '  /cost     - Relatório de custo de tokens',
-          '  /exit     - Sair do shell',
+          `  ${colors.bold}Comandos rápidos disponíveis:${colors.reset}`,
+          `    ${colors.brand}/agents${colors.reset}   Listar agentes disponíveis e status`,
+          `    ${colors.brand}/tasks${colors.reset}    Listar tarefas ativas`,
+          `    ${colors.brand}/plan${colors.reset}     Visualizar plano atual`,
+          `    ${colors.brand}/pending${colors.reset}  Visualizar interações aguardando aprovação`,
+          `    ${colors.brand}/status${colors.reset}   Painel TUI completo`,
+          `    ${colors.brand}/cost${colors.reset}     Relatório de custo e tokens`,
+          `    ${colors.brand}/exit${colors.reset}     Sair da sessão`,
         ].join('\n');
       }
 
@@ -522,10 +565,16 @@ export class InteractiveShell {
 
     outStream.write(banner);
 
+    const gitStatus = await this.gitService.getStatus().catch(() => ({
+      currentBranch: 'main',
+    }));
+    const repoName = path.basename(this.repoRoot);
+    const promptStr = theme.prompt(gitStatus.currentBranch, repoName);
+
     const rl = readline.createInterface({
       input: inStream,
       output: outStream,
-      prompt: '> ',
+      prompt: promptStr,
     });
 
     let closed = false;
@@ -538,12 +587,16 @@ export class InteractiveShell {
     for await (const line of rl) {
       const trimmed = line.trim();
       if (trimmed === '/exit' || trimmed === '/quit') {
-        outStream.write(this.sessionLanguage === 'en' ? 'Goodbye!\n' : 'Até logo!\n');
+        outStream.write(
+          this.sessionLanguage === 'en'
+            ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
+            : `\n${colors.brand}✦${colors.reset} Até logo!\n`,
+        );
         break;
       }
       const reply = await this.handleInput(trimmed);
       if (reply) {
-        outStream.write(`${reply}\n\n`);
+        outStream.write(`\n${reply}\n\n`);
       }
       if (!closed) {
         try {
