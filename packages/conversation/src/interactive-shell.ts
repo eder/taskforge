@@ -97,9 +97,11 @@ export class InteractiveShell {
   private isPaused = false;
   private activeRunId?: string;
   private sessionLanguage?: ShellLanguage;
+  private outStream: Writable;
 
   constructor(private options: ShellOptions = {}) {
     this.repoRoot = options.repoRoot ?? process.cwd();
+    this.outStream = options.output ?? process.stdout;
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
     this.telemetry = new TelemetryCollector(this.db);
@@ -381,6 +383,12 @@ export class InteractiveShell {
 
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
 
+        this.outStream.write(
+          isEn
+            ? '\n[TaskForge] Plan approved. Starting execution...\n'
+            : '\n[TaskForge] Plano aprovado. Iniciando execução...\n',
+        );
+
         const orchestrator = new RunOrchestrator({
           repoRoot: this.repoRoot,
           config: this.config,
@@ -400,6 +408,9 @@ export class InteractiveShell {
             {
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
+              onProgress: (msg) => {
+                this.outStream.write(`[TaskForge] ${msg}\n`);
+              },
             },
           );
           this.activeRunId = result.runId;

@@ -46,6 +46,7 @@ export interface SchedulerContext {
   negotiator?: NegotiationManager;
   communicationBus?: CommunicationBus;
   escalationHandler?: EscalationHandler;
+  onProgress?: (message: string) => void;
   collaborativeExecutors?: Map<
     string,
     (task: Task, ctx: SchedulerContext) => Promise<{ success: boolean; commitHash?: string }>
@@ -296,6 +297,7 @@ export class DeterministicScheduler {
     };
 
     assignmentRepo.create(assignment, runId);
+    this.ctx.onProgress?.(`[${task.id}] Assigned to ${agent.name}: "${task.title}"`);
 
     eventRepo.append({
       id: `evt-${randomUUID()}`,
@@ -310,6 +312,7 @@ export class DeterministicScheduler {
     const wt = await worktreeManager.createWorktree(task.id, assignmentId, baseCommit);
     assignment.worktreePath = wt.path;
     assignment.branchName = wt.branchName;
+    this.ctx.onProgress?.(`[${task.id}] Created isolated worktree (${wt.branchName})`);
 
     workspaceRepo.register({
       id: `ws-${task.id}-${randomUUID().slice(0, 8)}`,
@@ -322,6 +325,7 @@ export class DeterministicScheduler {
 
     graph.updateTaskStatus(task.id, 'running');
     taskRepo.updateStatus(task.id, 'running');
+    this.ctx.onProgress?.(`[${task.id}] Agent ${agent.name} executing...`);
 
     eventRepo.append({
       id: `evt-${randomUUID()}`,
@@ -458,6 +462,10 @@ export class DeterministicScheduler {
     graph.updateTaskStatus(task.id, 'completed');
     taskRepo.updateStatus(task.id, 'completed');
 
+    this.ctx.onProgress?.(
+      `[${task.id}] Agent ${agent.name} completed (status: ${agentResult.success ? 'success' : 'failed'} in ${(agentResult.durationMs / 1000).toFixed(1)}s)`,
+    );
+
     eventRepo.append({
       id: `evt-${randomUUID()}`,
       runId,
@@ -470,16 +478,21 @@ export class DeterministicScheduler {
     // 4. Verification
     graph.updateTaskStatus(task.id, 'verification');
     taskRepo.updateStatus(task.id, 'verification');
+    this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
 
     const verResult = await verificationRunner.verify({
       taskId: task.id,
       runId,
       worktreePath: wt.path,
       config,
+      taskType: task.type,
     });
 
     if (!verResult.passed) {
       const rework = taskRepo.incrementRework(task.id);
+      this.ctx.onProgress?.(
+        `[${task.id}] Verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
+      );
       if (rework <= config.verification.maxReworkCycles) {
         graph.updateTaskStatus(task.id, 'failed');
         taskRepo.updateStatus(task.id, 'failed');
@@ -498,15 +511,18 @@ export class DeterministicScheduler {
 
     graph.updateTaskStatus(task.id, 'verified');
     taskRepo.updateStatus(task.id, 'verified');
+    this.ctx.onProgress?.(`[${task.id}] Verified successfully ✓`);
 
     // 5. Integration: cherry-pick task commit into run integration branch
     if (agentResult.commitHash && agentResult.commitHash !== baseCommit) {
+      this.ctx.onProgress?.(`[${task.id}] Integrating commit ${agentResult.commitHash.slice(0, 7)}...`);
       await integrationService.integrateTaskCommit({
         runId,
         taskId: task.id,
         commitHash: agentResult.commitHash,
         baseCommit,
       });
+      this.ctx.onProgress?.(`[${task.id}] Integrated successfully ✓`);
     }
 
     graph.updateTaskStatus(task.id, 'integrated');

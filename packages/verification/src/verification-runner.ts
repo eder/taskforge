@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   VerificationCheck,
   VerificationResult,
@@ -11,6 +13,7 @@ export interface RunVerificationOptions {
   runId: string;
   worktreePath: string;
   config: TaskForgeConfig;
+  taskType?: string;
   customCommands?: {
     testCommand?: string;
     lintCommand?: string;
@@ -26,7 +29,7 @@ export class VerificationRunner {
   ) {}
 
   async verify(options: RunVerificationOptions): Promise<VerificationResult> {
-    const { taskId, runId, worktreePath, config, customCommands } = options;
+    const { taskId, runId, worktreePath, config, customCommands, taskType } = options;
 
     if (this.eventRepo) {
       this.eventRepo.append({
@@ -39,25 +42,64 @@ export class VerificationRunner {
       });
     }
 
+    // Resolve available scripts in worktree
+    let pkgScripts: Record<string, string> | undefined;
+    let pm = 'npm';
+    const pkgJsonPath = path.join(worktreePath, 'package.json');
+    if (fs.existsSync(pkgJsonPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+        pkgScripts = pkg.scripts || {};
+        if (fs.existsSync(path.join(worktreePath, 'pnpm-lock.yaml'))) pm = 'pnpm';
+        else if (fs.existsSync(path.join(worktreePath, 'yarn.lock'))) pm = 'yarn';
+        else if (fs.existsSync(path.join(worktreePath, 'bun.lockb'))) pm = 'bun';
+      } catch {
+        // ignore
+      }
+    }
+
+    const resolveScript = (
+      name: string,
+      custom?: string,
+      defaultCmd?: string,
+    ): { command: string; available: boolean } => {
+      if (custom) return { command: custom, available: true };
+      if (pkgScripts) {
+        if (pkgScripts[name]) {
+          return { command: name === 'test' ? `${pm} test` : `${pm} run ${name}`, available: true };
+        }
+        return { command: defaultCmd ?? `${pm} ${name}`, available: false };
+      }
+      return { command: defaultCmd ?? `${pm} ${name}`, available: Boolean(defaultCmd) };
+    };
+
+    // For investigation or review tasks, do not enforce typecheck or tests if not available
+    const isInvestigation = taskType === 'investigation' || taskType === 'review';
+
+    const testResolved = resolveScript('test', customCommands?.testCommand, 'pnpm test');
+    const lintResolved = resolveScript('lint', customCommands?.lintCommand, 'pnpm lint');
+    const typecheckResolved = resolveScript('typecheck', customCommands?.typecheckCommand, 'pnpm typecheck');
+    const buildResolved = resolveScript('build', customCommands?.buildCommand, 'pnpm build');
+
     const checksToRun: Array<{ name: string; command: string; enabled: boolean }> = [
       {
         name: 'test',
-        command: customCommands?.testCommand ?? 'pnpm test',
-        enabled: config.verification.tests,
+        command: testResolved.command,
+        enabled: config.verification.tests && (!isInvestigation || testResolved.available) && testResolved.available,
       },
       {
         name: 'lint',
-        command: customCommands?.lintCommand ?? 'pnpm lint',
-        enabled: config.verification.lint,
+        command: lintResolved.command,
+        enabled: config.verification.lint && (!isInvestigation || lintResolved.available) && lintResolved.available,
       },
       {
         name: 'typecheck',
-        command: customCommands?.typecheckCommand ?? 'pnpm typecheck',
-        enabled: config.verification.typecheck,
+        command: typecheckResolved.command,
+        enabled: config.verification.typecheck && (!isInvestigation || typecheckResolved.available) && typecheckResolved.available,
       },
       {
         name: 'build',
-        command: customCommands?.buildCommand ?? 'pnpm build',
+        command: buildResolved.command,
         enabled: false, // optional by default
       },
     ];

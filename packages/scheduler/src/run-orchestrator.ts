@@ -255,6 +255,7 @@ export class RunOrchestrator {
       eventRepo: this.eventRepo,
       workspaceRepo: this.workspaceRepo,
       interactionGateway: this.interactionGateway,
+      onProgress: options.onProgress,
     });
 
     const schedulerResult = await scheduler.run();

@@ -96,6 +96,10 @@ export abstract class BaseCliAdapter implements AgentAdapter {
         ...context.environment,
         ...this.options.env,
       },
+      envPolicy: {
+        inherit: true,
+        denyPatterns: [],
+      },
       abortSignal: context.abortSignal,
       timeoutMs,
     });
@@ -135,7 +139,7 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
   readonly binaryName = 'claude';
 
   constructor(options: CliAdapterOptions = {}) {
-    super({ defaultArgs: ['-p'], ...options });
+    super({ defaultArgs: ['--dangerously-skip-permissions', '-p'], ...options });
   }
 }
 
@@ -145,7 +149,7 @@ export class CodexAdapter extends BaseCliAdapter {
   readonly binaryName = 'codex';
 
   constructor(options: CliAdapterOptions = {}) {
-    super({ defaultArgs: ['exec'], ...options });
+    super({ defaultArgs: ['exec', '--dangerously-bypass-approvals-and-sandbox'], ...options });
   }
 }
 
