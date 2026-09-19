@@ -31,6 +31,19 @@ export function isPureExplanationGoal(description: string): boolean {
   return explanationPatterns.some((pattern) => pattern.test(desc));
 }
 
+export function isLightweightGoal(description: string): boolean {
+  const desc = description.toLowerCase();
+  const lightweightPatterns = [
+    /\breadme(\.md)?\b/i,
+    /\b(docs?|documentation|documenta[çc][ãa]o)\b/i,
+    /\b(markdown|\.md)\b/i,
+    /\b(license|licen[çc]a)\b/i,
+    /\b(typo|translate|tradu[zç]|traduzir)\b/i,
+    /\b(changelog|contributing)\b/i,
+  ];
+  return lightweightPatterns.some((pattern) => pattern.test(desc));
+}
+
 export class HeuristicPlanner implements Planner {
   async plan(goal: Goal, profile?: RepositoryProfile): Promise<TaskGraph> {
     const desc = goal.description.toLowerCase();
@@ -38,6 +51,7 @@ export class HeuristicPlanner implements Planner {
     const now = new Date();
 
     const isPureExplanation = isPureExplanationGoal(goal.description);
+    const isLightweight = isLightweightGoal(goal.description);
 
     const isInvestigationNeeded =
       isPureExplanation ||
@@ -82,6 +96,31 @@ export class HeuristicPlanner implements Planner {
         updatedAt: now,
       };
       tasks.push(task1);
+    } else if (isLightweight) {
+      const task1: Task = {
+        id: 'TASK-01',
+        goalId: goal.id,
+        title: 'Documentation and Content Update',
+        description: goal.description,
+        type: 'implementation',
+        status: 'proposed',
+        dependencies: [],
+        contract: {
+          objective: goal.description,
+          allowedScope: ['*'],
+          forbiddenChanges: [],
+          acceptanceCriteria:
+            goal.acceptanceCriteria.length > 0
+              ? goal.acceptanceCriteria
+              : ['Documentation or content updated as requested'],
+          dependencies: [],
+        },
+        acceptanceCriteria: ['Documentation or content updated as requested'],
+        reworkCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      tasks.push(task1);
     } else if (isInvestigationNeeded) {
       const isExplanation = desc.includes('explique') || desc.includes('explain') || desc.includes('entenda');
       // 1. Investigation task
@@ -95,7 +134,7 @@ export class HeuristicPlanner implements Planner {
         dependencies: [],
         contract: {
           objective: 'Identify root cause, consistency constraints and reproduction path',
-          allowedScope: ['src/**'],
+          allowedScope: ['*'],
           forbiddenChanges: ['package.json'],
           acceptanceCriteria: ['Root cause documented', 'Failing test or trace evidence collected'],
           dependencies: [],
@@ -118,7 +157,7 @@ export class HeuristicPlanner implements Planner {
         dependencies: ['TASK-01'],
         contract: {
           objective: 'Implement fix preventing recurrence',
-          allowedScope: ['src/**'],
+          allowedScope: ['*'],
           forbiddenChanges: [],
           acceptanceCriteria: ['Fix applied', 'Unit and regression tests pass'],
           dependencies: ['TASK-01'],
@@ -230,7 +269,7 @@ export class HeuristicPlanner implements Planner {
         dependencies: [],
         contract: {
           objective: goal.description,
-          allowedScope: ['src/**'],
+          allowedScope: ['*'],
           forbiddenChanges: [],
           acceptanceCriteria: goal.acceptanceCriteria.length > 0 ? goal.acceptanceCriteria : ['Implementation satisfies goal'],
           dependencies: [],

@@ -30,5 +30,26 @@ describe('HeuristicPlanner', () => {
     // Check topological sort passes with no cycles
     const sorted = graph.topologicalSort();
     expect(sorted.length).toBe(tasks.length);
+    expect(tasks[0].contract.allowedScope).toContain('*');
+  });
+
+  it('creates a single-task DAG with wildcard scope for documentation / README tasks', async () => {
+    const planner = new HeuristicPlanner();
+    const goal: Goal = {
+      id: 'goal-2',
+      description: 'Na raiz desse projeto eu preciso mudar o conteudo README.MD para ingles faça isso',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    const tasks = graph.getAllTasks();
+
+    expect(tasks.length).toBe(1);
+    expect(tasks[0].type).toBe('implementation');
+    expect(tasks[0].contract.allowedScope).toEqual(['*']);
+    expect(tasks[0].contract.forbiddenChanges).toEqual([]);
   });
 });

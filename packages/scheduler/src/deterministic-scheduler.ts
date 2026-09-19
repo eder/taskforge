@@ -67,20 +67,30 @@ export class DeterministicScheduler {
   private concurrency: ConcurrencyManager;
   private taskOutputs: Record<string, string> = {};
   private hasIntegratedCommits = false;
+  private failedAgentsByTask = new Map<string, Set<string>>();
 
   constructor(private ctx: SchedulerContext) {
     this.concurrency = new ConcurrencyManager(ctx.config);
   }
 
   private resolveAgentId(task: Task): string {
+    const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
+
     if (this.ctx.preferredAgentMapping && this.ctx.preferredAgentMapping[task.id]) {
-      return this.ctx.preferredAgentMapping[task.id];
+      const preferred = this.ctx.preferredAgentMapping[task.id];
+      if (!failed.has(preferred)) {
+        return preferred;
+      }
     }
     const configuredAgent = this.ctx.config.planner.agent;
-    if (configuredAgent && this.ctx.agentRegistry.get(configuredAgent)) {
+    if (configuredAgent && this.ctx.agentRegistry.get(configuredAgent) && !failed.has(configuredAgent)) {
       return configuredAgent;
     }
     const registered = this.ctx.agentRegistry.list();
+    const available = registered.filter((a) => !failed.has(a.id));
+    if (available.length > 0) {
+      return available[0].id;
+    }
     if (registered.length > 0) {
       return registered[0].id;
     }
@@ -341,6 +351,10 @@ export class DeterministicScheduler {
 
     graph.updateTaskStatus(task.id, 'running');
     taskRepo.updateStatus(task.id, 'running');
+    const previousFailures = this.failedAgentsByTask.get(task.id);
+    if (previousFailures && previousFailures.size > 0) {
+      this.ctx.onProgress?.(`[${task.id}] ↻ Failover reassigned to alternative agent ${agent.name}`);
+    }
     this.ctx.onProgress?.(`[${task.id}] Agent ${agent.name} executing...`);
 
     eventRepo.append({
@@ -458,6 +472,24 @@ export class DeterministicScheduler {
     if (!agentResult.success) {
       assignmentRepo.updateStatus(assignmentId, 'failed');
       const rework = taskRepo.incrementRework(task.id);
+
+      const errorSnippet = agentResult.output
+        ? agentResult.output
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean)
+            .find((l) => l.toLowerCase().includes('error') || l.toLowerCase().includes('limit') || l.toLowerCase().includes('failed')) || agentResult.message
+        : agentResult.message;
+
+      this.ctx.onProgress?.(
+        `[${task.id}] Agent ${agent.name} failed (${agentResult.message}${errorSnippet && errorSnippet !== agentResult.message ? `: ${errorSnippet}` : ''})`,
+      );
+
+      if (!this.failedAgentsByTask.has(task.id)) {
+        this.failedAgentsByTask.set(task.id, new Set());
+      }
+      this.failedAgentsByTask.get(task.id)!.add(agentId);
+
       if (rework <= config.verification.maxReworkCycles) {
         graph.updateTaskStatus(task.id, 'failed');
         taskRepo.updateStatus(task.id, 'failed');

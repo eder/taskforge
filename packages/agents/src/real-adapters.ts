@@ -59,7 +59,11 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       `Assignment ID: ${assignment.id}`,
       `Role: ${assignment.role}`,
       `Objective: ${assignment.objective}`,
-      `Allowed scope: ${context.task.allowedScope.join(', ') || 'all files'}`,
+      `Allowed scope: ${
+        context.task.allowedScope.length === 0 || context.task.allowedScope.includes('*')
+          ? 'all files'
+          : context.task.allowedScope.join(', ')
+      }`,
       `Forbidden changes: ${context.task.forbiddenChanges.join(', ') || 'none'}`,
       `Acceptance criteria:`,
       ...context.task.acceptanceCriteria.map((c) => `- ${c}`),
