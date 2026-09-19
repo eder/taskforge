@@ -1,5 +1,6 @@
 import { RoutingProvider, RoutingInput, RoutingDecision } from './router-types.js';
 import { StaticRoutingProvider } from './static-routing-provider.js';
+import { AgentQuotaTracker } from '@taskforge/agents';
 
 export const ROUTING_DECISION_JSON_SCHEMA = {
   type: 'object',
@@ -98,6 +99,10 @@ export class OpenAIRoutingProvider implements RoutingProvider {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
+      const quotaTracker = AgentQuotaTracker.getInstance();
+      const healthyAgents = input.availableAgents.filter((id) => quotaTracker.isAvailable(id));
+      const agentsForRouting = healthyAgents.length > 0 ? healthyAgents : input.availableAgents;
+
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -124,7 +129,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
                 },
                 repository: input.repository,
                 signals: input.signals,
-                availableAgents: input.availableAgents,
+                availableAgents: agentsForRouting,
               }),
             },
           ],

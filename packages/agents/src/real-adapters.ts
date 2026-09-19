@@ -7,6 +7,7 @@ import {
 import { ProcessRunner } from '@taskforge/execution';
 import { GitService } from '@taskforge/workspace';
 import { AgentAdapter } from './adapter-interface.js';
+import { AgentQuotaTracker } from './quota-tracker.js';
 
 export interface CliAdapterOptions {
   binaryPath?: string;
@@ -124,6 +125,13 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       // ignore git error if any
     }
 
+    const output = result.stdout || result.stderr;
+    if (result.exitCode === 0) {
+      AgentQuotaTracker.getInstance().recordSuccess(this.id);
+    } else {
+      AgentQuotaTracker.getInstance().recordFailure(this.id, output);
+    }
+
     return {
       success: result.exitCode === 0,
       commitHash,
@@ -131,7 +139,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
         result.exitCode === 0
           ? `${this.name} completed successfully`
           : `${this.name} exited with code ${result.exitCode}`,
-      output: result.stdout || result.stderr,
+      output,
       durationMs: Date.now() - startTime,
     };
   }

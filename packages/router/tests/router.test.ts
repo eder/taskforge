@@ -88,4 +88,34 @@ describe('Router and AgentSelector', () => {
     expect(selected[1].roleRequest.role).toBe('implementer');
     expect(selected[1].agent.id).toBeDefined();
   });
+
+  it('AgentSelector avoids preferredAgent if quota is exhausted and picks healthy agent', async () => {
+    const { AgentQuotaTracker } = await import('@taskforge/agents');
+    AgentQuotaTracker.resetInstance();
+    const tracker = AgentQuotaTracker.getInstance();
+
+    // Mark codex as quota exhausted
+    tracker.setManualStatus('codex', 'quota_exhausted', 'limit hit');
+
+    const registry = new AgentRegistry();
+    const fakeCodex = new FakeAgent('codex', 'Codex CLI');
+    const fakeClaude = new FakeAgent('claude', 'Claude Code');
+    registry.register(fakeCodex);
+    registry.register(fakeClaude);
+
+    const selector = new AgentSelector(registry);
+    // Request role preferring codex
+    const selected = await selector.selectAgents([
+      {
+        role: 'reviewer',
+        requiredCapabilities: ['canRead'],
+        objective: 'Review code',
+        preferredAgent: 'codex',
+      },
+    ]);
+
+    expect(selected.length).toBe(1);
+    // Preferred agent was codex, but codex has exhausted quota, so claude is selected!
+    expect(selected[0].agent.id).toBe('claude');
+  });
 });

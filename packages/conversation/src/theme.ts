@@ -45,17 +45,33 @@ export const theme = {
   bold: (s: string) => `${colors.bold}${s}${colors.reset}`,
   white: (s: string) => `${colors.white}${s}${colors.reset}`,
 
-  agentPill: (id: string, name: string, ready: boolean): string => {
+  agentPill: (
+    id: string,
+    name: string,
+    ready: boolean,
+    quotaStatus?: string,
+    quotaReason?: string,
+  ): string => {
     let color = colors.cyan;
     if (id.includes('claude')) color = colors.coral;
     else if (id.includes('codex')) color = colors.green;
     else if (id.includes('agy') || id.includes('antigravity')) color = colors.brand;
     else if (id.includes('gemini')) color = colors.magenta;
 
-    const icon = ready ? `${colors.green}●${colors.reset}` : `${colors.darkGray}○${colors.reset}`;
-    const statusText = ready
+    let icon = ready ? `${colors.green}●${colors.reset}` : `${colors.darkGray}○${colors.reset}`;
+    let statusText = ready
       ? `${colors.green}ready${colors.reset}`
       : `${colors.darkGray}not detected${colors.reset}`;
+
+    if (quotaStatus === 'quota_exhausted') {
+      icon = `${colors.yellow}▲${colors.reset}`;
+      const reasonDetail = quotaReason ? ` ${colors.dim}(${quotaReason})${colors.reset}` : '';
+      statusText = `${colors.yellow}quota exhausted${colors.reset}${reasonDetail}`;
+    } else if (quotaStatus === 'rate_limited') {
+      icon = `${colors.yellow}▲${colors.reset}`;
+      const reasonDetail = quotaReason ? ` ${colors.dim}(${quotaReason})${colors.reset}` : '';
+      statusText = `${colors.yellow}rate limited${colors.reset}${reasonDetail}`;
+    }
 
     return `${icon} ${color}${colors.bold}${name.padEnd(18)}${colors.reset} ${colors.dim}[${id.padEnd(7)}]${colors.reset} ${statusText}`;
   },

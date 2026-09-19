@@ -17,7 +17,7 @@ import {
 import { TaskGraph } from '@taskforge/core';
 import { RunOrchestrator } from '@taskforge/scheduler';
 import { TaskForgeDatabase, InteractionRepository } from '@taskforge/persistence';
-import { TelemetryCollector, PerformanceEngine } from '@taskforge/telemetry';
+import { TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { TuiDashboard } from './tui-dashboard.js';
 import { theme, colors } from './theme.js';
@@ -187,7 +187,7 @@ export class InteractiveShell {
       `  ${colors.dim}Git Status${colors.reset}  ${colors.yellow}${gitStatus.currentBranch}${colors.reset} ${colors.dim}(${gitStatus.headCommit.slice(0, 7)})${colors.reset} • ${cleanLabel}`,
       '',
       `  ${colors.bold}Agents${colors.reset}`,
-      ...reports.map((r) => `    ${theme.agentPill(r.id, r.name, r.ready)}`),
+      ...reports.map((r) => `    ${theme.agentPill(r.id, r.name, r.ready, r.quotaStatus, r.quotaReason)}`),
       '',
       `  ${colors.bold}Router${colors.reset}      OpenAI       ${routerStatus}`,
       `  ${colors.bold}ECC${colors.reset}         ${profile.hasECC ? `${colors.green}● detected${colors.reset}` : `${colors.gray}○ not detected${colors.reset}`}`,
@@ -351,11 +351,19 @@ export class InteractiveShell {
           .map((s) => `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`)
           .join(', ');
 
+        const totalEstimatedTokens = tasks.reduce(
+          (sum, t) => sum + TaskTokenEstimator.estimateTask(t).totalEstimatedTokens,
+          0,
+        );
+        const tokensFormatted = totalEstimatedTokens.toLocaleString();
+
         const taskFormattedList = tasks.map((t, idx) => {
           const icon = theme.taskTypeIcon(t.type);
           const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
           const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
-          return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled}`;
+          const est = TaskTokenEstimator.estimateTask(t);
+          const tokenTag = `${colors.dim}(~${est.totalEstimatedTokens.toLocaleString()} tokens)${colors.reset}`;
+          return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
         });
 
         if (isEn) {
@@ -363,6 +371,7 @@ export class InteractiveShell {
             `${colors.brand}✦ Plan Proposal${colors.reset}`,
             `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
             `Suggested team: ${teamFormatted}.`,
+            `Estimated tokens: ~${tokensFormatted} tokens.`,
             `Total of ${tasks.length} structured tasks:`,
             ...taskFormattedList,
             '',
@@ -374,6 +383,7 @@ export class InteractiveShell {
           `${colors.brand}✦ Proposta de Plano${colors.reset}`,
           `Entendi. Estratégia recomendada: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexidade: ${routing.complexity}, Risco: ${routing.risk})${colors.reset}.`,
           `Time sugerido: ${teamFormatted}.`,
+          `Demanda estimada: ~${tokensFormatted} tokens.`,
           `Total de ${tasks.length} tarefas estruturadas:`,
           ...taskFormattedList,
           '',

@@ -100,7 +100,7 @@ export function createCli(): Command {
       const reports = await AgentDetector.detect(registry.list());
       console.log(`\n  ${colors.bold}Agent Harness Detection:${colors.reset}`);
       for (const rep of reports) {
-        console.log(`    ${theme.agentPill(rep.id, rep.name, rep.ready)}`);
+        console.log(`    ${theme.agentPill(rep.id, rep.name, rep.ready, rep.quotaStatus, rep.quotaReason)}`);
       }
       console.log(`\n  ${colors.green}✔${colors.reset} ${colors.bold}Diagnostic complete. Everything ready!${colors.reset}\n`);
     });

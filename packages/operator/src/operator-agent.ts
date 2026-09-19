@@ -362,11 +362,26 @@ export class OperatorAgent {
       }
 
       case 'inspect_agents': {
-        const agents = (state.agents as Array<{ id: string; name: string; ready: boolean }>) || [];
+        const agents =
+          (state.agents as Array<{
+            id: string;
+            name: string;
+            ready: boolean;
+            quotaStatus?: string;
+            quotaReason?: string;
+          }>) || [];
         const header = isEn ? 'Available agents:' : 'Agentes disponíveis:';
         return [
           header,
-          ...agents.map((a) => `  ${a.name.padEnd(16)}: ${a.ready ? '● ready' : '○ not detected'}`),
+          ...agents.map((a) => {
+            let status = a.ready ? '● ready' : '○ not detected';
+            if (a.quotaStatus === 'quota_exhausted') {
+              status = `▲ quota exhausted${a.quotaReason ? ` (${a.quotaReason})` : ''}`;
+            } else if (a.quotaStatus === 'rate_limited') {
+              status = `▲ rate limited${a.quotaReason ? ` (${a.quotaReason})` : ''}`;
+            }
+            return `  ${a.name.padEnd(16)}: ${status}`;
+          }),
         ].join('\n');
       }
 
