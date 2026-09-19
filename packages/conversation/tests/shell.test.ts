@@ -14,60 +14,36 @@ describe('InteractiveShell (REPL)', () => {
   it('processes user commands in conversational REPL', async () => {
     const shell = new InteractiveShell();
 
-    // Default language is English
+    // Check agents command
     const defaultAgentsReply = await shell.handleInput('/agents');
     expect(defaultAgentsReply).toContain('Available agents:');
 
-    // Switches dynamically when user speaks Portuguese
-    const agentReplyPt = await shell.handleInput('quais agentes estão disponíveis?');
-    expect(agentReplyPt).toContain('Agentes disponíveis:');
+    // Check agents inspection via natural language
+    const agentReply = await shell.handleInput('who is available?');
+    expect(agentReply).toContain('Available agents:');
 
     // Check pause and resume
-    const pauseReply = await shell.handleInput('pausar a execução');
-    expect(pauseReply).toContain('pausada');
-
-    const resumeReply = await shell.handleInput('retomar a execução');
-    expect(resumeReply).toContain('retomada');
-
-    // Check constraint command
-    const constraintReply = await shell.handleInput('não altere arquivos .env');
-    expect(constraintReply).toContain('Restrição');
-
-    // Check plan negotiation flow
-    const goalReply = await shell.handleInput('criar endpoint de status da aplicação');
-    expect(goalReply).toContain('Estratégia recomendada:');
-    expect(goalReply).toContain('tarefas estruturadas');
-
-    // Check /plan
-    const planReply = await shell.handleInput('/plan');
-    expect(planReply).toContain('Plano atual de tarefas:');
-  });
-
-  it('processes user commands in English conversational REPL', async () => {
-    const shell = new InteractiveShell();
-
-    // Check pause and resume in English
     const pauseReply = await shell.handleInput('pause execution');
     expect(pauseReply).toContain('Execution paused safely');
 
     const resumeReply = await shell.handleInput('resume execution');
     expect(resumeReply).toContain('Execution resumed');
 
-    // Check constraint in English
+    // Check constraint command
     const constraintReply = await shell.handleInput('do not change .env files');
     expect(constraintReply).toContain('Constraint added successfully');
 
-    // Check plan negotiation in English
+    // Check plan proposal flow
     const goalReply = await shell.handleInput('create application health endpoint');
     expect(goalReply).toContain('Understood. Recommended strategy:');
     expect(goalReply).toContain('structured tasks:');
     expect(goalReply).toContain('Do you want me to execute?');
 
-    // Check /plan in English
+    // Check /plan
     const planReply = await shell.handleInput('/plan');
     expect(planReply).toContain('Current task plan:');
 
-    // Check approval and execution in English with 'yes --fake'
+    // Check approval and execution with 'yes --fake'
     const approveReply = await shell.handleInput('yes --fake');
     expect(approveReply).toContain('Plan executed successfully!');
 

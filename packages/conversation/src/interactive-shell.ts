@@ -32,166 +32,6 @@ export interface ShellOptions {
   database?: TaskForgeDatabase;
 }
 
-export type ShellLanguage = 'en' | 'pt';
-
-export function isPortugueseText(text: string): boolean {
-  const lower = text.toLowerCase();
-  if (/[ãõçáéíóúâêîôûà]/.test(lower)) return true;
-
-  if (
-    lower.includes('do not') ||
-    lower.includes("don't") ||
-    lower.includes('dont ') ||
-    lower.includes('please ') ||
-    lower.includes('what is') ||
-    lower.includes('how to')
-  ) {
-    return false;
-  }
-
-  const ptWords = [
-    'criar',
-    'cria',
-    'fazer',
-    'faça',
-    'investigar',
-    'investiga',
-    'explicar',
-    'explique',
-    'analisar',
-    'analise',
-    'porque',
-    'não',
-    'nao',
-    'sim',
-    'da',
-    'das',
-    'dos',
-    'em',
-    'na',
-    'nos',
-    'nas',
-    'um',
-    'uma',
-    'uns',
-    'umas',
-    'que',
-    'com',
-    'por',
-    'tarefa',
-    'tarefas',
-    'plano',
-    'executar',
-    'execução',
-    'executa',
-    'agente',
-    'agentes',
-    'adicionar',
-    'adiciona',
-    'retomar',
-    'retoma',
-    'pausar',
-    'pausa',
-    'descartar',
-    'ajuda',
-    'olá',
-    'ola',
-    'oi',
-    'projeto',
-    'mostrar',
-    'mostra',
-    'quanto',
-    'gastei',
-    'quem',
-    'trabalhando',
-    'pode',
-    'rodar',
-    'aprova',
-    'apenas',
-    'nesta',
-    'neste',
-    'mexa',
-    'mexer',
-    'escrever',
-  ];
-
-  const enWords = [
-    'create',
-    'make',
-    'investigate',
-    'explain',
-    'analyze',
-    'why',
-    'how',
-    'yes',
-    'for',
-    'from',
-    'of',
-    'in',
-    'at',
-    'on',
-    'the',
-    'that',
-    'with',
-    'by',
-    'task',
-    'tasks',
-    'plan',
-    'execute',
-    'execution',
-    'agent',
-    'agents',
-    'add',
-    'resume',
-    'pause',
-    'discard',
-    'help',
-    'hello',
-    'hi',
-    'what',
-    'is',
-    'are',
-    'can',
-    'you',
-    'please',
-    'run',
-    'build',
-    'test',
-    'debug',
-    'project',
-    'show',
-    'spend',
-    'who',
-    'working',
-    'change',
-    'modify',
-    'touch',
-    'allow',
-    'deny',
-    'current',
-    'files',
-    'file',
-    'should',
-    'would',
-    'could',
-    'endpoint',
-    'health',
-    'code',
-  ];
-
-  let ptScore = 0;
-  let enScore = 0;
-  const words = lower.split(/[\s,.;:!?/()\-+"]+/);
-  for (const w of words) {
-    if (ptWords.includes(w)) ptScore++;
-    if (enWords.includes(w)) enScore++;
-  }
-
-  if (enScore > ptScore) return false;
-  if (ptScore > enScore) return true;
-  return false;
-}
-
 export function findWordLeft(text: string, pos: number): number {
   if (pos <= 0) return 0;
   let i = pos - 1;
@@ -226,7 +66,6 @@ export class InteractiveShell {
   private lastGoalDescription?: string;
   private isPaused = false;
   private activeRunId?: string;
-  private sessionLanguage: ShellLanguage = 'en';
   private outStream: Writable;
   public viewport: TerminalViewport;
   public slashMenu: SlashMenu;
@@ -237,7 +76,7 @@ export class InteractiveShell {
     this.viewport = new TerminalViewport(this.outStream, {
       repoName: path.basename(this.repoRoot),
     });
-    this.slashMenu = new SlashMenu(this.outStream, this.sessionLanguage);
+    this.slashMenu = new SlashMenu(this.outStream);
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
     this.telemetry = new TelemetryCollector(this.db);
@@ -317,20 +156,8 @@ export class InteractiveShell {
     const text = input.trim();
     if (!text) return '';
 
-    const nonSlashText = text.startsWith('/') ? text.replace(/^\/\w+\s*/, '') : text;
-    if (nonSlashText.length > 0) {
-      if (isPortugueseText(nonSlashText)) {
-        this.sessionLanguage = 'pt';
-      } else if (!text.startsWith('/')) {
-        this.sessionLanguage = 'en';
-      }
-      this.slashMenu.setLanguage(this.sessionLanguage);
-    }
-
-    const isEn = this.sessionLanguage !== 'pt';
-
     if (text === '/exit' || text === '/quit') {
-      return isEn ? 'Session closed.' : 'Sessão encerrada.';
+      return 'Session closed.';
     }
 
     if (text === '/clean') {
@@ -339,9 +166,7 @@ export class InteractiveShell {
         this.config.execution.worktreesDir,
       );
       const deletedBranches = await worktreeManager.cleanOrphanedWorktreesAndBranches();
-      return isEn
-        ? `Cleaned up orphaned worktrees and ${deletedBranches} temporary branch(es).`
-        : `Limpeza concluída: worktrees órfãs e ${deletedBranches} branch(es) temporárias removidas.`;
+      return `Cleaned up orphaned worktrees and ${deletedBranches} temporary branch(es).`;
     }
 
     const intent = this.operator.parseIntent(text);
@@ -349,7 +174,7 @@ export class InteractiveShell {
     switch (intent.type) {
       case 'inspect_agents': {
         const reports = await AgentDetector.detect(this.agentRegistry.list());
-        return this.operator.formatResponse(intent, { agents: reports }, this.sessionLanguage);
+        return this.operator.formatResponse(intent, { agents: reports });
       }
 
       case 'inspect_tasks': {
@@ -360,16 +185,16 @@ export class InteractiveShell {
               status: t.status,
             }))
           : [];
-        return this.operator.formatResponse(intent, { tasks }, this.sessionLanguage);
+        return this.operator.formatResponse(intent, { tasks });
       }
 
       case 'inspect_plan': {
         if (!this.currentGraph) {
-          return isEn ? 'No active plan at the moment.' : 'Nenhum plano ativo no momento.';
+          return 'No active plan at the moment.';
         }
         const tasks = this.currentGraph.getAllTasks();
-        const header = isEn ? 'Current task plan:' : 'Plano atual de tarefas:';
-        const depPrefix = isEn ? 'Depends on: ' : 'Depende de: ';
+        const header = 'Current task plan:';
+        const depPrefix = 'Depends on: ';
         return [
           `${colors.brand}✦ ${header}${colors.reset}`,
           ...tasks.map((t) => {
@@ -386,18 +211,14 @@ export class InteractiveShell {
 
       case 'inspect_cost': {
         if (!this.activeRunId) {
-          return isEn
-            ? 'No active or recent runs for cost inquiry.'
-            : 'Nenhum run ativo ou recente para consulta de custos.';
+          return 'No active or recent runs for cost inquiry.';
         }
         return this.telemetry.formatCostReport(this.activeRunId);
       }
 
       case 'inspect_stats': {
         if (!this.activeRunId) {
-          return isEn
-            ? 'No active or recent runs for statistics inquiry.'
-            : 'Nenhum run ativo ou recente para consulta de estatísticas.';
+          return 'No active or recent runs for statistics inquiry.';
         }
         return this.telemetry.formatStatsReport(this.activeRunId);
       }
@@ -429,20 +250,20 @@ export class InteractiveShell {
 
       case 'pause_execution': {
         this.isPaused = true;
-        return this.operator.formatResponse(intent, {}, this.sessionLanguage);
+        return this.operator.formatResponse(intent, {});
       }
 
       case 'resume_execution': {
         this.isPaused = false;
-        return this.operator.formatResponse(intent, {}, this.sessionLanguage);
+        return this.operator.formatResponse(intent, {});
       }
 
       case 'add_constraint': {
-        return this.operator.formatResponse(intent, {}, this.sessionLanguage);
+        return this.operator.formatResponse(intent, {});
       }
 
       case 'cancel_and_reassign': {
-        return this.operator.formatResponse(intent, {}, this.sessionLanguage);
+        return this.operator.formatResponse(intent, {});
       }
 
       case 'submit_goal': {
@@ -494,28 +315,15 @@ export class InteractiveShell {
           return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
         });
 
-        if (isEn) {
-          return [
-            `${colors.brand}✦ Plan Proposal${colors.reset}`,
-            `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
-            `Suggested team: ${teamFormatted}.`,
-            `Estimated tokens: ~${tokensFormatted} tokens.`,
-            `Total of ${tasks.length} structured tasks:`,
-            ...taskFormattedList,
-            '',
-            `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
-          ].join('\n');
-        }
-
         return [
-          `${colors.brand}✦ Proposta de Plano${colors.reset}`,
-          `Entendi. Estratégia recomendada: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexidade: ${routing.complexity}, Risco: ${routing.risk})${colors.reset}.`,
-          `Time sugerido: ${teamFormatted}.`,
-          `Demanda estimada: ~${tokensFormatted} tokens.`,
-          `Total de ${tasks.length} tarefas estruturadas:`,
+          `${colors.brand}✦ Plan Proposal${colors.reset}`,
+          `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
+          `Suggested team: ${teamFormatted}.`,
+          `Estimated tokens: ~${tokensFormatted} tokens.`,
+          `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
-          `  ${colors.green}●${colors.reset} ${colors.bold}Deseja que eu execute?${colors.reset} ${colors.dim}(digite "yes", "y" ou "/approve" para iniciar)${colors.reset}`,
+          `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
         ].join('\n');
       }
 
@@ -526,16 +334,12 @@ export class InteractiveShell {
           : pending[0];
 
         if (!target) {
-          return isEn
-            ? 'No pending interaction found for approval.'
-            : 'Nenhuma interação pendente encontrada para aprovação.';
+          return 'No pending interaction found for approval.';
         }
 
         const scope = intent.scope ?? 'task';
         this.interactionGateway.resolve(target.id, 'allow', undefined, scope);
-        return isEn
-          ? `✓ allowed for ${target.taskId || target.id} (scope: ${scope})\nAgent ${target.agentId} resumed work.`
-          : `✓ permitido para ${target.taskId || target.id} (escopo: ${scope})\nAgente ${target.agentId} retomou o trabalho.`;
+        return `✓ allowed for ${target.taskId || target.id} (scope: ${scope})\nAgent ${target.agentId} resumed work.`;
       }
 
       case 'deny_interaction': {
@@ -545,20 +349,16 @@ export class InteractiveShell {
           : pending[0];
 
         if (!target) {
-          return isEn
-            ? 'No pending interaction found for denial.'
-            : 'Nenhuma interação pendente encontrada para rejeição.';
+          return 'No pending interaction found for denial.';
         }
 
         this.interactionGateway.resolve(target.id, 'deny', intent.reason, 'once');
-        return isEn
-          ? `✕ Operation denied for ${target.taskId || target.id}. Agent notified.`
-          : `✕ Operação negada para ${target.taskId || target.id}. Agente notificado.`;
+        return `✕ Operation denied for ${target.taskId || target.id}. Agent notified.`;
       }
 
       case 'inspect_pending_interactions': {
         const pending = this.interactionGateway.getPendingRequests();
-        return this.operator.formatResponse(intent, { pending }, this.sessionLanguage);
+        return this.operator.formatResponse(intent, { pending });
       }
 
       case 'approve_plan': {
@@ -567,24 +367,18 @@ export class InteractiveShell {
         if (pending.length > 0) {
           const target = pending[0];
           this.interactionGateway.resolve(target.id, 'allow', undefined, 'task');
-          return isEn
-            ? `✓ allowed for ${target.taskId || target.id} (scope: task)\nAgent ${target.agentId} resumed work.`
-            : `✓ permitido para ${target.taskId || target.id} (escopo: task)\nAgente ${target.agentId} retomou o trabalho.`;
+          return `✓ allowed for ${target.taskId || target.id} (scope: task)\nAgent ${target.agentId} resumed work.`;
         }
 
         if (!this.currentGraph) {
-          return isEn
-            ? 'No pending plan for approval. Describe an engineering goal in natural language to get started.'
-            : 'Nenhum plano pendente de aprovação. Descreva um objetivo em linguagem natural para começar.';
+          return 'No pending plan for approval. Describe an engineering goal in natural language to get started.';
         }
 
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
 
-        const approvedMsg = isEn
-          ? `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} ${colors.dim}Starting execution...${colors.reset}\n`
-          : `\n  ${colors.brand}✦ ${colors.bold}Execução TaskForge${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plano aprovado.${colors.reset} ${colors.dim}Iniciando execução...${colors.reset}\n`;
+        const approvedMsg = `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} ${colors.dim}Starting execution...${colors.reset}\n`;
         this.viewport.writeUpper(approvedMsg);
-        this.viewport.drawFooter(isEn ? '⚡ Executing plan...' : '⚡ Executando plano...');
+        this.viewport.drawFooter('⚡ Executing plan...');
 
         const orchestrator = new RunOrchestrator({
           repoRoot: this.repoRoot,
@@ -601,7 +395,7 @@ export class InteractiveShell {
 
         try {
           const result = await orchestrator.run(
-            this.lastGoalDescription ?? (isEn ? 'Approved execution' : 'Execução aprovada'),
+            this.lastGoalDescription ?? 'Approved execution',
             {
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
@@ -634,9 +428,7 @@ export class InteractiveShell {
           const outputs = Object.entries(result.taskOutputs ?? {})
             .filter(([, text]) => text && text.trim().length > 0)
             .map(([taskId, text]) => {
-              const header = isEn
-                ? `Explanation & Analysis [${taskId}]`
-                : `Explicação & Análise [${taskId}]`;
+              const header = `Explanation & Analysis [${taskId}]`;
               const highlighted = theme.renderMarkdown(text.trim());
               const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
               return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
@@ -648,16 +440,10 @@ export class InteractiveShell {
           const isSuccess = result.status === 'completed';
           const isCancelled = result.status === 'cancelled';
           const title = isSuccess
-            ? isEn
-              ? 'Plan executed successfully!'
-              : 'Plano executado com sucesso!'
+            ? 'Plan executed successfully!'
             : isCancelled
-              ? isEn
-                ? 'Plan execution cancelled by user'
-                : 'Execução cancelada pelo usuário'
-              : isEn
-                ? 'Plan execution encountered issues'
-                : 'Execução do plano finalizada com pendências';
+              ? 'Plan execution cancelled by user'
+              : 'Plan execution encountered issues';
           const titleIcon = isSuccess
             ? `${colors.green}✔${colors.reset}`
             : isCancelled
@@ -666,52 +452,27 @@ export class InteractiveShell {
 
           const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
 
-          if (isEn) {
-            return [
-              outputPrefix,
-              `  ${colors.brand}✦ ${colors.bold}Run Summary${colors.reset}`,
-              `  ${divider}`,
-              `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
-              '',
-              `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
-              `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
-              result.integrationBranch
-                ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}`
-                : '',
-              result.error
-                ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
-                : '',
-              `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
-              `  ${divider}`,
-            ]
-              .filter(Boolean)
-              .join('\n');
-          }
-
           return [
             outputPrefix,
-            `  ${colors.brand}✦ ${colors.bold}Resumo da Execução${colors.reset}`,
+            `  ${colors.brand}✦ ${colors.bold}Run Summary${colors.reset}`,
             `  ${divider}`,
             `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
             '',
             `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
-            `    ${colors.dim}Tarefas concluídas:${colors.reset} ${colors.bold}${result.tasksCompleted}${colors.reset}, falhas: ${result.tasksFailed}`,
+            `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
             result.integrationBranch
-              ? `    ${colors.dim}Branch de integração:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}`
+              ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}`
               : '',
             result.error
-              ? `    ${colors.dim}Erro:${colors.reset}               ${colors.red}${result.error}${colors.reset}`
+              ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
               : '',
-            `    ${colors.dim}Tempo total:${colors.reset}        ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
+            `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
             `  ${divider}`,
           ]
             .filter(Boolean)
             .join('\n');
         } catch (err) {
-          if (isEn) {
-            return `${colors.red}✕ Error during plan execution: ${(err as Error).message}${colors.reset}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
-          }
-          return `${colors.red}✕ Erro durante a execução do plano: ${(err as Error).message}${colors.reset}\n${colors.dim}(Dica: digite "yes --fake" para testar com agentes simulados caso os agentes reais não estejam configurados com chaves de API)${colors.reset}`;
+          return `${colors.red}✕ Error during plan execution: ${(err as Error).message}${colors.reset}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
         }
       }
 
@@ -720,62 +481,37 @@ export class InteractiveShell {
         if (pending.length > 0) {
           const target = pending[0];
           this.interactionGateway.resolve(target.id, 'deny', intent.feedback, 'once');
-          return isEn
-            ? `✕ Operation denied for ${target.taskId || target.id}. Agent notified.`
-            : `✕ Operação negada para ${target.taskId || target.id}. Agente notificado.`;
+          return `✕ Operation denied for ${target.taskId || target.id}. Agent notified.`;
         }
         this.currentGraph = undefined;
         this.lastGoalDescription = undefined;
-        return isEn ? 'Plan discarded as requested.' : 'Plano descartado conforme solicitado.';
+        return 'Plan discarded as requested.';
       }
 
       case 'general_query': {
-        if (isEn) {
-          return [
-            `  ${colors.brand}✦ ${colors.bold}TaskForge Control Plane${colors.reset}`,
-            `  ${colors.dim}Conversational control plane for autonomous coding-agent teams (Claude, Codex, Antigravity).${colors.reset}`,
-            '',
-            `  ${colors.bold}To start work, describe your engineering objective:${colors.reset}`,
-            `    ${colors.cyan}›${colors.reset} investigate why checkout charges twice`,
-            `    ${colors.cyan}›${colors.reset} create a JWT authentication endpoint`,
-            `    ${colors.cyan}›${colors.reset} refactor API routes adding input validation`,
-            '',
-            `  ${colors.bold}Quick Commands:${colors.reset}`,
-            `    ${colors.brand}/agents${colors.reset}   List available agent harnesses and status`,
-            `    ${colors.brand}/tasks${colors.reset}    List active tasks in this run`,
-            `    ${colors.brand}/plan${colors.reset}     View current task plan`,
-            `    ${colors.brand}/pending${colors.reset}  View interactions awaiting approval`,
-            `    ${colors.brand}/status${colors.reset}   Full TUI dashboard`,
-            `    ${colors.brand}/cost${colors.reset}     Token cost and telemetry report`,
-            `    ${colors.brand}/clean${colors.reset}    Clean temporary worktrees and branches`,
-            `    ${colors.brand}/exit${colors.reset}     Exit session`,
-          ].join('\n');
-        }
         return [
           `  ${colors.brand}✦ ${colors.bold}TaskForge Control Plane${colors.reset}`,
-          `  ${colors.dim}Control plane conversacional para equipes de agentes autônomos (Claude, Codex, Antigravity).${colors.reset}`,
+          `  ${colors.dim}Conversational control plane for autonomous coding-agent teams (Claude, Codex, Antigravity).${colors.reset}`,
           '',
-          `  ${colors.bold}Para iniciar um trabalho, descreva seu objetivo em linguagem natural:${colors.reset}`,
-          `    ${colors.cyan}›${colors.reset} investiga porque o checkout cobra duas vezes`,
-          `    ${colors.cyan}›${colors.reset} cria um endpoint de autenticação JWT`,
-          `    ${colors.cyan}›${colors.reset} refatore as rotas da API adicionando validação`,
+          `  ${colors.bold}To start work, describe your engineering objective:${colors.reset}`,
+          `    ${colors.cyan}›${colors.reset} investigate why checkout charges twice`,
+          `    ${colors.cyan}›${colors.reset} create a JWT authentication endpoint`,
+          `    ${colors.cyan}›${colors.reset} refactor API routes adding input validation`,
           '',
-          `  ${colors.bold}Comandos rápidos disponíveis:${colors.reset}`,
-          `    ${colors.brand}/agents${colors.reset}   Listar agentes disponíveis e status`,
-          `    ${colors.brand}/tasks${colors.reset}    Listar tarefas ativas`,
-          `    ${colors.brand}/plan${colors.reset}     Visualizar plano atual`,
-          `    ${colors.brand}/pending${colors.reset}  Visualizar interações aguardando aprovação`,
-          `    ${colors.brand}/status${colors.reset}   Painel TUI completo`,
-          `    ${colors.brand}/cost${colors.reset}     Relatório de custo e tokens`,
-          `    ${colors.brand}/clean${colors.reset}    Limpar worktrees e branches temporárias`,
-          `    ${colors.brand}/exit${colors.reset}     Sair da sessão`,
+          `  ${colors.bold}Quick Commands:${colors.reset}`,
+          `    ${colors.brand}/agents${colors.reset}   List available agent harnesses and status`,
+          `    ${colors.brand}/tasks${colors.reset}    List active tasks in this run`,
+          `    ${colors.brand}/plan${colors.reset}     View current task plan`,
+          `    ${colors.brand}/pending${colors.reset}  View interactions awaiting approval`,
+          `    ${colors.brand}/status${colors.reset}   Full TUI dashboard`,
+          `    ${colors.brand}/cost${colors.reset}     Token cost and telemetry report`,
+          `    ${colors.brand}/clean${colors.reset}    Clean temporary worktrees and branches`,
+          `    ${colors.brand}/exit${colors.reset}     Exit session`,
         ].join('\n');
       }
 
       default:
-        return isEn
-          ? `Command received: "${text}". Type /tasks, /agents or describe an objective in natural language.`
-          : `Comando recebido: "${text}". Digite /tasks, /agents ou descreva um objetivo em linguagem natural.`;
+        return `Command received: "${text}". Type /tasks, /agents or describe an objective in natural language.`;
     }
   }
 
@@ -891,7 +627,7 @@ export class InteractiveShell {
         if (isRunning && activeAbortController) {
           activeAbortController.abort();
           this.viewport.writeUpper(
-            `\n${colors.red}^C ${this.sessionLanguage === 'en' ? 'Operation cancelled by user.' : 'Operação cancelada pelo usuário.'}${colors.reset}\n`,
+            `\n${colors.red}^C Operation cancelled by user.${colors.reset}\n`,
           );
           buffer = '';
           cursorIndex = 0;
@@ -906,10 +642,7 @@ export class InteractiveShell {
           return;
         }
 
-        const exitMsg =
-          this.sessionLanguage === 'en'
-            ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
-            : `\n${colors.brand}✦${colors.reset} Até logo!\n`;
+        const exitMsg = `\n${colors.brand}✦${colors.reset} Goodbye!\n`;
         this.viewport.writeUpper(exitMsg);
         cleanup();
         const res = pendingResolve;
@@ -924,10 +657,7 @@ export class InteractiveShell {
       // Ctrl+D: Exit CLI when input is empty; delete char under cursor if not empty
       if (key?.ctrl && key?.name === 'd') {
         if (buffer.length === 0) {
-          const exitMsg =
-            this.sessionLanguage === 'en'
-              ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
-              : `\n${colors.brand}✦${colors.reset} Até logo!\n`;
+          const exitMsg = `\n${colors.brand}✦${colors.reset} Goodbye!\n`;
           this.viewport.writeUpper(exitMsg);
           cleanup();
           const res = pendingResolve;
@@ -1167,10 +897,7 @@ export class InteractiveShell {
 
       const trimmed = line.trim();
       if (trimmed === '/exit' || trimmed === '/quit') {
-        const exitMsg =
-          this.sessionLanguage === 'en'
-            ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
-            : `\n${colors.brand}✦${colors.reset} Até logo!\n`;
+        const exitMsg = `\n${colors.brand}✦${colors.reset} Goodbye!\n`;
         this.viewport.writeUpper(exitMsg);
         cleanup();
         if (!this.options.input) {
@@ -1185,11 +912,7 @@ export class InteractiveShell {
 
       isRunning = true;
       activeAbortController = new AbortController();
-      this.viewport.renderInputLine(
-        '',
-        0,
-        this.sessionLanguage === 'en' ? 'Thinking...' : 'Processando...',
-      );
+      this.viewport.renderInputLine('', 0, 'Thinking...');
 
       try {
         const reply = await this.handleInput(trimmed, activeAbortController.signal);

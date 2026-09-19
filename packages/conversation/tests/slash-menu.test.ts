@@ -5,7 +5,7 @@ import { SlashMenu, SLASH_COMMANDS } from '../src/slash-menu.js';
 describe('SlashMenu', () => {
   it('opens and lists all commands when typing "/"', () => {
     const out = new PassThrough();
-    const menu = new SlashMenu(out, 'en');
+    const menu = new SlashMenu(out);
 
     const res = menu.update('/');
     expect(menu.isOpen).toBe(true);
@@ -16,7 +16,7 @@ describe('SlashMenu', () => {
 
   it('autocompletes unique match when typing "/e"', () => {
     const out = new PassThrough();
-    const menu = new SlashMenu(out, 'en');
+    const menu = new SlashMenu(out);
 
     const res = menu.update('/e');
     expect(menu.isOpen).toBe(true);
@@ -27,7 +27,7 @@ describe('SlashMenu', () => {
 
   it('filters multiple matches without autocompleting when prefix is ambiguous (e.g. "/p")', () => {
     const out = new PassThrough();
-    const menu = new SlashMenu(out, 'en');
+    const menu = new SlashMenu(out);
 
     const res = menu.update('/p');
     expect(menu.isOpen).toBe(true);
@@ -41,7 +41,7 @@ describe('SlashMenu', () => {
 
   it('does not force autocomplete on backspace', () => {
     const out = new PassThrough();
-    const menu = new SlashMenu(out, 'en');
+    const menu = new SlashMenu(out);
 
     // Simulate backspacing into /exi
     const res = menu.update('/exi', true);
@@ -53,7 +53,7 @@ describe('SlashMenu', () => {
 
   it('navigates up and down with wrap-around', () => {
     const out = new PassThrough();
-    const menu = new SlashMenu(out, 'en');
+    const menu = new SlashMenu(out);
 
     menu.update('/p');
     const total = menu.matches.length;
@@ -76,7 +76,7 @@ describe('SlashMenu', () => {
 
   it('closes cleanly when command contains a space or does not start with "/"', () => {
     const out = new PassThrough();
-    const menu = new SlashMenu(out, 'en');
+    const menu = new SlashMenu(out);
 
     menu.update('/plan');
     expect(menu.isOpen).toBe(true);
@@ -89,16 +89,12 @@ describe('SlashMenu', () => {
     expect(menu.isOpen).toBe(false);
   });
 
-  it('supports language switching', () => {
+  it('displays command descriptions in English', () => {
     const out = new PassThrough();
-    const menu = new SlashMenu(out, 'en');
+    const menu = new SlashMenu(out);
 
     menu.update('/exit');
-    const itemEn = menu.getSelected();
-    expect(itemEn?.descEn).toContain('Exit');
-
-    menu.setLanguage('pt');
-    const itemPt = menu.getSelected();
-    expect(itemPt?.descPt).toContain('Sair');
+    const item = menu.getSelected();
+    expect(item?.desc).toContain('Exit interactive session');
   });
 });

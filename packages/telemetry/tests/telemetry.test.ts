@@ -57,7 +57,7 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(report.breakdown).toHaveLength(1);
 
       const formatted = collector.formatCostReport(runId);
-      expect(formatted).toContain('Relatório de Custos');
+      expect(formatted).toContain('Cost Report');
       expect(formatted).toContain('TASK-01');
 
       // Record run metrics
@@ -72,8 +72,8 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       });
 
       const statsReport = collector.formatStatsReport(runId);
-      expect(statsReport).toContain('Métricas do Run run-cost-test');
-      expect(statsReport).toContain('2/2 concluídas');
+      expect(statsReport).toContain('Run Metrics - run-cost-test');
+      expect(statsReport).toContain('2/2 completed');
     });
   });
 

@@ -94,11 +94,6 @@ export class OperatorIntentParser {
 
     // 2. Natural language equivalents for commands
     if (
-      lower.includes('o que está acontecendo') ||
-      lower.includes('quais as tasks') ||
-      lower.includes('status das tasks') ||
-      lower.includes('como estão as tasks') ||
-      lower.includes('tarefas') ||
       lower.includes('list tasks') ||
       lower.includes('show tasks') ||
       lower.includes('what is happening') ||
@@ -109,19 +104,12 @@ export class OperatorIntentParser {
       return { type: 'inspect_tasks' };
     }
 
-    if (
-      lower.includes('quem está mexendo') ||
-      lower.includes('quem está trabalhando') ||
-      lower.includes('who is working on')
-    ) {
+    if (lower.includes('who is working on')) {
       const taskMatch = text.match(/(TASK-\d+)/i);
       return { type: 'inspect_tasks', taskId: taskMatch ? taskMatch[1].toUpperCase() : undefined };
     }
 
     if (
-      lower.includes('quem está disponível') ||
-      lower.includes('quais agentes') ||
-      lower.includes('agentes prontos') ||
       lower.includes('available agents') ||
       lower.includes('show agents') ||
       lower.includes('list agents') ||
@@ -131,9 +119,6 @@ export class OperatorIntentParser {
     }
 
     if (
-      lower.includes('mostra o plano') ||
-      lower.includes('qual o plano') ||
-      lower.includes('ver plano') ||
       lower.includes('show plan') ||
       lower.includes('what is the plan') ||
       lower.includes('view plan') ||
@@ -143,21 +128,16 @@ export class OperatorIntentParser {
     }
 
     if (
-      lower.includes('quanto gastei') ||
-      lower.includes('custo') ||
-      lower.includes('tokens') ||
       lower.includes('how much did i spend') ||
       lower.includes('token cost') ||
-      lower.includes('cost report')
+      lower.includes('cost report') ||
+      lower.includes('tokens') ||
+      lower === 'cost'
     ) {
       return { type: 'inspect_cost' };
     }
 
     if (
-      lower.includes('para a execução') ||
-      lower.includes('pausa a execução') ||
-      lower.includes('pausar') ||
-      lower.includes('interrompe por enquanto') ||
       lower.includes('pause execution') ||
       lower.includes('stop execution') ||
       lower.includes('halt execution') ||
@@ -167,10 +147,7 @@ export class OperatorIntentParser {
     }
 
     if (
-      lower.includes('continua') ||
-      lower.includes('retoma') ||
-      lower.includes('retomar') ||
-      lower.includes('resume') ||
+      lower.includes('resume execution') ||
       lower.includes('continue execution') ||
       lower === 'resume'
     ) {
@@ -178,19 +155,10 @@ export class OperatorIntentParser {
     }
 
     if (
-      lower === 'sim' ||
-      lower === 's' ||
       lower === 'yes' ||
       lower === 'y' ||
-      lower.startsWith('sim ') ||
       lower.startsWith('yes ') ||
       lower.startsWith('y ') ||
-      lower.startsWith('s ') ||
-      lower.startsWith('pode executar') ||
-      lower.startsWith('executar') ||
-      lower.startsWith('executa') ||
-      lower.includes('aprova') ||
-      lower.includes('pode rodar') ||
       lower.includes('approve plan') ||
       lower.includes('go ahead') ||
       lower.includes('proceed') ||
@@ -200,18 +168,11 @@ export class OperatorIntentParser {
     }
 
     if (
-      lower === 'não' ||
-      lower === 'nao' ||
-      lower === 'n' ||
       lower === 'no' ||
-      lower.startsWith('não,') ||
-      lower.startsWith('nao,') ||
+      lower === 'n' ||
       lower.startsWith('no,') ||
       lower.startsWith('no ') ||
       lower.startsWith('n ') ||
-      lower.includes('cancela o plano') ||
-      lower.includes('descartar') ||
-      lower.includes('refaz') ||
       lower.includes('cancel plan') ||
       lower.includes('discard plan') ||
       lower.includes('abort plan') ||
@@ -221,10 +182,10 @@ export class OperatorIntentParser {
       return { type: 'reject_plan', feedback: text };
     }
 
-    // Cancel and reassign (Spec Section 5.1 example)
-    if (lower.includes('reatribua') || lower.includes('reatribuir') || lower.includes('reassign')) {
+    // Cancel and reassign
+    if (lower.includes('reassign')) {
       const taskMatch = text.match(/(TASK-\d+)/i);
-      const agentMatch = text.match(/(?:para|to)\s+([\w-]+)/i);
+      const agentMatch = text.match(/(?:to)\s+([\w-]+)/i);
       return {
         type: 'cancel_and_reassign',
         fromAgent: 'current',
@@ -233,24 +194,8 @@ export class OperatorIntentParser {
       };
     }
 
-    const reassignMatch = text.match(/para o (\w+) e deixa o (\w+) terminar/i);
-    if (reassignMatch) {
-      const taskMatch = text.match(/(TASK-\d+)/i);
-      return {
-        type: 'cancel_and_reassign',
-        fromAgent: reassignMatch[1].toLowerCase(),
-        preferredReplacement: reassignMatch[2].toLowerCase(),
-        taskId: taskMatch ? taskMatch[1].toUpperCase() : 'CURRENT',
-      };
-    }
-
     // Scope and constraint patterns
     if (
-      lower.startsWith('não altere') ||
-      lower.startsWith('não modifique') ||
-      lower.startsWith('não mexa') ||
-      lower.includes('não altere') ||
-      lower.includes('não modifique') ||
       lower.startsWith('do not change') ||
       lower.startsWith('do not modify') ||
       lower.startsWith('dont change') ||
@@ -263,9 +208,9 @@ export class OperatorIntentParser {
       };
     }
 
-    // Read-only scope restriction (Spec Section 4.3 example)
+    // Read-only scope restriction
     const scopeMatch = text.match(
-      /(?:não deixa ninguém (?:escrever|mexer) em|do not allow anyone to (?:write|touch|modify) in)\s+([\w\-./*]+)/i,
+      /(?:do not allow anyone to (?:write|touch|modify) in)\s+([\w\-./*]+)/i,
     );
     if (scopeMatch) {
       return {
@@ -275,7 +220,7 @@ export class OperatorIntentParser {
       };
     }
 
-    const constraintMatch = text.match(/sem dependência nova|no new dependenc/i);
+    const constraintMatch = text.match(/no new dependenc/i);
     if (constraintMatch) {
       return {
         type: 'add_constraint',
@@ -285,43 +230,26 @@ export class OperatorIntentParser {
 
     // Natural language approvals
     if (
-      lower.includes('pode instalar') ||
-      lower.includes('pode executar') ||
-      lower.includes('pode rodar') ||
-      lower.includes('permitido') ||
-      lower.includes('autorizado') ||
-      lower.includes('autorizo') ||
-      lower.includes('pode fazer') ||
-      lower.includes('pode alterar') ||
       lower.includes('allow installation') ||
       lower.includes('approve') ||
       lower.includes('allow')
     ) {
       let scope: import('@taskforge/shared').InteractionScope = 'task';
       if (
-        lower.includes('só para essa task') ||
-        lower.includes('apenas nesta task') ||
-        lower.includes('nesta tarefa') ||
-        lower.includes('only for this task')
+        lower.includes('only for this task') ||
+        lower.includes('just this task')
       ) {
         scope = 'task';
       } else if (
-        lower.includes('sempre') ||
-        lower.includes('no projeto') ||
-        lower.includes('projeto todo') ||
         lower.includes('whole project') ||
         lower.includes('always')
       ) {
         scope = 'project';
       } else if (
-        lower.includes('nesta run') ||
-        lower.includes('nesta execução') ||
         lower.includes('this run')
       ) {
         scope = 'run';
       } else if (
-        lower.includes('uma vez') ||
-        lower.includes('só agora') ||
         lower.includes('once') ||
         lower.includes('just once')
       ) {
@@ -331,11 +259,6 @@ export class OperatorIntentParser {
     }
 
     if (
-      lower.includes('não pode') ||
-      lower.includes('proibido') ||
-      lower.includes('não autorizo') ||
-      lower.includes('negar') ||
-      lower.includes('rejeitar') ||
       lower.includes('deny') ||
       lower.includes('do not allow') ||
       lower.includes('disallow')
@@ -345,16 +268,10 @@ export class OperatorIntentParser {
 
     // 3. Greetings & Help requests
     if (
-      lower === 'oi' ||
-      lower === 'olá' ||
-      lower === 'ola' ||
       lower === 'hello' ||
       lower === 'hi' ||
       lower === 'help' ||
-      lower === 'ajuda' ||
       lower.startsWith('/help') ||
-      lower.includes('como funciona') ||
-      lower.includes('o que você faz') ||
       lower.includes('what can you do') ||
       lower.includes('how does it work')
     ) {
@@ -374,25 +291,20 @@ export class OperatorAgent {
   public formatResponse(
     intent: OperatorIntent,
     state: Record<string, unknown>,
-    lang: 'en' | 'pt' = 'en',
   ): string {
-    const isEn = lang !== 'pt';
-
     switch (intent.type) {
       case 'inspect_tasks': {
         const tasks =
           (state.tasks as Array<{ id: string; title: string; status: string; agent?: string }>) ||
           [];
         if (tasks.length === 0) {
-          return isEn ? 'No active tasks in this run.' : 'Nenhuma tarefa em execução no momento.';
+          return 'No active tasks in this run.';
         }
-        const header = isEn ? 'Run tasks:' : 'Tarefas do run:';
-        const agentLabel = isEn ? 'Agent' : 'Agente';
         return [
-          header,
+          'Run tasks:',
           ...tasks.map(
             (t) =>
-              `  ● ${t.id}: ${t.title} [${t.status.toUpperCase()}]${t.agent ? ` (${agentLabel}: ${t.agent})` : ''}`,
+              `  ● ${t.id}: ${t.title} [${t.status.toUpperCase()}]${t.agent ? ` (Agent: ${t.agent})` : ''}`,
           ),
         ].join('\n');
       }
@@ -406,9 +318,8 @@ export class OperatorAgent {
             quotaStatus?: string;
             quotaReason?: string;
           }>) || [];
-        const header = isEn ? 'Available agents:' : 'Agentes disponíveis:';
         return [
-          header,
+          'Available agents:',
           ...agents.map((a) => {
             let status = a.ready ? '● ready' : '○ not detected';
             if (a.quotaStatus === 'quota_exhausted') {
@@ -422,40 +333,28 @@ export class OperatorAgent {
       }
 
       case 'pause_execution':
-        return isEn
-          ? 'Execution paused safely. Active worktrees are preserved.'
-          : 'Execução pausada com segurança. As worktrees ativas estão preservadas.';
+        return 'Execution paused safely. Active worktrees are preserved.';
 
       case 'resume_execution':
-        return isEn ? 'Execution resumed.' : 'Execução retomada.';
+        return 'Execution resumed.';
 
       case 'cancel_and_reassign':
-        return isEn
-          ? `Reassignment requested: ${intent.fromAgent} cancelled on ${intent.taskId}, transferring to ${intent.preferredReplacement}.`
-          : `Reatribuição solicitada: ${intent.fromAgent} cancelado na ${intent.taskId}, transferindo para ${intent.preferredReplacement}.`;
+        return `Reassignment requested: ${intent.fromAgent} cancelled on ${intent.taskId}, transferring to ${intent.preferredReplacement}.`;
 
       case 'add_constraint':
-        return isEn
-          ? `Constraint added successfully to current run: ${intent.constraint}`
-          : `Restrição adicionada com sucesso ao run atual: ${intent.constraint}`;
+        return `Constraint added successfully to current run: ${intent.constraint}`;
 
       case 'approve_plan':
-        return isEn
-          ? 'Plan approved by operator. Starting task graph execution.'
-          : 'Plano aprovado pelo operador. Iniciando execução do grafo de tarefas.';
+        return 'Plan approved by operator. Starting task graph execution.';
 
       case 'reject_plan':
-        return isEn
-          ? 'Plan rejected. Awaiting new parameters from operator.'
-          : 'Plano rejeitado. Aguardando novos parâmetros do operador.';
+        return 'Plan rejected. Awaiting new parameters from operator.';
 
       case 'approve_interaction':
-        return isEn
-          ? `✓ allowed${intent.scope ? ` for ${intent.scope}` : ''}. Agent resumed work.`
-          : `✓ permitido${intent.scope ? ` para ${intent.scope}` : ''}. Agente retomou o trabalho.`;
+        return `✓ allowed${intent.scope ? ` for ${intent.scope}` : ''}. Agent resumed work.`;
 
       case 'deny_interaction':
-        return isEn ? 'Operation denied by operator.' : 'Operação negada pelo operador.';
+        return 'Operation denied by operator.';
 
       case 'inspect_pending_interactions': {
         const pending =
@@ -466,42 +365,25 @@ export class OperatorAgent {
             resource?: string;
           }>) || [];
         if (pending.length === 0) {
-          return isEn
-            ? 'No interactions pending human approval.'
-            : 'Nenhuma interação pendente de aprovação humana.';
-        }
-        if (isEn) {
-          return [
-            'Pending interactions awaiting approval:',
-            ...pending.map(
-              (p) =>
-                `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`,
-            ),
-            '',
-            'To approve: type "y", "yes", /approve <id> [task|run|project] or respond naturally (e.g. "allow install for this task")',
-            'To deny: type "n", "no" or /deny <id>',
-          ].join('\n');
+          return 'No interactions pending human approval.';
         }
         return [
-          'Interações pendentes de aprovação:',
+          'Pending interactions awaiting approval:',
           ...pending.map(
-            (p) => `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`,
+            (p) =>
+              `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`,
           ),
           '',
-          'Para aprovar: digite "y", "yes", /approve <id> [task|run|project] ou responda naturalmente (ex: "pode instalar")',
-          'Para negar: digite "n", "no" ou /deny <id>',
+          'To approve: type "y", "yes", /approve <id> [task|run|project] or respond naturally (e.g. "allow install for this task")',
+          'To deny: type "n", "no" or /deny <id>',
         ].join('\n');
       }
 
       case 'inspect_cost':
-        return isEn
-          ? `Accumulated usage: ${state.tokensUsed || 0} tokens (Estimated cost: $${state.estimatedCost || '0.00'})`
-          : `Uso acumulado: ${state.tokensUsed || 0} tokens (Custo estimado: $${state.estimatedCost || '0.00'})`;
+        return `Accumulated usage: ${state.tokensUsed || 0} tokens (Estimated cost: $${state.estimatedCost || '0.00'})`;
 
       default:
-        return isEn
-          ? 'Command received. Control plane processing...'
-          : 'Entendi seu pedido. Control plane processando...';
+        return 'Command received. Control plane processing...';
     }
   }
 }
