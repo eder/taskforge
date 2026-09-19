@@ -1,0 +1,67 @@
+# TaskForge System Configuration
+# Documentation: https://taskforge.dev
+
+# 1. Router Configuration (OpenAI Structured Outputs or Heuristic Fallback)
+router:
+  provider: openai                # 'openai' or 'static'
+  model: gpt-4o                   # Model name (e.g. gpt-4o, gpt-4o-mini, gpt-5.6-luna)
+  escalationModel: gpt-5.6-terra  # Escalation model for high uncertainty tasks
+  fallback: static                # Resilient fallback if OpenAI is unavailable
+  adaptive: false                 # Enable historical performance-based adaptive routing
+
+# 2. Execution Settings
+execution:
+  maxParallelTasks: 3
+  defaultTimeoutMinutes: 30
+  worktreesDir: .taskforge/worktrees
+  databasePath: .taskforge/taskforge.db
+  runsDir: .taskforge/runs
+
+# 3. Collaboration & Communication Bus Limits
+collaboration:
+  maxAgentsPerTask: 3
+  maxMessagesPerRound: 6
+  maxRounds: 3
+  requireReasonForEscalation: true
+
+# 4. Deterministic Security & Permission Policy
+permissions:
+  filesystem:
+    workspace_write: allow
+    outside_workspace: ask_human
+    delete_files: ask_human
+  commands:
+    tests: allow
+    lint: allow
+    package_install: ask_human
+    network: ask_human
+    sudo: deny
+  git:
+    commit: allow
+    push: ask_human
+    force_push: deny
+    merge_main: deny
+  fallback: ask_human
+
+# 5. Headless Automation Policy
+headless:
+  onHumanQuestion: block
+  onUnknownPermission: deny
+  onAuthenticationRequired: fail
+  onConfirmationRequired: block
+
+# 6. Interaction Gateway & Human Timeouts
+interactions:
+  humanResponseTimeout: 1800000   # 30 minutes in milliseconds
+  onTimeout:
+    permission: deny
+    question: block
+    confirmation: block
+
+# 7. Quality Gates & Verification
+verification:
+  tests: true
+  lint: true
+  typecheck: true
+  review: true
+  maxReworkCycles: 2

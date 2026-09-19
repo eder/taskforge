@@ -135,11 +135,32 @@ export class OperatorIntentParser {
       return { type: 'resume_execution' };
     }
 
-    if (lower.includes('sim,') || lower.includes('pode executar') || lower.includes('aprova') || lower === 'sim') {
+    if (
+      lower === 'sim' ||
+      lower === 's' ||
+      lower === 'yes' ||
+      lower === 'y' ||
+      lower.startsWith('sim') ||
+      lower.startsWith('pode executar') ||
+      lower.startsWith('executar') ||
+      lower.startsWith('executa') ||
+      lower.includes('aprova') ||
+      lower.includes('pode rodar')
+    ) {
       return { type: 'approve_plan' };
     }
 
-    if (lower.includes('não,') || lower.includes('cancela o plano') || lower.includes('refaz')) {
+    if (
+      lower === 'não' ||
+      lower === 'nao' ||
+      lower === 'n' ||
+      lower === 'no' ||
+      lower.includes('não,') ||
+      lower.includes('nao,') ||
+      lower.includes('cancela o plano') ||
+      lower.includes('descartar') ||
+      lower.includes('refaz')
+    ) {
       return { type: 'reject_plan', feedback: text };
     }
 
@@ -236,32 +257,24 @@ export class OperatorIntentParser {
       return { type: 'deny_interaction', reason: text };
     }
 
-    // New goal submission
+    // 3. Greetings & Help requests
     if (
-      lower.startsWith('cria ') ||
-      lower.startsWith('crie ') ||
-      lower.startsWith('criar ') ||
-      lower.startsWith('implementa ') ||
-      lower.startsWith('implemente ') ||
-      lower.startsWith('implementar ') ||
-      lower.startsWith('corrige ') ||
-      lower.startsWith('corrija ') ||
-      lower.startsWith('corrigir ') ||
-      lower.startsWith('investiga ') ||
-      lower.startsWith('investigue ') ||
-      lower.startsWith('investigar ') ||
-      lower.startsWith('faz ') ||
-      lower.startsWith('faça ') ||
-      lower.startsWith('fazer ') ||
-      lower.startsWith('create ') ||
-      lower.startsWith('add ') ||
-      lower.startsWith('fix ') ||
-      lower.startsWith('build ')
+      lower === 'oi' ||
+      lower === 'olá' ||
+      lower === 'ola' ||
+      lower === 'hello' ||
+      lower === 'hi' ||
+      lower === 'help' ||
+      lower === 'ajuda' ||
+      lower.startsWith('/help') ||
+      lower.includes('como funciona') ||
+      lower.includes('o que você faz')
     ) {
-      return { type: 'submit_goal', goal: text };
+      return { type: 'general_query', query: text };
     }
 
-    return { type: 'general_query', query: text };
+    // 4. Any other statement is an engineering objective/goal for TaskForge
+    return { type: 'submit_goal', goal: text };
   }
 }
 

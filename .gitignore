@@ -6,6 +6,7 @@ coverage/
 
 # TaskForge state
 .taskforge/worktrees/
+.taskforge/test-worktrees/
 .taskforge/runs/
 .taskforge/*.db
 .taskforge/*.db-journal

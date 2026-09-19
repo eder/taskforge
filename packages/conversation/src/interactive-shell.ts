@@ -6,11 +6,17 @@ import { AgentRegistry, AgentDetector } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
 import { HeuristicPlanner } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
-import { StaticRoutingProvider, AgentSelector } from '@taskforge/router';
+import {
+  StaticRoutingProvider,
+  OpenAIRoutingProvider,
+  AdaptiveRoutingProvider,
+  RoutingProvider,
+  AgentSelector,
+} from '@taskforge/router';
 import { TaskGraph } from '@taskforge/core';
 import { RunOrchestrator } from '@taskforge/scheduler';
 import { TaskForgeDatabase, InteractionRepository } from '@taskforge/persistence';
-import { TelemetryCollector } from '@taskforge/telemetry';
+import { TelemetryCollector, PerformanceEngine } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { TuiDashboard } from './tui-dashboard.js';
 
@@ -32,7 +38,7 @@ export class InteractiveShell {
   private gitService: GitService;
   private planner: HeuristicPlanner;
   private negotiator: NegotiationManager;
-  private router: StaticRoutingProvider;
+  private router: RoutingProvider;
   private agentSelector: AgentSelector;
   private interactionRepo: InteractionRepository;
   private interactionGateway: InteractionGateway;
@@ -51,7 +57,13 @@ export class InteractiveShell {
     this.gitService = new GitService(this.repoRoot);
     this.planner = new HeuristicPlanner();
     this.negotiator = new NegotiationManager();
-    this.router = new StaticRoutingProvider();
+    if (this.config.router.adaptive) {
+      this.router = new AdaptiveRoutingProvider(new PerformanceEngine(this.db));
+    } else if (this.config.router.provider === 'openai' && process.env.OPENAI_API_KEY) {
+      this.router = new OpenAIRoutingProvider(process.env.OPENAI_API_KEY, this.config.router.model);
+    } else {
+      this.router = new StaticRoutingProvider();
+    }
     this.agentSelector = new AgentSelector(this.agentRegistry);
     this.interactionRepo = new InteractionRepository(this.db);
     this.interactionGateway = new InteractionGateway({
@@ -90,7 +102,7 @@ export class InteractiveShell {
       ...reports.map((r) => ` ${r.name.padEnd(12)} ● ${r.ready ? 'ready' : 'not detected'}`),
       '',
       ' Router',
-      ` OpenAI       ● ${this.config.router.provider === 'openai' ? 'ready' : 'static fallback'}`,
+      ` OpenAI       ● ${this.config.router.provider === 'openai' && Boolean(process.env.OPENAI_API_KEY) ? 'ready' : 'static fallback'}`,
       '',
       ' ECC',
       ` ${profile.hasECC ? '● detected' : '○ not detected'}`,
@@ -208,8 +220,11 @@ export class InteractiveShell {
         const proposedGraph = await this.planner.plan(goal);
         this.currentGraph = await this.negotiator.negotiateGraph(proposedGraph, this.activeRunId);
 
+        const tasks = this.currentGraph.getAllTasks();
+        const primaryTask = tasks[0];
+
         const routing = await this.router.route({
-          task: this.currentGraph.getAllTasks()[0],
+          task: primaryTask,
           availableAgents: this.agentRegistry.list().map((a) => a.id),
         });
 
@@ -218,7 +233,9 @@ export class InteractiveShell {
         return [
           `Entendi. Estratégia recomendada: ${routing.strategy.toUpperCase()} (Complexidade: ${routing.complexity}, Risco: ${routing.risk}).`,
           `Time sugerido: ${selected.map((s) => `${s.agent.name} (${s.roleRequest.role})`).join(', ')}.`,
-          `Total de ${this.currentGraph.getAllTasks().length} tarefas estruturadas.`,
+          `Total de ${tasks.length} tarefas estruturadas:`,
+          ...tasks.map((t, idx) => `  ${idx + 1}. [${t.type.toUpperCase()}] ${t.title}`),
+          '',
           'Deseja que eu execute? (digite "sim" ou "/approve" para iniciar)',
         ].join('\n');
       }
@@ -267,8 +284,11 @@ export class InteractiveShell {
         }
 
         if (!this.currentGraph) {
-          return 'Nenhum plano pendente de aprovação.';
+          return 'Nenhum plano pendente de aprovação. Descreva um objetivo em linguagem natural para começar.';
         }
+
+        const isFakeRequested = text.includes('--fake') || text.includes('fake');
+
         const orchestrator = new RunOrchestrator({
           repoRoot: this.repoRoot,
           config: this.config,
@@ -281,37 +301,63 @@ export class InteractiveShell {
           gitService: this.gitService,
           interactionGateway: this.interactionGateway,
         });
-        const result = await orchestrator.run(this.lastGoalDescription ?? 'Execução aprovada', {
-          preplannedGraph: this.currentGraph,
-        });
-        this.activeRunId = result.runId;
-        this.currentGraph = undefined;
 
-        this.telemetry.recordRunMetrics({
-          runId: result.runId,
-          durationMs: result.durationMs,
-          tasksCount: result.tasksCompleted + result.tasksFailed,
-          tasksCompleted: result.tasksCompleted,
-          tasksFailed: result.tasksFailed,
-          reworkCount: 0,
-          escalationsCount: 0,
-        });
+        try {
+          const result = await orchestrator.run(this.lastGoalDescription ?? 'Execução aprovada', {
+            preplannedGraph: this.currentGraph,
+            fakeFallback: isFakeRequested,
+          });
+          this.activeRunId = result.runId;
+          this.currentGraph = undefined;
 
-        return [
-          'Plano executado com sucesso!',
-          `Status: ${result.status.toUpperCase()}`,
-          `Tarefas concluídas: ${result.tasksCompleted}, falhas: ${result.tasksFailed}`,
-          result.integrationBranch ? `Branch de integração: ${result.integrationBranch}` : '',
-          `Tempo total: ${(result.durationMs / 1000).toFixed(1)}s`,
-        ]
-          .filter(Boolean)
-          .join('\n');
+          this.telemetry.recordRunMetrics({
+            runId: result.runId,
+            durationMs: result.durationMs,
+            tasksCount: result.tasksCompleted + result.tasksFailed,
+            tasksCompleted: result.tasksCompleted,
+            tasksFailed: result.tasksFailed,
+            reworkCount: 0,
+            escalationsCount: 0,
+          });
+
+          return [
+            'Plano executado com sucesso!',
+            `Status: ${result.status.toUpperCase()}`,
+            `Tarefas concluídas: ${result.tasksCompleted}, falhas: ${result.tasksFailed}`,
+            result.integrationBranch ? `Branch de integração: ${result.integrationBranch}` : '',
+            `Tempo total: ${(result.durationMs / 1000).toFixed(1)}s`,
+          ]
+            .filter(Boolean)
+            .join('\n');
+        } catch (err) {
+          return `Erro durante a execução do plano: ${(err as Error).message}\n(Dica: digite "sim --fake" para testar com agentes simulados caso os agentes reais não estejam configurados com chaves de API)`;
+        }
       }
 
       case 'reject_plan': {
         this.currentGraph = undefined;
         this.lastGoalDescription = undefined;
         return 'Plano descartado conforme solicitado.';
+      }
+
+      case 'general_query': {
+        return [
+          'Olá! Eu sou o TaskForge, control plane conversacional para equipes de agentes autônomos.',
+          '',
+          'Para iniciar um trabalho, basta descrever seu objetivo em linguagem natural. Exemplos:',
+          '  > investiga porque o checkout cobra duas vezes',
+          '  > cria um endpoint de autenticação JWT',
+          '  > refatore as rotas da API adicionando validação',
+          '',
+          'Comandos rápidos disponíveis:',
+          '  /agents   - Listar agentes disponíveis e status',
+          '  /tasks    - Listar tarefas ativas',
+          '  /plan     - Visualizar plano atual',
+          '  /pending  - Visualizar interações aguardando aprovação',
+          '  /status   - Painel TUI completo',
+          '  /cost     - Relatório de custo de tokens',
+          '  /exit     - Sair do shell',
+        ].join('\n');
       }
 
       default:
