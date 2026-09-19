@@ -1,34 +1,43 @@
 import { RepositoryProfile, Constraint } from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
 
+export function isPureExplanationGoal(description: string): boolean {
+  const desc = description.toLowerCase().replace(/[?!.,;:]+/g, ' ').trim();
+
+  // Actionable verbs imply code modification
+  const hasActionVerb =
+    /\b(create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|cria|criar|adicione|adicionar|construa|construir|implemente|implementar|faça|fazer|corrige|corrigir|refatore|refatorar|delete|deletar|remova|remover|atualize|atualizar)\b/i.test(
+      desc,
+    );
+  if (hasActionVerb) {
+    return false;
+  }
+
+  const explanationPatterns = [
+    /what\s+(does\s+|is\s+)?(this\s+|the\s+)?(project|repo|repository|codebase|app|application|system)?\s*(do|does|is|about)/i,
+    /what\s+(is|are)\s+(this\s+|the\s+)?(project|repo|repository|codebase|app|application|system)/i,
+    /what\s+does\s+it\s+do/i,
+    /how\s+(does\s+)?(this\s+|the\s+)?(project|repo|repository|codebase|app|system|it)\s+(work|works|operate|function)/i,
+    /(explain|describe|overview|tell\s+me\s+about)\s+(this\s+|the\s+)?(project|repo|repository|codebase|app|system|architecture)/i,
+    /o\s+que\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app|código)?\s*(faz|é|e)/i,
+    /o\s+que\s+faz\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app)/i,
+    /como\s+(funciona|opera)\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app)/i,
+    /como\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app)\s+(funciona|opera)/i,
+    /(explique|explica|descreva|descreve|fale\s+sobre|entenda|entender)\s+(o\s+|esse\s+|este\s+)?(projeto|repo|repositório|código|sistema|app)/i,
+    /para\s+que\s+serve\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app)/i,
+    /qual\s+(o\s+)?(objetivo|propósito)\s+(desse\s+|deste\s+|do\s+)?(projeto|repo|repositório)/i,
+  ];
+
+  return explanationPatterns.some((pattern) => pattern.test(desc));
+}
+
 export class HeuristicPlanner implements Planner {
   async plan(goal: Goal, profile?: RepositoryProfile): Promise<TaskGraph> {
     const desc = goal.description.toLowerCase();
     const tasks: Task[] = [];
     const now = new Date();
 
-    const isPureExplanation =
-      desc.includes('o que esse projeto faz') ||
-      desc.includes('o que o projeto faz') ||
-      desc.includes('o que este projeto') ||
-      desc.includes('o que faz') ||
-      desc.includes('o que é') ||
-      desc.includes('o que e ') ||
-      desc.includes('como funciona') ||
-      desc.includes('para que serve') ||
-      desc.includes('qual o objetivo') ||
-      desc.includes('descreva o projeto') ||
-      desc.includes('describe the project') ||
-      desc.includes('what does this project do') ||
-      desc.includes('what does this repo do') ||
-      desc.includes('what is this project') ||
-      desc.includes('what does it do') ||
-      desc.includes('how does this work') ||
-      desc.includes('how does it work') ||
-      desc.includes('explain this project') ||
-      desc.includes('explain the project') ||
-      desc.includes('explique esse projeto') ||
-      desc.includes('explique o projeto');
+    const isPureExplanation = isPureExplanationGoal(goal.description);
 
     const isInvestigationNeeded =
       isPureExplanation ||

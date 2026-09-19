@@ -473,11 +473,17 @@ export class InteractiveShell {
 
           const outputPrefix = outputs ? `${outputs}\n` : '';
 
+          const isSuccess = result.status === 'completed';
+          const title = isSuccess
+            ? (isEn ? 'Plan executed successfully!' : 'Plano executado com sucesso!')
+            : (isEn ? 'Plan execution encountered issues' : 'Execução do plano finalizada com pendências');
+          const titleIcon = isSuccess ? `${colors.green}✔${colors.reset}` : `${colors.red}✖${colors.reset}`;
+
           if (isEn) {
             return [
               outputPrefix,
               `${colors.brand}╭── ✦ Run Complete ──────────────────────────────────────────────╮${colors.reset}`,
-              `${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plan executed successfully!${colors.reset}`,
+              `${colors.brand}│${colors.reset}  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
               `${colors.brand}│${colors.reset}`,
               `${colors.brand}│${colors.reset}  ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
               `${colors.brand}│${colors.reset}  ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
@@ -492,7 +498,7 @@ export class InteractiveShell {
           return [
             outputPrefix,
             `${colors.brand}╭── ✦ Execução Concluída ────────────────────────────────────────╮${colors.reset}`,
-            `${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plano executado com sucesso!${colors.reset}`,
+            `${colors.brand}│${colors.reset}  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
             `${colors.brand}│${colors.reset}`,
             `${colors.brand}│${colors.reset}  ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
             `${colors.brand}│${colors.reset}  ${colors.dim}Tarefas concluídas:${colors.reset} ${colors.bold}${result.tasksCompleted}${colors.reset}, falhas: ${result.tasksFailed}`,

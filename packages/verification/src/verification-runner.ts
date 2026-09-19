@@ -70,7 +70,7 @@ export class VerificationRunner {
         }
         return { command: defaultCmd ?? `${pm} ${name}`, available: false };
       }
-      return { command: defaultCmd ?? `${pm} ${name}`, available: Boolean(defaultCmd) };
+      return { command: defaultCmd ?? `${pm} ${name}`, available: false };
     };
 
     // Investigation tasks are read-only; skip code verification
