@@ -22,6 +22,7 @@ import { InteractionGateway } from '@taskforge/execution';
 import { TuiDashboard } from './tui-dashboard.js';
 import { theme, colors } from './theme.js';
 import { TerminalViewport } from './terminal-viewport.js';
+import { SlashMenu } from './slash-menu.js';
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -102,6 +103,7 @@ export class InteractiveShell {
   private sessionLanguage?: ShellLanguage;
   private outStream: Writable;
   public viewport: TerminalViewport;
+  public slashMenu: SlashMenu;
 
   constructor(private options: ShellOptions = {}) {
     this.repoRoot = options.repoRoot ?? process.cwd();
@@ -109,6 +111,7 @@ export class InteractiveShell {
     this.viewport = new TerminalViewport(this.outStream, {
       repoName: path.basename(this.repoRoot),
     });
+    this.slashMenu = new SlashMenu(this.outStream, this.sessionLanguage ?? 'en');
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
     this.telemetry = new TelemetryCollector(this.db);
@@ -189,12 +192,21 @@ export class InteractiveShell {
       } else if (text.length > 0) {
         this.sessionLanguage = 'en';
       }
+      this.slashMenu.setLanguage(this.sessionLanguage ?? 'en');
     }
 
     const isEn = this.sessionLanguage === 'en';
 
     if (text === '/exit' || text === '/quit') {
       return isEn ? 'Session closed.' : 'Sessão encerrada.';
+    }
+
+    if (text === '/clean') {
+      const worktreeManager = new WorktreeManager(this.repoRoot, this.config.execution.worktreesDir);
+      const deletedBranches = await worktreeManager.cleanOrphanedWorktreesAndBranches();
+      return isEn
+        ? `Cleaned up orphaned worktrees and ${deletedBranches} temporary branch(es).`
+        : `Limpeza concluída: worktrees órfãs e ${deletedBranches} branch(es) temporárias removidas.`;
     }
 
     const intent = this.operator.parseIntent(text);
@@ -550,6 +562,7 @@ export class InteractiveShell {
             `    ${colors.brand}/pending${colors.reset}  View interactions awaiting approval`,
             `    ${colors.brand}/status${colors.reset}   Full TUI dashboard`,
             `    ${colors.brand}/cost${colors.reset}     Token cost and telemetry report`,
+            `    ${colors.brand}/clean${colors.reset}    Clean temporary worktrees and branches`,
             `    ${colors.brand}/exit${colors.reset}     Exit session`,
           ].join('\n');
         }
@@ -571,6 +584,7 @@ export class InteractiveShell {
           `    ${colors.brand}/pending${colors.reset}  Visualizar interações aguardando aprovação`,
           `    ${colors.brand}/status${colors.reset}   Painel TUI completo`,
           `    ${colors.brand}/cost${colors.reset}     Relatório de custo e tokens`,
+          `    ${colors.brand}/clean${colors.reset}    Limpar worktrees e branches temporárias`,
           `    ${colors.brand}/exit${colors.reset}     Sair da sessão`,
         ].join('\n');
       }
@@ -608,7 +622,63 @@ export class InteractiveShell {
       prompt: this.viewport.isInteractive ? `${colors.brand}╰─${colors.green}❯${colors.reset} ` : promptStr,
     });
 
+    const origTtyWrite = (rl as any)._ttyWrite?.bind(rl);
+    if (typeof origTtyWrite === 'function') {
+      (rl as any)._ttyWrite = (s: string, key?: readline.Key) => {
+        if (this.slashMenu.isOpen && key) {
+          if (key.name === 'up') {
+            this.slashMenu.selectPrev();
+            return;
+          }
+          if (key.name === 'down') {
+            this.slashMenu.selectNext();
+            return;
+          }
+          if (key.name === 'tab') {
+            const selected = this.slashMenu.getSelected();
+            if (selected) {
+              (rl as any).line = selected.cmd;
+              (rl as any).cursor = selected.cmd.length;
+              (rl as any)._refreshLine?.();
+              this.slashMenu.update(rl.line);
+            }
+            return;
+          }
+          if (key.name === 'escape') {
+            this.slashMenu.close();
+            return;
+          }
+          if (key.name === 'return' || key.name === 'enter') {
+            const selected = this.slashMenu.getSelected();
+            if (selected && (rl.line === '/' || !rl.line.includes(' '))) {
+              (rl as any).line = selected.cmd;
+              (rl as any).cursor = selected.cmd.length;
+            }
+            this.slashMenu.close();
+            origTtyWrite(s, key);
+            return;
+          }
+        }
+
+        origTtyWrite(s, key);
+
+        const isBackspace = Boolean(key && (key.name === 'backspace' || key.name === 'delete'));
+        if (rl.line.startsWith('/')) {
+          const updateRes = this.slashMenu.update(rl.line, isBackspace);
+          if (updateRes.autoCompleted) {
+            (rl as any).line = updateRes.autoCompleted;
+            (rl as any).cursor = (rl as any).line.length;
+            (rl as any)._refreshLine?.();
+            this.slashMenu.update(rl.line, false);
+          }
+        } else {
+          this.slashMenu.close();
+        }
+      };
+    }
+
     const cleanup = () => {
+      this.slashMenu.close();
       this.viewport.cleanup();
       worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
     };
@@ -626,9 +696,11 @@ export class InteractiveShell {
       cleanup();
     });
 
+    this.slashMenu.close();
     this.viewport.preparePrompt(rl);
 
     for await (const line of rl) {
+      this.slashMenu.close();
       const trimmed = line.trim();
       if (trimmed === '/exit' || trimmed === '/quit') {
         const exitMsg =

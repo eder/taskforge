@@ -1,0 +1,104 @@
+import { describe, it, expect } from 'vitest';
+import { PassThrough } from 'node:stream';
+import { SlashMenu, SLASH_COMMANDS } from '../src/slash-menu.js';
+
+describe('SlashMenu', () => {
+  it('opens and lists all commands when typing "/"', () => {
+    const out = new PassThrough();
+    const menu = new SlashMenu(out, 'en');
+
+    const res = menu.update('/');
+    expect(menu.isOpen).toBe(true);
+    expect(menu.matches.length).toBe(SLASH_COMMANDS.length);
+    expect(res.autoCompleted).toBeUndefined();
+    expect(menu.getSelected()?.cmd).toBe('/exit');
+  });
+
+  it('autocompletes unique match when typing "/e"', () => {
+    const out = new PassThrough();
+    const menu = new SlashMenu(out, 'en');
+
+    const res = menu.update('/e');
+    expect(menu.isOpen).toBe(true);
+    expect(menu.matches.length).toBe(1);
+    expect(menu.matches[0].cmd).toBe('/exit');
+    expect(res.autoCompleted).toBe('/exit');
+  });
+
+  it('filters multiple matches without autocompleting when prefix is ambiguous (e.g. "/p")', () => {
+    const out = new PassThrough();
+    const menu = new SlashMenu(out, 'en');
+
+    const res = menu.update('/p');
+    expect(menu.isOpen).toBe(true);
+    expect(menu.matches.length).toBeGreaterThan(1);
+    expect(res.autoCompleted).toBeUndefined();
+    const commands = menu.matches.map((m) => m.cmd);
+    expect(commands).toContain('/plan');
+    expect(commands).toContain('/pending');
+    expect(commands).toContain('/pause');
+  });
+
+  it('does not force autocomplete on backspace', () => {
+    const out = new PassThrough();
+    const menu = new SlashMenu(out, 'en');
+
+    // Simulate backspacing into /exi
+    const res = menu.update('/exi', true);
+    expect(menu.isOpen).toBe(true);
+    expect(menu.matches.length).toBe(1);
+    expect(menu.matches[0].cmd).toBe('/exit');
+    expect(res.autoCompleted).toBeUndefined();
+  });
+
+  it('navigates up and down with wrap-around', () => {
+    const out = new PassThrough();
+    const menu = new SlashMenu(out, 'en');
+
+    menu.update('/p');
+    const total = menu.matches.length;
+    expect(menu.selectedIndex).toBe(0);
+
+    menu.selectNext();
+    expect(menu.selectedIndex).toBe(1);
+
+    menu.selectPrev();
+    expect(menu.selectedIndex).toBe(0);
+
+    // Wrap around backwards
+    menu.selectPrev();
+    expect(menu.selectedIndex).toBe(total - 1);
+
+    // Wrap around forwards
+    menu.selectNext();
+    expect(menu.selectedIndex).toBe(0);
+  });
+
+  it('closes cleanly when command contains a space or does not start with "/"', () => {
+    const out = new PassThrough();
+    const menu = new SlashMenu(out, 'en');
+
+    menu.update('/plan');
+    expect(menu.isOpen).toBe(true);
+
+    menu.update('/plan arg');
+    expect(menu.isOpen).toBe(false);
+    expect(menu.matches.length).toBe(0);
+
+    menu.update('regular message');
+    expect(menu.isOpen).toBe(false);
+  });
+
+  it('supports language switching', () => {
+    const out = new PassThrough();
+    const menu = new SlashMenu(out, 'en');
+
+    menu.update('/exit');
+    const itemEn = menu.getSelected();
+    expect(itemEn?.descEn).toContain('Exit');
+
+    menu.setLanguage('pt');
+    const itemPt = menu.getSelected();
+    expect(itemPt?.descPt).toContain('Sair');
+  });
+});
