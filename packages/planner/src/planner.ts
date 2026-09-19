@@ -7,7 +7,31 @@ export class HeuristicPlanner implements Planner {
     const tasks: Task[] = [];
     const now = new Date();
 
+    const isPureExplanation =
+      desc.includes('o que esse projeto faz') ||
+      desc.includes('o que o projeto faz') ||
+      desc.includes('o que este projeto') ||
+      desc.includes('o que faz') ||
+      desc.includes('o que é') ||
+      desc.includes('o que e ') ||
+      desc.includes('como funciona') ||
+      desc.includes('para que serve') ||
+      desc.includes('qual o objetivo') ||
+      desc.includes('descreva o projeto') ||
+      desc.includes('describe the project') ||
+      desc.includes('what does this project do') ||
+      desc.includes('what does this repo do') ||
+      desc.includes('what is this project') ||
+      desc.includes('what does it do') ||
+      desc.includes('how does this work') ||
+      desc.includes('how does it work') ||
+      desc.includes('explain this project') ||
+      desc.includes('explain the project') ||
+      desc.includes('explique esse projeto') ||
+      desc.includes('explique o projeto');
+
     const isInvestigationNeeded =
+      isPureExplanation ||
       desc.includes('investiga') ||
       desc.includes('investigate') ||
       desc.includes('bug') ||
@@ -27,7 +51,29 @@ export class HeuristicPlanner implements Planner {
       (profile?.frameworks?.some((f) => f.includes('React') || f.includes('Vue') || f.includes('Next')) &&
         (desc.includes('auth') || desc.includes('oauth') || desc.includes('endpoint')));
 
-    if (isInvestigationNeeded) {
+    if (isPureExplanation) {
+      const task1: Task = {
+        id: 'TASK-01',
+        goalId: goal.id,
+        title: 'Analyze Architecture and Project Scope',
+        description: `Analyze flow, purpose and architecture related to: ${goal.description}`,
+        type: 'investigation',
+        status: 'proposed',
+        dependencies: [],
+        contract: {
+          objective: `Analyze repository and explain to user: ${goal.description}`,
+          allowedScope: [],
+          forbiddenChanges: ['*'],
+          acceptanceCriteria: ['Comprehensive explanation of project architecture and functionality generated'],
+          dependencies: [],
+        },
+        acceptanceCriteria: ['Explanation provided'],
+        reworkCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      tasks.push(task1);
+    } else if (isInvestigationNeeded) {
       const isExplanation = desc.includes('explique') || desc.includes('explain') || desc.includes('entenda');
       // 1. Investigation task
       const task1: Task = {

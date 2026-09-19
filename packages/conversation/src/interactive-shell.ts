@@ -457,8 +457,19 @@ export class InteractiveShell {
 
           const statusColor = result.status === 'completed' ? colors.green : colors.red;
 
+          const outputs = Object.entries(result.taskOutputs ?? {})
+            .filter(([, text]) => text && text.trim().length > 0)
+            .map(([taskId, text]) => {
+              const header = isEn ? `Explanation & Analysis [${taskId}]` : `Explicação & Análise [${taskId}]`;
+              return `${colors.brand}╭── ✦ ${header} ────────────────────────────────╮${colors.reset}\n${text.trim()}\n${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`;
+            })
+            .join('\n\n');
+
+          const outputPrefix = outputs ? `${outputs}\n` : '';
+
           if (isEn) {
             return [
+              outputPrefix,
               `${colors.brand}╭── ✦ Run Complete ──────────────────────────────────────────────╮${colors.reset}`,
               `${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plan executed successfully!${colors.reset}`,
               `${colors.brand}│${colors.reset}`,
@@ -473,6 +484,7 @@ export class InteractiveShell {
           }
 
           return [
+            outputPrefix,
             `${colors.brand}╭── ✦ Execução Concluída ────────────────────────────────────────╮${colors.reset}`,
             `${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plano executado com sucesso!${colors.reset}`,
             `${colors.brand}│${colors.reset}`,

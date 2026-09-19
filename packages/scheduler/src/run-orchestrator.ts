@@ -52,6 +52,7 @@ export interface OrchestrationResult {
   tasksCompleted: number;
   tasksFailed: number;
   integrationBranch?: string;
+  taskOutputs?: Record<string, string>;
   durationMs: number;
   graph: TaskGraph;
   schedulerResult: SchedulerResult;
@@ -273,6 +274,7 @@ export class RunOrchestrator {
       tasksCompleted: schedulerResult.tasksCompleted,
       tasksFailed: schedulerResult.tasksFailed,
       integrationBranch: schedulerResult.integrationBranch,
+      taskOutputs: schedulerResult.taskOutputs,
       durationMs,
       graph,
       schedulerResult,

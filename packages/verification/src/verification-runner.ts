@@ -73,8 +73,8 @@ export class VerificationRunner {
       return { command: defaultCmd ?? `${pm} ${name}`, available: Boolean(defaultCmd) };
     };
 
-    // For investigation or review tasks, do not enforce typecheck or tests if not available
-    const isInvestigation = taskType === 'investigation' || taskType === 'review';
+    // Investigation tasks are read-only; skip code verification
+    const isInvestigation = taskType === 'investigation';
 
     const testResolved = resolveScript('test', customCommands?.testCommand, 'pnpm test');
     const lintResolved = resolveScript('lint', customCommands?.lintCommand, 'pnpm lint');
@@ -85,17 +85,17 @@ export class VerificationRunner {
       {
         name: 'test',
         command: testResolved.command,
-        enabled: config.verification.tests && (!isInvestigation || testResolved.available) && testResolved.available,
+        enabled: !isInvestigation && config.verification.tests && testResolved.available,
       },
       {
         name: 'lint',
         command: lintResolved.command,
-        enabled: config.verification.lint && (!isInvestigation || lintResolved.available) && lintResolved.available,
+        enabled: !isInvestigation && config.verification.lint && lintResolved.available,
       },
       {
         name: 'typecheck',
         command: typecheckResolved.command,
-        enabled: config.verification.typecheck && (!isInvestigation || typecheckResolved.available) && typecheckResolved.available,
+        enabled: !isInvestigation && config.verification.typecheck && typecheckResolved.available,
       },
       {
         name: 'build',

@@ -126,6 +126,10 @@ export const theme = {
       if (rest.includes('Created isolated worktree')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.cyan}📁${colors.reset} ${colors.dim}${rest}${colors.reset}`;
       }
+      if (rest.startsWith('Output:\n')) {
+        const body = rest.replace(/^Output:\n/, '');
+        return `\n${colors.brand}╭── ✦ Agent Analysis ${tid} ──────────────────────────────────────╮${colors.reset}\n${body}\n${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`;
+      }
       if (rest.includes('executing...')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.yellow}⚡${colors.reset} ${rest}`;
       }

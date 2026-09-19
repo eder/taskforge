@@ -59,11 +59,13 @@ export interface SchedulerResult {
   tasksCompleted: number;
   tasksFailed: number;
   integrationBranch?: string;
+  taskOutputs?: Record<string, string>;
   error?: string;
 }
 
 export class DeterministicScheduler {
   private concurrency: ConcurrencyManager;
+  private taskOutputs: Record<string, string> = {};
 
   constructor(private ctx: SchedulerContext) {
     this.concurrency = new ConcurrencyManager(ctx.config);
@@ -180,6 +182,7 @@ export class DeterministicScheduler {
       tasksCompleted,
       tasksFailed,
       integrationBranch,
+      taskOutputs: this.taskOutputs,
       error: errorMessage,
     };
   }
@@ -462,9 +465,17 @@ export class DeterministicScheduler {
     graph.updateTaskStatus(task.id, 'completed');
     taskRepo.updateStatus(task.id, 'completed');
 
+    if (agentResult.output && agentResult.output.trim().length > 0) {
+      this.taskOutputs[task.id] = agentResult.output.trim();
+    }
+
     this.ctx.onProgress?.(
       `[${task.id}] Agent ${agent.name} completed (status: ${agentResult.success ? 'success' : 'failed'} in ${(agentResult.durationMs / 1000).toFixed(1)}s)`,
     );
+
+    if (task.type === 'investigation' && agentResult.output && agentResult.output.trim().length > 0) {
+      this.ctx.onProgress?.(`[${task.id}] Output:\n${agentResult.output.trim()}`);
+    }
 
     eventRepo.append({
       id: `evt-${randomUUID()}`,
