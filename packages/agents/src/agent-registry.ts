@@ -1,5 +1,10 @@
 import { AgentAdapter } from './adapter-interface.js';
-import { ClaudeCodeAdapter, CodexAdapter, GeminiCliAdapter } from './real-adapters.js';
+import {
+  ClaudeCodeAdapter,
+  CodexAdapter,
+  AntigravityAdapter,
+  GeminiCliAdapter,
+} from './real-adapters.js';
 
 export interface AgentDetectionReport {
   id: string;
@@ -30,6 +35,7 @@ export class AgentRegistry {
     // Register default known harnesses
     this.register(new ClaudeCodeAdapter());
     this.register(new CodexAdapter());
+    this.register(new AntigravityAdapter());
     this.register(new GeminiCliAdapter());
   }
 

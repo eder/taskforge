@@ -41,15 +41,15 @@ export class TuiDashboard {
   static renderTaskGraph(graph: TaskGraph): string {
     const tasks = graph.getAllTasks();
     if (tasks.length === 0) {
-      return '  (Nenhuma tarefa registrada)';
+      return '  (No tasks registered)';
     }
 
     const lines: string[] = [];
-    lines.push('┌── Grafo de Tarefas (DAG) ──────────────────────────────────────┐');
+    lines.push('┌── Task Graph (DAG) ────────────────────────────────────────────┐');
 
     for (const task of tasks) {
       const statusBadge = this.statusColor(task.status);
-      const depText = task.dependencies.length > 0 ? ` ↳ depende de: [${task.dependencies.join(', ')}]` : '';
+      const depText = task.dependencies.length > 0 ? ` ↳ depends on: [${task.dependencies.join(', ')}]` : '';
       lines.push(`│  ${task.id.padEnd(10)} ${statusBadge.padEnd(16)} ${task.title.slice(0, 32).padEnd(32)} │`);
       if (depText) {
         lines.push(`│             \x1b[90m${depText.padEnd(52)}\x1b[0m │`);
@@ -68,16 +68,16 @@ export class TuiDashboard {
     lines.push('╔══════════════════════════════════════════════════════════════════╗');
     lines.push('║                      TASKFORGE CONTROL PLANE                     ║');
     lines.push('╚══════════════════════════════════════════════════════════════════╝');
-    lines.push(`  Repositório : ${data.repoRoot}`);
+    lines.push(`  Repository  : ${data.repoRoot}`);
     lines.push(`  Git Status  : ${data.branch} (${data.headCommit.slice(0, 7)}) • ${cleanLabel}`);
     lines.push('');
 
     // Agents
-    lines.push('┌── Agentes Disponíveis ─────────────────────────────────────────┐');
+    lines.push('┌── Available Agents ────────────────────────────────────────────┐');
     const agentCols = data.agents
       .map((a) => {
         const icon = a.ready ? '\x1b[32m●\x1b[0m' : '\x1b[90m○\x1b[0m';
-        return `${icon} ${a.name.padEnd(14)}`;
+        return `${icon} ${a.name.padEnd(16)}`;
       })
       .join('  ');
     lines.push(`│  ${agentCols.padEnd(70)}│`);
@@ -92,7 +92,7 @@ export class TuiDashboard {
 
     // Worktrees
     if (data.worktrees && data.worktrees.length > 0) {
-      lines.push('┌── Worktrees Isoladas ──────────────────────────────────────────┐');
+      lines.push('┌── Isolated Worktrees ──────────────────────────────────────────┐');
       for (const wt of data.worktrees) {
         lines.push(
           `│  ${wt.id.padEnd(12)} • ${wt.branch.padEnd(20)} • [${wt.agentId.padEnd(8)}] • ${wt.status.padEnd(12)}│`,
@@ -104,17 +104,17 @@ export class TuiDashboard {
 
     // Telemetry & Stats bar
     if (data.runStats || data.costReport) {
-      lines.push('┌── Métricas & Telemetria ───────────────────────────────────────┐');
+      lines.push('┌── Metrics & Telemetry ─────────────────────────────────────────┐');
       if (data.runStats) {
         const dur = (data.runStats.durationMs / 1000).toFixed(1);
         const pass = (data.runStats.firstPassRate * 100).toFixed(0);
         lines.push(
-          `│  Duração: ${dur}s  •  Concluídas: ${data.runStats.tasksCompleted}/${data.runStats.tasksCount}  •  Primeira passagem: ${pass}%  •  Retrabalho: ${data.runStats.reworkCount} │`,
+          `│  Duration: ${dur}s  •  Completed: ${data.runStats.tasksCompleted}/${data.runStats.tasksCount}  •  First pass: ${pass}%  •  Rework: ${data.runStats.reworkCount} │`,
         );
       }
       if (data.costReport) {
         lines.push(
-          `│  Custo estimado: $${data.costReport.totalCostUsd.toFixed(4)} USD (${data.costReport.totalInputTokens} tokens in / ${data.costReport.totalOutputTokens} out) │`,
+          `│  Estimated cost: $${data.costReport.totalCostUsd.toFixed(4)} USD (${data.costReport.totalInputTokens} tokens in / ${data.costReport.totalOutputTokens} out) │`,
         );
       }
       lines.push('└────────────────────────────────────────────────────────────────┘');

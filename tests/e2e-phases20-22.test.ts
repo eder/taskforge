@@ -76,12 +76,12 @@ describe('Phases 20-22: Advanced UX (TUI), GitHub Workflow & Remote Workers', ()
       const graph = new TaskGraph([task1, task2]);
       const renderedGraph = TuiDashboard.renderTaskGraph(graph);
 
-      expect(renderedGraph).toContain('Grafo de Tarefas (DAG)');
+      expect(renderedGraph).toContain('Task Graph (DAG)');
       expect(renderedGraph).toContain('TASK-1');
       expect(renderedGraph).toContain('TASK-2');
       expect(renderedGraph).toContain('INTEGRATED');
       expect(renderedGraph).toContain('RUNNING');
-      expect(renderedGraph).toContain('depende de: [TASK-1]');
+      expect(renderedGraph).toContain('depends on: [TASK-1]');
     });
 
     it('renders full dashboard snapshot including telemetry and agent matrix', () => {
@@ -111,10 +111,10 @@ describe('Phases 20-22: Advanced UX (TUI), GitHub Workflow & Remote Workers', ()
       });
 
       expect(dashboard).toContain('TASKFORGE CONTROL PLANE');
-      expect(dashboard).toContain('Agentes Disponíveis');
+      expect(dashboard).toContain('Available Agents');
       expect(dashboard).toContain('Claude Code');
-      expect(dashboard).toContain('Worktrees Isoladas');
-      expect(dashboard).toContain('Métricas & Telemetria');
+      expect(dashboard).toContain('Isolated Worktrees');
+      expect(dashboard).toContain('Metrics & Telemetry');
       expect(dashboard).toContain('8.2s');
     });
 
@@ -126,7 +126,7 @@ describe('Phases 20-22: Advanced UX (TUI), GitHub Workflow & Remote Workers', ()
 
       const response = await shell.handleInput('/dash');
       expect(response).toContain('TASKFORGE CONTROL PLANE');
-      expect(response).toContain('Agentes Disponíveis');
+      expect(response).toContain('Available Agents');
     });
   });
 

@@ -149,6 +149,16 @@ export class CodexAdapter extends BaseCliAdapter {
   }
 }
 
+export class AntigravityAdapter extends BaseCliAdapter {
+  readonly id = 'agy';
+  readonly name = 'Google Antigravity';
+  readonly binaryName = 'agy';
+
+  constructor(options: CliAdapterOptions = {}) {
+    super({ defaultArgs: ['--dangerously-skip-permissions', '-p'], ...options });
+  }
+}
+
 export class GeminiCliAdapter extends BaseCliAdapter {
   readonly id = 'gemini';
   readonly name = 'Gemini CLI';

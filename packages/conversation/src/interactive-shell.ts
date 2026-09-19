@@ -28,6 +28,56 @@ export interface ShellOptions {
   database?: TaskForgeDatabase;
 }
 
+export type ShellLanguage = 'en' | 'pt';
+
+export function isPortugueseText(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (/[ãõçáéíóúâêîôûà]/.test(lower)) return true;
+
+  if (
+    lower.includes('do not') ||
+    lower.includes("don't") ||
+    lower.includes('dont ') ||
+    lower.includes('please ') ||
+    lower.includes('what is') ||
+    lower.includes('how to')
+  ) {
+    return false;
+  }
+
+  const ptWords = [
+    'criar', 'cria', 'fazer', 'faça', 'investigar', 'investiga', 'explicar', 'explique',
+    'analisar', 'analise', 'porque', 'não', 'nao', 'sim', 'da', 'das', 'dos', 'em', 'na',
+    'nos', 'nas', 'um', 'uma', 'uns', 'umas', 'que', 'com', 'por', 'tarefa', 'tarefas',
+    'plano', 'executar', 'execução', 'executa', 'agente', 'agentes', 'adicionar', 'adiciona',
+    'retomar', 'retoma', 'pausar', 'pausa', 'descartar', 'ajuda', 'olá', 'ola', 'oi',
+    'projeto', 'mostrar', 'mostra', 'quanto', 'gastei', 'quem', 'trabalhando', 'pode',
+    'rodar', 'aprova', 'apenas', 'nesta', 'neste', 'mexa', 'mexer', 'escrever',
+  ];
+
+  const enWords = [
+    'create', 'make', 'investigate', 'explain', 'analyze', 'why', 'how', 'yes', 'for',
+    'from', 'of', 'in', 'at', 'on', 'the', 'that', 'with', 'by', 'task', 'tasks', 'plan',
+    'execute', 'execution', 'agent', 'agents', 'add', 'resume', 'pause', 'discard',
+    'help', 'hello', 'hi', 'what', 'is', 'are', 'can', 'you', 'please', 'run', 'build',
+    'test', 'debug', 'project', 'show', 'spend', 'who', 'working', 'change', 'modify',
+    'touch', 'allow', 'deny', 'current', 'files', 'file', 'should', 'would', 'could',
+    'endpoint', 'health', 'code',
+  ];
+
+  let ptScore = 0;
+  let enScore = 0;
+  const words = lower.split(/[\s,.;:!?/()\-+"]+/);
+  for (const w of words) {
+    if (ptWords.includes(w)) ptScore++;
+    if (enWords.includes(w)) enScore++;
+  }
+
+  if (enScore > ptScore) return false;
+  if (ptScore > enScore) return true;
+  return false;
+}
+
 export class InteractiveShell {
   private repoRoot: string;
   private config: TaskForgeConfig;
@@ -46,6 +96,7 @@ export class InteractiveShell {
   private lastGoalDescription?: string;
   private isPaused = false;
   private activeRunId?: string;
+  private sessionLanguage?: ShellLanguage;
 
   constructor(private options: ShellOptions = {}) {
     this.repoRoot = options.repoRoot ?? process.cwd();
@@ -99,7 +150,7 @@ export class InteractiveShell {
       ` ${this.repoRoot}  •  ${gitStatus.currentBranch}  •  ${gitStatus.isClean ? 'clean' : 'modified'}`,
       '',
       ' Agents',
-      ...reports.map((r) => ` ${r.name.padEnd(12)} ● ${r.ready ? 'ready' : 'not detected'}`),
+      ...reports.map((r) => ` ${r.name.padEnd(16)} ● ${r.ready ? 'ready' : 'not detected'}`),
       '',
       ' Router',
       ` OpenAI       ● ${this.config.router.provider === 'openai' && Boolean(process.env.OPENAI_API_KEY) ? 'ready' : 'static fallback'}`,
@@ -117,8 +168,18 @@ export class InteractiveShell {
     const text = input.trim();
     if (!text) return '';
 
+    if (!text.startsWith('/')) {
+      if (isPortugueseText(text)) {
+        this.sessionLanguage = 'pt';
+      } else if (text.length > 0) {
+        this.sessionLanguage = 'en';
+      }
+    }
+
+    const isEn = this.sessionLanguage === 'en';
+
     if (text === '/exit' || text === '/quit') {
-      return 'Sessão encerrada.';
+      return isEn ? 'Session closed.' : 'Sessão encerrada.';
     }
 
     const intent = this.operator.parseIntent(text);
@@ -126,7 +187,7 @@ export class InteractiveShell {
     switch (intent.type) {
       case 'inspect_agents': {
         const reports = await AgentDetector.detect(this.agentRegistry.list());
-        return this.operator.formatResponse(intent, { agents: reports });
+        return this.operator.formatResponse(intent, { agents: reports }, this.sessionLanguage);
       }
 
       case 'inspect_tasks': {
@@ -137,31 +198,39 @@ export class InteractiveShell {
               status: t.status,
             }))
           : [];
-        return this.operator.formatResponse(intent, { tasks });
+        return this.operator.formatResponse(intent, { tasks }, this.sessionLanguage);
       }
 
       case 'inspect_plan': {
-        if (!this.currentGraph) return 'Nenhum plano ativo no momento.';
+        if (!this.currentGraph) {
+          return isEn ? 'No active plan at the moment.' : 'Nenhum plano ativo no momento.';
+        }
         const tasks = this.currentGraph.getAllTasks();
+        const header = isEn ? 'Current task plan:' : 'Plano atual de tarefas:';
+        const depPrefix = isEn ? 'Depends on: ' : 'Depende de: ';
         return [
-          'Plano atual de tarefas:',
+          header,
           ...tasks.map(
             (t) =>
-              `  - ${t.id}: ${t.title} [${t.status.toUpperCase()}]${t.dependencies.length > 0 ? ` (Depende de: ${t.dependencies.join(', ')})` : ''}`,
+              `  - ${t.id}: ${t.title} [${t.status.toUpperCase()}]${t.dependencies.length > 0 ? ` (${depPrefix}${t.dependencies.join(', ')})` : ''}`,
           ),
         ].join('\n');
       }
 
       case 'inspect_cost': {
         if (!this.activeRunId) {
-          return 'Nenhum run ativo ou recente para consulta de custos.';
+          return isEn
+            ? 'No active or recent runs for cost inquiry.'
+            : 'Nenhum run ativo ou recente para consulta de custos.';
         }
         return this.telemetry.formatCostReport(this.activeRunId);
       }
 
       case 'inspect_stats': {
         if (!this.activeRunId) {
-          return 'Nenhum run ativo ou recente para consulta de estatísticas.';
+          return isEn
+            ? 'No active or recent runs for statistics inquiry.'
+            : 'Nenhum run ativo ou recente para consulta de estatísticas.';
         }
         return this.telemetry.formatStatsReport(this.activeRunId);
       }
@@ -189,20 +258,20 @@ export class InteractiveShell {
 
       case 'pause_execution': {
         this.isPaused = true;
-        return this.operator.formatResponse(intent, {});
+        return this.operator.formatResponse(intent, {}, this.sessionLanguage);
       }
 
       case 'resume_execution': {
         this.isPaused = false;
-        return this.operator.formatResponse(intent, {});
+        return this.operator.formatResponse(intent, {}, this.sessionLanguage);
       }
 
       case 'add_constraint': {
-        return this.operator.formatResponse(intent, {});
+        return this.operator.formatResponse(intent, {}, this.sessionLanguage);
       }
 
       case 'cancel_and_reassign': {
-        return this.operator.formatResponse(intent, {});
+        return this.operator.formatResponse(intent, {}, this.sessionLanguage);
       }
 
       case 'submit_goal': {
@@ -230,6 +299,17 @@ export class InteractiveShell {
 
         const selected = await this.agentSelector.selectAgents(routing.roles);
 
+        if (isEn) {
+          return [
+            `Understood. Recommended strategy: ${routing.strategy.toUpperCase()} (Complexity: ${routing.complexity}, Risk: ${routing.risk}).`,
+            `Suggested team: ${selected.map((s) => `${s.agent.name} (${s.roleRequest.role})`).join(', ')}.`,
+            `Total of ${tasks.length} structured tasks:`,
+            ...tasks.map((t, idx) => `  ${idx + 1}. [${t.type.toUpperCase()}] ${t.title}`),
+            '',
+            'Do you want me to execute? (type "yes" or "/approve" to start)',
+          ].join('\n');
+        }
+
         return [
           `Entendi. Estratégia recomendada: ${routing.strategy.toUpperCase()} (Complexidade: ${routing.complexity}, Risco: ${routing.risk}).`,
           `Time sugerido: ${selected.map((s) => `${s.agent.name} (${s.roleRequest.role})`).join(', ')}.`,
@@ -247,12 +327,16 @@ export class InteractiveShell {
           : pending[0];
 
         if (!target) {
-          return 'Nenhuma interação pendente encontrada para aprovação.';
+          return isEn
+            ? 'No pending interaction found for approval.'
+            : 'Nenhuma interação pendente encontrada para aprovação.';
         }
 
         const scope = intent.scope ?? 'task';
         this.interactionGateway.resolve(target.id, 'allow', undefined, scope);
-        return `✓ permitido para ${target.taskId || target.id} (escopo: ${scope})\nAgente ${target.agentId} retomou o trabalho.`;
+        return isEn
+          ? `✓ allowed for ${target.taskId || target.id} (scope: ${scope})\nAgent ${target.agentId} resumed work.`
+          : `✓ permitido para ${target.taskId || target.id} (escopo: ${scope})\nAgente ${target.agentId} retomou o trabalho.`;
       }
 
       case 'deny_interaction': {
@@ -262,16 +346,20 @@ export class InteractiveShell {
           : pending[0];
 
         if (!target) {
-          return 'Nenhuma interação pendente encontrada para rejeição.';
+          return isEn
+            ? 'No pending interaction found for denial.'
+            : 'Nenhuma interação pendente encontrada para rejeição.';
         }
 
         this.interactionGateway.resolve(target.id, 'deny', intent.reason, 'once');
-        return `✕ Operação negada para ${target.taskId || target.id}. Agente notificado.`;
+        return isEn
+          ? `✕ Operation denied for ${target.taskId || target.id}. Agent notified.`
+          : `✕ Operação negada para ${target.taskId || target.id}. Agente notificado.`;
       }
 
       case 'inspect_pending_interactions': {
         const pending = this.interactionGateway.getPendingRequests();
-        return this.operator.formatResponse(intent, { pending });
+        return this.operator.formatResponse(intent, { pending }, this.sessionLanguage);
       }
 
       case 'approve_plan': {
@@ -280,11 +368,15 @@ export class InteractiveShell {
         if (pending.length > 0) {
           const target = pending[0];
           this.interactionGateway.resolve(target.id, 'allow', undefined, 'task');
-          return `✓ permitido para ${target.taskId || target.id} (escopo: task)\nAgente ${target.agentId} retomou o trabalho.`;
+          return isEn
+            ? `✓ allowed for ${target.taskId || target.id} (scope: task)\nAgent ${target.agentId} resumed work.`
+            : `✓ permitido para ${target.taskId || target.id} (escopo: task)\nAgente ${target.agentId} retomou o trabalho.`;
         }
 
         if (!this.currentGraph) {
-          return 'Nenhum plano pendente de aprovação. Descreva um objetivo em linguagem natural para começar.';
+          return isEn
+            ? 'No pending plan for approval. Describe an engineering goal in natural language to get started.'
+            : 'Nenhum plano pendente de aprovação. Descreva um objetivo em linguagem natural para começar.';
         }
 
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
@@ -303,10 +395,13 @@ export class InteractiveShell {
         });
 
         try {
-          const result = await orchestrator.run(this.lastGoalDescription ?? 'Execução aprovada', {
-            preplannedGraph: this.currentGraph,
-            fakeFallback: isFakeRequested,
-          });
+          const result = await orchestrator.run(
+            this.lastGoalDescription ?? (isEn ? 'Approved execution' : 'Execução aprovada'),
+            {
+              preplannedGraph: this.currentGraph,
+              fakeFallback: isFakeRequested,
+            },
+          );
           this.activeRunId = result.runId;
           this.currentGraph = undefined;
 
@@ -320,6 +415,18 @@ export class InteractiveShell {
             escalationsCount: 0,
           });
 
+          if (isEn) {
+            return [
+              'Plan executed successfully!',
+              `Status: ${result.status.toUpperCase()}`,
+              `Tasks completed: ${result.tasksCompleted}, failed: ${result.tasksFailed}`,
+              result.integrationBranch ? `Integration branch: ${result.integrationBranch}` : '',
+              `Total time: ${(result.durationMs / 1000).toFixed(1)}s`,
+            ]
+              .filter(Boolean)
+              .join('\n');
+          }
+
           return [
             'Plano executado com sucesso!',
             `Status: ${result.status.toUpperCase()}`,
@@ -330,6 +437,9 @@ export class InteractiveShell {
             .filter(Boolean)
             .join('\n');
         } catch (err) {
+          if (isEn) {
+            return `Error during plan execution: ${(err as Error).message}\n(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)`;
+          }
           return `Erro durante a execução do plano: ${(err as Error).message}\n(Dica: digite "sim --fake" para testar com agentes simulados caso os agentes reais não estejam configurados com chaves de API)`;
         }
       }
@@ -337,10 +447,29 @@ export class InteractiveShell {
       case 'reject_plan': {
         this.currentGraph = undefined;
         this.lastGoalDescription = undefined;
-        return 'Plano descartado conforme solicitado.';
+        return isEn ? 'Plan discarded as requested.' : 'Plano descartado conforme solicitado.';
       }
 
       case 'general_query': {
+        if (isEn) {
+          return [
+            'Hello! I am TaskForge, conversational control plane for autonomous coding-agent teams.',
+            '',
+            'To start work, simply describe your engineering objective in natural language. Examples:',
+            '  > investigate why checkout charges twice',
+            '  > create a JWT authentication endpoint',
+            '  > refactor API routes adding input validation',
+            '',
+            'Quick commands:',
+            '  /agents   - List available agents and readiness status',
+            '  /tasks    - List active tasks',
+            '  /plan     - View current task plan',
+            '  /pending  - View interactions awaiting approval',
+            '  /status   - Full TUI dashboard',
+            '  /cost     - Token cost and telemetry report',
+            '  /exit     - Exit shell',
+          ].join('\n');
+        }
         return [
           'Olá! Eu sou o TaskForge, control plane conversacional para equipes de agentes autônomos.',
           '',
@@ -361,7 +490,9 @@ export class InteractiveShell {
       }
 
       default:
-        return `Comando recebido: "${text}". Digite /tasks, /agents ou descreva um objetivo em linguagem natural.`;
+        return isEn
+          ? `Command received: "${text}". Type /tasks, /agents or describe an objective in natural language.`
+          : `Comando recebido: "${text}". Digite /tasks, /agents ou descreva um objetivo em linguagem natural.`;
     }
   }
 
@@ -388,7 +519,7 @@ export class InteractiveShell {
     for await (const line of rl) {
       const trimmed = line.trim();
       if (trimmed === '/exit' || trimmed === '/quit') {
-        outStream.write('Até logo!\n');
+        outStream.write(this.sessionLanguage === 'en' ? 'Goodbye!\n' : 'Até logo!\n');
         break;
       }
       const reply = await this.handleInput(trimmed);

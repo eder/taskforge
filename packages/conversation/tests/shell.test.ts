@@ -38,4 +38,33 @@ describe('InteractiveShell (REPL)', () => {
     const planReply = await shell.handleInput('/plan');
     expect(planReply).toContain('Plano atual de tarefas:');
   });
+
+  it('processes user commands in English conversational REPL', async () => {
+    const shell = new InteractiveShell();
+
+    // Check pause and resume in English
+    const pauseReply = await shell.handleInput('pause execution');
+    expect(pauseReply).toContain('Execution paused safely');
+
+    const resumeReply = await shell.handleInput('resume execution');
+    expect(resumeReply).toContain('Execution resumed');
+
+    // Check constraint in English
+    const constraintReply = await shell.handleInput('do not change .env files');
+    expect(constraintReply).toContain('Constraint added successfully');
+
+    // Check plan negotiation in English
+    const goalReply = await shell.handleInput('create application health endpoint');
+    expect(goalReply).toContain('Understood. Recommended strategy:');
+    expect(goalReply).toContain('structured tasks:');
+    expect(goalReply).toContain('Do you want me to execute?');
+
+    // Check /plan in English
+    const planReply = await shell.handleInput('/plan');
+    expect(planReply).toContain('Current task plan:');
+
+    // Check approval and execution in English
+    const approveReply = await shell.handleInput('yes --fake');
+    expect(approveReply).toContain('Plan executed successfully!');
+  });
 });

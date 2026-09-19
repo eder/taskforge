@@ -501,7 +501,7 @@ export function createCli(): Command {
         for (const t of tasks) {
           const ver = verificationRepo.getLatestByTask(t.id);
           console.log(
-            `  ● ${t.id}: ${t.title} [${t.status.toUpperCase()}] (verificado: ${ver ? (ver.passed ? 'SIM' : 'NÃO') : 'N/A'})`,
+            `  ● ${t.id}: ${t.title} [${t.status.toUpperCase()}] (verified: ${ver ? (ver.passed ? 'YES' : 'NO') : 'N/A'})`,
           );
         }
         if (interactions.length > 0) {
