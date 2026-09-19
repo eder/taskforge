@@ -194,12 +194,12 @@ export class TaskForgeDatabase {
       CREATE TABLE IF NOT EXISTS verification_results (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
-        task_id TEXT NOT NULL,
+        task_id TEXT,
         passed INTEGER NOT NULL,
         checks_json TEXT,
         failure_reason TEXT,
         created_at TEXT NOT NULL,
-        FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS workspaces (
@@ -311,6 +311,34 @@ export class TaskForgeDatabase {
       CREATE INDEX IF NOT EXISTS idx_interaction_req_status ON interaction_requests(status);
       CREATE INDEX IF NOT EXISTS idx_interaction_resp_req ON interaction_responses(request_id);
     `);
+
+    // Migrate legacy verification_results schema if it enforces strict FOREIGN KEY on task_id
+    try {
+      const tableInfo = this.db
+        .prepare("SELECT sql FROM sqlite_master WHERE name = 'verification_results'")
+        .get() as { sql?: string } | undefined;
+      if (tableInfo?.sql && tableInfo.sql.includes('FOREIGN KEY(task_id) REFERENCES tasks(id)')) {
+        this.db.exec('PRAGMA foreign_keys = OFF;');
+        this.db.exec(`
+          CREATE TABLE verification_results_new (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            task_id TEXT,
+            passed INTEGER NOT NULL,
+            checks_json TEXT,
+            failure_reason TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+          );
+          INSERT INTO verification_results_new SELECT id, run_id, task_id, passed, checks_json, failure_reason, created_at FROM verification_results;
+          DROP TABLE verification_results;
+          ALTER TABLE verification_results_new RENAME TO verification_results;
+        `);
+        this.db.exec('PRAGMA foreign_keys = ON;');
+      }
+    } catch {
+      // Ignore migration errors on transient databases
+    }
   }
 
   public exec(sql: string): void {

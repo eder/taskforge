@@ -181,6 +181,7 @@ export class DeterministicScheduler {
       } catch (err) {
         status = 'failed';
         errorMessage = (err as Error).message;
+        this.ctx.onProgress?.(`Final integration error: ${(err as Error).message}`);
       }
     } else if (status === 'completed' && !this.hasIntegratedCommits) {
       integrationBranch = undefined;
