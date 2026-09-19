@@ -365,9 +365,7 @@ export class InteractiveShell {
             `Total of ${tasks.length} structured tasks:`,
             ...taskFormattedList,
             '',
-            `${colors.brand}╭─────────────────────────────────────────────────────────────────╮${colors.reset}`,
-            `${colors.brand}│${colors.reset}  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}  ${colors.brand}│${colors.reset}`,
-            `${colors.brand}╰─────────────────────────────────────────────────────────────────╯${colors.reset}`,
+            `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
           ].join('\n');
         }
 
@@ -378,9 +376,7 @@ export class InteractiveShell {
           `Total de ${tasks.length} tarefas estruturadas:`,
           ...taskFormattedList,
           '',
-          `${colors.brand}╭─────────────────────────────────────────────────────────────────╮${colors.reset}`,
-          `${colors.brand}│${colors.reset}  ${colors.green}●${colors.reset} ${colors.bold}Deseja que eu execute?${colors.reset} ${colors.dim}(digite "yes", "y" ou "/approve" para iniciar)${colors.reset}  ${colors.brand}│${colors.reset}`,
-          `${colors.brand}╰─────────────────────────────────────────────────────────────────╯${colors.reset}`,
+          `  ${colors.green}●${colors.reset} ${colors.bold}Deseja que eu execute?${colors.reset} ${colors.dim}(digite "yes", "y" ou "/approve" para iniciar)${colors.reset}`,
         ].join('\n');
       }
 
@@ -446,8 +442,8 @@ export class InteractiveShell {
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
 
         const approvedMsg = isEn
-          ? `\n${colors.brand}╭── ✦ TaskForge Execution ───────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Starting execution...\n`
-          : `\n${colors.brand}╭── ✦ Execução TaskForge ────────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}Plano aprovado.${colors.reset} Iniciando execução...\n`;
+          ? `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} ${colors.dim}Starting execution...${colors.reset}\n`
+          : `\n  ${colors.brand}✦ ${colors.bold}Execução TaskForge${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plano aprovado.${colors.reset} ${colors.dim}Iniciando execução...${colors.reset}\n`;
         this.viewport.writeUpper(approvedMsg);
         this.viewport.drawFooter(isEn ? '⚡ Executing plan...' : '⚡ Executando plano...');
 
@@ -501,7 +497,8 @@ export class InteractiveShell {
             .map(([taskId, text]) => {
               const header = isEn ? `Explanation & Analysis [${taskId}]` : `Explicação & Análise [${taskId}]`;
               const highlighted = theme.renderMarkdown(text.trim());
-              return `${colors.brand}╭── ✦ ${header} ────────────────────────────────╮${colors.reset}\n${highlighted}\n${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`;
+              const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
+              return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
             })
             .join('\n\n');
 
@@ -520,17 +517,20 @@ export class InteractiveShell {
             ? `${colors.yellow}⊘${colors.reset}`
             : `${colors.red}✖${colors.reset}`;
 
+          const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
+
           if (isEn) {
             return [
               outputPrefix,
-              `${colors.brand}╭── ✦ Run Complete ──────────────────────────────────────────────╮${colors.reset}`,
-              `${colors.brand}│${colors.reset}  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
-              `${colors.brand}│${colors.reset}`,
-              `${colors.brand}│${colors.reset}  ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
-              `${colors.brand}│${colors.reset}  ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
-              result.integrationBranch ? `${colors.brand}│${colors.reset}  ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}` : '',
-              `${colors.brand}│${colors.reset}  ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
-              `${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}`,
+              `  ${colors.brand}✦ ${colors.bold}Run Summary${colors.reset}`,
+              `  ${divider}`,
+              `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
+              '',
+              `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
+              `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
+              result.integrationBranch ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}` : '',
+              `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
+              `  ${divider}`,
             ]
               .filter(Boolean)
               .join('\n');
@@ -538,14 +538,15 @@ export class InteractiveShell {
 
           return [
             outputPrefix,
-            `${colors.brand}╭── ✦ Execução Concluída ────────────────────────────────────────╮${colors.reset}`,
-            `${colors.brand}│${colors.reset}  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
-            `${colors.brand}│${colors.reset}`,
-            `${colors.brand}│${colors.reset}  ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
-            `${colors.brand}│${colors.reset}  ${colors.dim}Tarefas concluídas:${colors.reset} ${colors.bold}${result.tasksCompleted}${colors.reset}, falhas: ${result.tasksFailed}`,
-            result.integrationBranch ? `${colors.brand}│${colors.reset}  ${colors.dim}Branch de integração:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}` : '',
-            `${colors.brand}│${colors.reset}  ${colors.dim}Tempo total:${colors.reset}        ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
-            `${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}`,
+            `  ${colors.brand}✦ ${colors.bold}Resumo da Execução${colors.reset}`,
+            `  ${divider}`,
+            `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
+            '',
+            `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
+            `    ${colors.dim}Tarefas concluídas:${colors.reset} ${colors.bold}${result.tasksCompleted}${colors.reset}, falhas: ${result.tasksFailed}`,
+            result.integrationBranch ? `    ${colors.dim}Branch de integração:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}` : '',
+            `    ${colors.dim}Tempo total:${colors.reset}        ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
+            `  ${divider}`,
           ]
             .filter(Boolean)
             .join('\n');
@@ -574,10 +575,8 @@ export class InteractiveShell {
       case 'general_query': {
         if (isEn) {
           return [
-            `${colors.brand}╭── ✦ TaskForge Control Plane ───────────────────────────────────╮${colors.reset}`,
-            `${colors.brand}│${colors.reset}  Hello! I am TaskForge, conversational control plane for       ${colors.brand}│${colors.reset}`,
-            `${colors.brand}│${colors.reset}  autonomous coding-agent teams (Claude, Codex, Antigravity).   ${colors.brand}│${colors.reset}`,
-            `${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}`,
+            `  ${colors.brand}✦ ${colors.bold}TaskForge Control Plane${colors.reset}`,
+            `  ${colors.dim}Conversational control plane for autonomous coding-agent teams (Claude, Codex, Antigravity).${colors.reset}`,
             '',
             `  ${colors.bold}To start work, describe your engineering objective:${colors.reset}`,
             `    ${colors.cyan}›${colors.reset} investigate why checkout charges twice`,
@@ -596,10 +595,8 @@ export class InteractiveShell {
           ].join('\n');
         }
         return [
-          `${colors.brand}╭── ✦ TaskForge Control Plane ───────────────────────────────────╮${colors.reset}`,
-          `${colors.brand}│${colors.reset}  Olá! Eu sou o TaskForge, control plane conversacional para    ${colors.brand}│${colors.reset}`,
-          `${colors.brand}│${colors.reset}  equipes de agentes autônomos (Claude, Codex, Antigravity).    ${colors.brand}│${colors.reset}`,
-          `${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}`,
+          `  ${colors.brand}✦ ${colors.bold}TaskForge Control Plane${colors.reset}`,
+          `  ${colors.dim}Control plane conversacional para equipes de agentes autônomos (Claude, Codex, Antigravity).${colors.reset}`,
           '',
           `  ${colors.bold}Para iniciar um trabalho, descreva seu objetivo em linguagem natural:${colors.reset}`,
           `    ${colors.cyan}›${colors.reset} investiga porque o checkout cobra duas vezes`,

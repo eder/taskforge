@@ -43,9 +43,8 @@ export function createCli(): Command {
       const repoRoot = process.cwd();
       const wtManager = new WorktreeManager(repoRoot);
       const count = await wtManager.cleanOrphanedWorktreesAndBranches();
-      console.log(`\n${colors.brand}╭── ✦ TaskForge Workspace Cleanup ──────────────────────────────╮${colors.reset}`);
-      console.log(`  ${colors.green}✔${colors.reset} Cleaned up ${count} temporary TaskForge branches and worktrees.`);
-      console.log(`${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`);
+      console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge Workspace Cleanup${colors.reset}`);
+      console.log(`  ${colors.green}✔${colors.reset} Cleaned up ${count} temporary TaskForge branches and worktrees.\n`);
     });
 
   // tf doctor
@@ -53,9 +52,8 @@ export function createCli(): Command {
     .command('doctor')
     .description('Run environment, provider and workspace diagnostic checks')
     .action(async () => {
-      console.log(`\n${colors.brand}╭── ✦ TaskForge Environment Doctor ──────────────────────────────╮${colors.reset}`);
-      console.log(`${colors.brand}│${colors.reset}  ${colors.dim}System and harness diagnostic verification${colors.reset}                   ${colors.brand}│${colors.reset}`);
-      console.log(`${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`);
+      console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge Environment Doctor${colors.reset}`);
+      console.log(`  ${colors.dim}System and harness diagnostic verification${colors.reset}\n`);
 
       // 1. Node check
       const nodeVer = process.version;

@@ -184,7 +184,7 @@ export const theme = {
       if (rest.includes('Assigned to')) {
         return `  ${colors.brand}✦${colors.reset} ${tid} ${colors.bold}${rest}${colors.reset}`;
       }
-      if (rest.includes('Created isolated worktree')) {
+      if (rest.includes('Created isolated worktree') || rest.includes('Created isolated read-only workspace')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.cyan}📁${colors.reset} ${colors.dim}${rest}${colors.reset}`;
       }
       if (rest.includes('executing...')) {
@@ -193,10 +193,13 @@ export const theme = {
       if (rest.includes('completed (status:')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.green}${rest}${colors.reset}`;
       }
+      if (rest.includes('Analysis report prepared')) {
+        return `  ${colors.gray}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.dim}${rest}${colors.reset}`;
+      }
       if (rest.includes('Running verification')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.yellow}🧪${colors.reset} ${rest}`;
       }
-      if (rest.includes('Verified successfully')) {
+      if (rest.includes('Verified successfully') || rest.includes('Verification checks completed')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.green}${colors.bold}${rest}${colors.reset}`;
       }
       if (rest.includes('Integrating commit')) {
@@ -206,22 +209,31 @@ export const theme = {
         return `  ${colors.brand}└─${colors.reset} ${colors.green}✔${colors.reset} ${colors.green}${colors.bold}${rest}${colors.reset}\n`;
       }
       if (rest.includes('Verification failed') || rest.includes('failed')) {
-        return `  ${colors.gray}│${colors.reset}  ${colors.red}✕${colors.reset} ${colors.red}${rest}${colors.reset}`;
+        return `  ${colors.brand}└─${colors.reset} ${colors.red}✕${colors.reset} ${colors.red}${rest}${colors.reset}\n`;
       }
       return `  ${colors.gray}│${colors.reset}  ${tid} ${rest}`;
     }
 
     if (msg.includes('Plan approved')) {
-      return `\n${colors.brand}╭── ✦ TaskForge Execution ───────────────────────────────────────╮${colors.reset}\n${colors.brand}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.bold}${msg}${colors.reset}`;
+      return `  ${colors.green}✔${colors.reset} ${colors.bold}${msg}${colors.reset}`;
     }
     if (msg.includes('Starting TaskForge orchestrator')) {
-      return `${colors.brand}│${colors.reset}  ${colors.cyan}ℹ${colors.reset} ${colors.dim}${msg}${colors.reset}`;
+      return `  ${colors.cyan}ℹ${colors.reset} ${colors.dim}${msg}${colors.reset}`;
+    }
+    if (msg.includes('Generating structured task graph')) {
+      return `  ${colors.cyan}⚙${colors.reset} ${colors.dim}${msg}${colors.reset}`;
+    }
+    if (msg.includes('Executing preflight contract negotiation')) {
+      return `  ${colors.cyan}⚙${colors.reset} ${colors.dim}${msg}${colors.reset}`;
+    }
+    if (msg.includes('Deterministic execution enabled') || msg.includes('FakeAgent fallback')) {
+      return `  ${colors.yellow}ℹ${colors.reset} ${colors.dim}${msg}${colors.reset}`;
     }
     if (msg.includes('Scheduling')) {
-      return `${colors.brand}│${colors.reset}  ${colors.brand}⚡${colors.reset} ${colors.bold}${msg}${colors.reset}\n${colors.brand}│${colors.reset}`;
+      return `  ${colors.brandLight}⚡${colors.reset} ${colors.bold}${msg}${colors.reset}\n`;
     }
     if (msg.includes('Run finished with status')) {
-      return `${colors.brand}╰─────────────────────────────────────────────────────────────────╯${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}${msg}${colors.reset}`;
+      return `\n  ${colors.green}✔${colors.reset} ${colors.bold}${msg}${colors.reset}\n`;
     }
 
     return `  ${colors.dim}[TaskForge]${colors.reset} ${msg}`;
