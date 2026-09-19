@@ -12,7 +12,7 @@ import {
   InteractionRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
-import { AgentRegistry, AgentDetector, FakeAgent } from '@taskforge/agents';
+import { AgentRegistry, AgentDetector, FakeAgent, AgentActivityTracker } from '@taskforge/agents';
 import { TaskGraph, Goal } from '@taskforge/core';
 import { HeuristicPlanner } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
@@ -36,6 +36,7 @@ export interface OrchestratorOptions {
   verificationRunner?: VerificationRunner;
   integrationService?: IntegrationService;
   interactionGateway?: InteractionGateway;
+  activityTracker?: AgentActivityTracker;
 }
 
 export interface RunOptions {
@@ -44,6 +45,7 @@ export interface RunOptions {
   fakeFallback?: boolean;
   onProgress?: (message: string) => void;
   abortSignal?: AbortSignal;
+  activityTracker?: AgentActivityTracker;
 }
 
 export interface OrchestrationResult {
@@ -84,9 +86,11 @@ export class RunOrchestrator {
   private workspaceRepo: WorkspaceRepository;
   private interactionRepo: InteractionRepository;
   private interactionGateway: InteractionGateway;
+  private activityTracker?: AgentActivityTracker;
 
   constructor(options: OrchestratorOptions) {
     this.repoRoot = options.repoRoot;
+    this.activityTracker = options.activityTracker;
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
 
@@ -264,6 +268,7 @@ export class RunOrchestrator {
       eventRepo: this.eventRepo,
       workspaceRepo: this.workspaceRepo,
       interactionGateway: this.interactionGateway,
+      activityTracker: options.activityTracker ?? this.activityTracker,
       onProgress: options.onProgress,
       abortSignal: options.abortSignal,
     });

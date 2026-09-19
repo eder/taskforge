@@ -3,7 +3,7 @@ import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
 import { TaskForgeConfig, loadConfig } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
-import { AgentRegistry, AgentDetector } from '@taskforge/agents';
+import { AgentRegistry, AgentDetector, AgentActivityTracker } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
 import { HeuristicPlanner } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
@@ -23,6 +23,8 @@ import { TuiDashboard } from './tui-dashboard.js';
 import { theme, colors } from './theme.js';
 import { TerminalViewport } from './terminal-viewport.js';
 import { SlashMenu } from './slash-menu.js';
+import { LiveTicker } from './live-ticker.js';
+import { StreamViewer } from './stream-viewer.js';
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -30,6 +32,8 @@ export interface ShellOptions {
   input?: Readable;
   output?: Writable;
   database?: TaskForgeDatabase;
+  activityTracker?: AgentActivityTracker;
+  asyncExecution?: boolean;
 }
 
 export function findWordLeft(text: string, pos: number): number {
@@ -69,6 +73,9 @@ export class InteractiveShell {
   private outStream: Writable;
   public viewport: TerminalViewport;
   public slashMenu: SlashMenu;
+  public activityTracker: AgentActivityTracker;
+  private tickerTimer?: NodeJS.Timeout;
+  private tickerFrameIndex = 0;
 
   constructor(private options: ShellOptions = {}) {
     this.repoRoot = options.repoRoot ?? process.cwd();
@@ -77,6 +84,7 @@ export class InteractiveShell {
       repoName: path.basename(this.repoRoot),
     });
     this.slashMenu = new SlashMenu(this.outStream);
+    this.activityTracker = options.activityTracker ?? new AgentActivityTracker();
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
     this.telemetry = new TelemetryCollector(this.db);
@@ -98,6 +106,42 @@ export class InteractiveShell {
       config: this.config,
       interactionRepo: this.interactionRepo,
     });
+    this.setupActivitySubscription();
+  }
+
+  private setupActivitySubscription(): void {
+    this.activityTracker.subscribe((active) => {
+      if (active.length > 0) {
+        if (!this.tickerTimer) {
+          this.tickerTimer = setInterval(() => {
+            this.tickerFrameIndex++;
+            this.renderActivityTicker();
+          }, 120);
+        }
+        this.renderActivityTicker();
+      } else {
+        if (this.tickerTimer) {
+          clearInterval(this.tickerTimer);
+          this.tickerTimer = undefined;
+        }
+        this.viewport.drawFooter('', []);
+      }
+    });
+  }
+
+  public renderActivityTicker(): void {
+    const active = this.activityTracker.getActive();
+    if (active.length === 0) {
+      this.viewport.drawFooter('', []);
+      return;
+    }
+    const lines = LiveTicker.render({
+      activeAgents: active,
+      registeredAgents: this.agentRegistry.list(),
+      frameIndex: this.tickerFrameIndex,
+      terminalCols: this.viewport.cols,
+    });
+    this.viewport.drawFooter('', lines);
   }
 
   async renderBanner(): Promise<string> {
@@ -361,6 +405,21 @@ export class InteractiveShell {
         return this.operator.formatResponse(intent, { pending });
       }
 
+      case 'stream_logs': {
+        const active = this.activityTracker.getActive();
+        if (active.length === 0) {
+          return 'No active agent tasks currently streaming. Describe a goal or run a task to start streaming.';
+        }
+        const target = intent.taskId
+          ? active.find((a) => a.taskId.toLowerCase() === intent.taskId!.toLowerCase()) ?? active[0]
+          : active[0];
+
+        return StreamViewer.getStreamSnapshot({
+          activeAgent: target,
+          allActive: active,
+        });
+      }
+
       case 'approve_plan': {
         // If there's an active interaction waiting for human approval, resolve it
         const pending = this.interactionGateway.getPendingRequests();
@@ -391,7 +450,61 @@ export class InteractiveShell {
           agentSelector: this.agentSelector,
           gitService: this.gitService,
           interactionGateway: this.interactionGateway,
+          activityTracker: this.activityTracker,
         });
+
+        const isBackground =
+          Boolean(this.options.asyncExecution) ||
+          text.includes('--bg') ||
+          text.includes('--async');
+
+        if (isBackground) {
+          const runId = `run-${Date.now()}`;
+          const graphToRun = this.currentGraph;
+          const goalDesc = this.lastGoalDescription ?? 'Approved execution';
+          this.activeRunId = runId;
+          this.currentGraph = undefined;
+
+          orchestrator
+            .run(goalDesc, {
+              preplannedGraph: graphToRun,
+              fakeFallback: isFakeRequested,
+              abortSignal,
+              activityTracker: this.activityTracker,
+              onProgress: (msg) => {
+                this.viewport.writeUpper(theme.formatProgressMessage(msg));
+              },
+            })
+            .then((result) => {
+              this.telemetry.recordRunMetrics({
+                runId: result.runId,
+                durationMs: result.durationMs,
+                tasksCount: result.tasksCompleted + result.tasksFailed,
+                tasksCompleted: result.tasksCompleted,
+                tasksFailed: result.tasksFailed,
+                reworkCount: 0,
+                escalationsCount: 0,
+              });
+              const statusBadge =
+                result.status === 'completed'
+                  ? `${colors.green}✔ Run ${result.runId} completed successfully!${colors.reset}`
+                  : `${colors.red}✕ Run ${result.runId} finished with status: ${result.status}${colors.reset}`;
+              this.viewport.writeUpper(
+                `\n  ${statusBadge} ${colors.dim}(${result.tasksCompleted} tasks completed, ${result.tasksFailed} failed in ${(result.durationMs / 1000).toFixed(1)}s)${colors.reset}\n`,
+              );
+            })
+            .catch((err) => {
+              this.viewport.writeUpper(
+                `\n  ${colors.red}✕ Run execution error:${colors.reset} ${err.message}\n`,
+              );
+            });
+
+          return [
+            `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}`,
+            `  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Execution running in background (Run: ${runId}).`,
+            `  ${colors.dim}REPL is active — submit new tasks to free agents, type /tasks, or /stream <task>.${colors.reset}\n`,
+          ].join('\n');
+        }
 
         try {
           const result = await orchestrator.run(
@@ -400,6 +513,7 @@ export class InteractiveShell {
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
               abortSignal,
+              activityTracker: this.activityTracker,
               onProgress: (msg) => {
                 this.viewport.writeUpper(theme.formatProgressMessage(msg));
               },
@@ -503,6 +617,7 @@ export class InteractiveShell {
           `    ${colors.brand}/tasks${colors.reset}    List active tasks in this run`,
           `    ${colors.brand}/plan${colors.reset}     View current task plan`,
           `    ${colors.brand}/pending${colors.reset}  View interactions awaiting approval`,
+          `    ${colors.brand}/stream${colors.reset}   Inspect real-time agent output stream`,
           `    ${colors.brand}/status${colors.reset}   Full TUI dashboard`,
           `    ${colors.brand}/cost${colors.reset}     Token cost and telemetry report`,
           `    ${colors.brand}/clean${colors.reset}    Clean temporary worktrees and branches`,
@@ -597,6 +712,10 @@ export class InteractiveShell {
       process.removeListener('SIGINT', cleanup);
       process.removeListener('exit', cleanup);
       this.slashMenu.close();
+      if (this.tickerTimer) {
+        clearInterval(this.tickerTimer);
+        this.tickerTimer = undefined;
+      }
       this.viewport.cleanup();
       inStream.removeListener('keypress', onKeypress);
       if (typeof inStreamAny.setRawMode === 'function') {
@@ -621,6 +740,16 @@ export class InteractiveShell {
 
     const onKeypress = (str: string | undefined, key: readline.Key | undefined) => {
       if (closed) return;
+
+      // Tab shortcut: auto-fill /stream if prompt is empty and agents are actively working
+      if (!this.slashMenu.isOpen && key?.name === 'tab' && buffer.trim().length === 0) {
+        if (this.activityTracker.getActive().length > 0) {
+          buffer = '/stream';
+          cursorIndex = buffer.length;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          return;
+        }
+      }
 
       // Ctrl+C: Cancel current running operation or exit safely
       if (key?.ctrl && key?.name === 'c') {
@@ -919,9 +1048,10 @@ export class InteractiveShell {
         if (reply) {
           this.viewport.writeUpper(`\n${reply}\n`);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!activeAbortController.signal.aborted) {
-          this.viewport.writeUpper(`\n${colors.red}Error: ${err?.message || err}${colors.reset}\n`);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          this.viewport.writeUpper(`\n${colors.red}Error: ${errMsg}${colors.reset}\n`);
         }
       } finally {
         isRunning = false;
