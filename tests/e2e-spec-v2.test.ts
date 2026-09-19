@@ -18,11 +18,7 @@ import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, FakeAgent } from '@taskforge/agents';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
-import {
-  PermissionEngine,
-  QuestionRouter,
-  InteractionGateway,
-} from '@taskforge/execution';
+import { PermissionEngine, QuestionRouter, InteractionGateway } from '@taskforge/execution';
 import { DeterministicScheduler } from '@taskforge/scheduler';
 import { InteractiveShell } from '@taskforge/conversation';
 import { getDefaultConfig } from '@taskforge/shared';
@@ -60,15 +56,33 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
       const engine = new PermissionEngine();
 
       // Filesystem
-      expect(engine.evaluate({ category: 'filesystem', operation: 'workspace_write' })).toBe('allow');
-      expect(engine.evaluate({ category: 'filesystem', operation: 'outside_workspace' })).toBe('ask_human');
-      expect(engine.evaluate({ category: 'filesystem', operation: 'delete_files' })).toBe('ask_human');
+      expect(engine.evaluate({ category: 'filesystem', operation: 'workspace_write' })).toBe(
+        'allow',
+      );
+      expect(engine.evaluate({ category: 'filesystem', operation: 'outside_workspace' })).toBe(
+        'ask_human',
+      );
+      expect(engine.evaluate({ category: 'filesystem', operation: 'delete_files' })).toBe(
+        'ask_human',
+      );
 
       // Commands
-      expect(engine.evaluate({ category: 'commands', operation: 'run tests', resource: 'npm test' })).toBe('allow');
-      expect(engine.evaluate({ category: 'commands', operation: 'lint', resource: 'eslint .' })).toBe('allow');
-      expect(engine.evaluate({ category: 'commands', operation: 'install', resource: 'pnpm add lodash' })).toBe('ask_human');
-      expect(engine.evaluate({ category: 'commands', operation: 'sudo', resource: 'sudo rm -rf /' })).toBe('deny');
+      expect(
+        engine.evaluate({ category: 'commands', operation: 'run tests', resource: 'npm test' }),
+      ).toBe('allow');
+      expect(
+        engine.evaluate({ category: 'commands', operation: 'lint', resource: 'eslint .' }),
+      ).toBe('allow');
+      expect(
+        engine.evaluate({
+          category: 'commands',
+          operation: 'install',
+          resource: 'pnpm add lodash',
+        }),
+      ).toBe('ask_human');
+      expect(
+        engine.evaluate({ category: 'commands', operation: 'sudo', resource: 'sudo rm -rf /' }),
+      ).toBe('deny');
 
       // Git
       expect(engine.evaluate({ category: 'git', operation: 'commit' })).toBe('allow');
@@ -79,14 +93,42 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
 
     it('respects recorded approvals with task and project scopes', () => {
       const engine = new PermissionEngine();
-      expect(engine.evaluate({ category: 'commands', operation: 'install', resource: 'axios', taskId: 'TASK-1' })).toBe('ask_human');
+      expect(
+        engine.evaluate({
+          category: 'commands',
+          operation: 'install',
+          resource: 'axios',
+          taskId: 'TASK-1',
+        }),
+      ).toBe('ask_human');
 
       engine.recordApproval('commands', 'axios', 'allow', 'task', 'TASK-1');
-      expect(engine.evaluate({ category: 'commands', operation: 'install', resource: 'axios', taskId: 'TASK-1' })).toBe('allow');
-      expect(engine.evaluate({ category: 'commands', operation: 'install', resource: 'axios', taskId: 'TASK-2' })).toBe('ask_human');
+      expect(
+        engine.evaluate({
+          category: 'commands',
+          operation: 'install',
+          resource: 'axios',
+          taskId: 'TASK-1',
+        }),
+      ).toBe('allow');
+      expect(
+        engine.evaluate({
+          category: 'commands',
+          operation: 'install',
+          resource: 'axios',
+          taskId: 'TASK-2',
+        }),
+      ).toBe('ask_human');
 
       engine.recordApproval('commands', 'axios', 'allow', 'project');
-      expect(engine.evaluate({ category: 'commands', operation: 'install', resource: 'axios', taskId: 'TASK-2' })).toBe('allow');
+      expect(
+        engine.evaluate({
+          category: 'commands',
+          operation: 'install',
+          resource: 'axios',
+          taskId: 'TASK-2',
+        }),
+      ).toBe('allow');
     });
   });
 
@@ -238,7 +280,13 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
         type: 'implementation',
         status: 'ready',
         dependencies: [],
-        contract: { objective: 'Task 1', allowedScope: ['*'], forbiddenChanges: [], acceptanceCriteria: [], dependencies: [] },
+        contract: {
+          objective: 'Task 1',
+          allowedScope: ['*'],
+          forbiddenChanges: [],
+          acceptanceCriteria: [],
+          dependencies: [],
+        },
         acceptanceCriteria: [],
         reworkCount: 0,
         createdAt: new Date(),
@@ -251,7 +299,13 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
         type: 'implementation',
         status: 'ready',
         dependencies: [],
-        contract: { objective: 'Task 2', allowedScope: ['*'], forbiddenChanges: [], acceptanceCriteria: [], dependencies: [] },
+        contract: {
+          objective: 'Task 2',
+          allowedScope: ['*'],
+          forbiddenChanges: [],
+          acceptanceCriteria: [],
+          dependencies: [],
+        },
         acceptanceCriteria: [],
         reworkCount: 0,
         createdAt: new Date(),
@@ -265,7 +319,13 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
 
       const worktreeManager = new WorktreeManager(testRepoRoot, config.execution.worktreesDir);
       const verificationRunner = new VerificationRunner(verificationRepo, eventRepo);
-      const integrationService = new IntegrationService(testRepoRoot, git, worktreeManager, verificationRunner, eventRepo);
+      const integrationService = new IntegrationService(
+        testRepoRoot,
+        git,
+        worktreeManager,
+        verificationRunner,
+        eventRepo,
+      );
 
       const scheduler = new DeterministicScheduler({
         runId,
@@ -365,7 +425,13 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
         type: 'implementation',
         status: 'ready',
         dependencies: [],
-        contract: { objective: 'Denied task', allowedScope: ['*'], forbiddenChanges: [], acceptanceCriteria: [], dependencies: [] },
+        contract: {
+          objective: 'Denied task',
+          allowedScope: ['*'],
+          forbiddenChanges: [],
+          acceptanceCriteria: [],
+          dependencies: [],
+        },
         acceptanceCriteria: [],
         reworkCount: 0,
         createdAt: new Date(),
@@ -377,7 +443,13 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
 
       const worktreeManager = new WorktreeManager(testRepoRoot, config.execution.worktreesDir);
       const verificationRunner = new VerificationRunner(verificationRepo, eventRepo);
-      const integrationService = new IntegrationService(testRepoRoot, git, worktreeManager, verificationRunner, eventRepo);
+      const integrationService = new IntegrationService(
+        testRepoRoot,
+        git,
+        worktreeManager,
+        verificationRunner,
+        eventRepo,
+      );
 
       const scheduler = new DeterministicScheduler({
         runId,

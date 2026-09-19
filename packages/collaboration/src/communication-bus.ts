@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  AgentMessage,
-  CollaborationLimitError,
-} from '@taskforge/shared';
+import { AgentMessage, CollaborationLimitError } from '@taskforge/shared';
 import { TaskForgeDatabase, EventRepository } from '@taskforge/persistence';
 import { AgentAdapter } from '@taskforge/agents';
 
@@ -75,7 +72,13 @@ export class CommunicationBus {
           'Collaborative task',
           'investigation',
           'running',
-          JSON.stringify({ objective: 'Collaborative work', allowedScope: ['*'], forbiddenChanges: [], acceptanceCriteria: [], dependencies: [] }),
+          JSON.stringify({
+            objective: 'Collaborative work',
+            allowedScope: ['*'],
+            forbiddenChanges: [],
+            acceptanceCriteria: [],
+            dependencies: [],
+          }),
           0,
           now,
           now,

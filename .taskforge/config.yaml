@@ -3,11 +3,11 @@
 
 # 1. Router Configuration (OpenAI Structured Outputs or Heuristic Fallback)
 router:
-  provider: openai                # 'openai' or 'static'
-  model: gpt-4o                   # Model name (e.g. gpt-4o, gpt-4o-mini, gpt-5.6-luna)
-  escalationModel: gpt-5.6-terra  # Escalation model for high uncertainty tasks
-  fallback: static                # Resilient fallback if OpenAI is unavailable
-  adaptive: false                 # Enable historical performance-based adaptive routing
+  provider: openai # 'openai' or 'static'
+  model: gpt-4o # Model name (e.g. gpt-4o, gpt-4o-mini, gpt-5.6-luna)
+  escalationModel: gpt-5.6-terra # Escalation model for high uncertainty tasks
+  fallback: static # Resilient fallback if OpenAI is unavailable
+  adaptive: false # Enable historical performance-based adaptive routing
 
 # 2. Execution Settings
 execution:
@@ -52,7 +52,7 @@ headless:
 
 # 6. Interaction Gateway & Human Timeouts
 interactions:
-  humanResponseTimeout: 1800000   # 30 minutes in milliseconds
+  humanResponseTimeout: 1800000 # 30 minutes in milliseconds
   onTimeout:
     permission: deny
     question: block

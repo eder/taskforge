@@ -102,28 +102,20 @@ describe('DeterministicScheduler Agent Failover', () => {
     const graph = new TaskGraph([task]);
 
     // Agent 1 always fails
-    const failingAgent = new FakeAgent(
-      'failing-codex',
-      'Failing Codex CLI',
-      [
-        {
-          shouldFail: true,
-          failMessage: 'You have hit your usage limit',
-        },
-      ],
-    );
+    const failingAgent = new FakeAgent('failing-codex', 'Failing Codex CLI', [
+      {
+        shouldFail: true,
+        failMessage: 'You have hit your usage limit',
+      },
+    ]);
 
     // Agent 2 succeeds
-    const healthyAgent = new FakeAgent(
-      'healthy-claude',
-      'Healthy Claude Code',
-      [
-        {
-          writeFile: { path: 'README.md', content: '# Updated by healthy agent\n' },
-          gitCommitMessage: 'feat: update readme',
-        },
-      ],
-    );
+    const healthyAgent = new FakeAgent('healthy-claude', 'Healthy Claude Code', [
+      {
+        writeFile: { path: 'README.md', content: '# Updated by healthy agent\n' },
+        gitCommitMessage: 'feat: update readme',
+      },
+    ]);
 
     const agentRegistry = new AgentRegistry();
     agentRegistry.register(failingAgent);

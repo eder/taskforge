@@ -97,9 +97,14 @@ export class IntegrationService {
     baseCommit: string,
   ): Promise<{ branchName: string; verified: boolean }> {
     const branchName = await this.initIntegrationBranch(runId, baseCommit);
-    const wt = await this.worktreeManager.createWorktree(`integration-${runId}`, 'main-worker', branchName, {
-      detached: true,
-    });
+    const wt = await this.worktreeManager.createWorktree(
+      `integration-${runId}`,
+      'main-worker',
+      branchName,
+      {
+        detached: true,
+      },
+    );
 
     try {
       let verified = true;
@@ -138,7 +143,9 @@ export class IntegrationService {
         verified,
       };
     } finally {
-      await this.worktreeManager.removeWorktree(`integration-${runId}`, 'main-worker', true, true).catch(() => {});
+      await this.worktreeManager
+        .removeWorktree(`integration-${runId}`, 'main-worker', true, true)
+        .catch(() => {});
     }
   }
 }

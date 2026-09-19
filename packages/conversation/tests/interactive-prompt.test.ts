@@ -10,17 +10,17 @@ describe('Interactive Terminal Prompt & REPL', () => {
       // At end of string (index 25)
       expect(findWordLeft(text, 25)).toBe(17); // starts of 'endpoint'
       expect(findWordLeft(text, 17)).toBe(12); // starts of 'auth'
-      expect(findWordLeft(text, 12)).toBe(7);  // starts of 'user'
-      expect(findWordLeft(text, 7)).toBe(0);   // starts of 'create'
+      expect(findWordLeft(text, 12)).toBe(7); // starts of 'user'
+      expect(findWordLeft(text, 7)).toBe(0); // starts of 'create'
       expect(findWordLeft(text, 0)).toBe(0);
     });
 
     it('moves forward across words correctly', () => {
       const text = 'create user auth endpoint';
-      expect(findWordRight(text, 0)).toBe(7);  // after 'create '
+      expect(findWordRight(text, 0)).toBe(7); // after 'create '
       expect(findWordRight(text, 7)).toBe(12); // after 'user '
-      expect(findWordRight(text, 12)).toBe(17);// after 'auth '
-      expect(findWordRight(text, 17)).toBe(25);// end of text
+      expect(findWordRight(text, 12)).toBe(17); // after 'auth '
+      expect(findWordRight(text, 17)).toBe(25); // end of text
       expect(findWordRight(text, 25)).toBe(25);
     });
   });

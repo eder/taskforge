@@ -1,9 +1,4 @@
-import {
-  AgentAssignment,
-  AgentCapabilities,
-  AgentContext,
-  AgentResult,
-} from '@taskforge/shared';
+import { AgentAssignment, AgentCapabilities, AgentContext, AgentResult } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import { GitService } from '@taskforge/workspace';
 import { AgentAdapter } from './adapter-interface.js';
@@ -23,7 +18,11 @@ export class DockerWorkerAdapter implements AgentAdapter {
   private image: string;
   private options: DockerWorkerOptions;
 
-  constructor(id: string = 'docker-worker', name: string = 'Docker Container Worker', options: DockerWorkerOptions = {}) {
+  constructor(
+    id: string = 'docker-worker',
+    name: string = 'Docker Container Worker',
+    options: DockerWorkerOptions = {},
+  ) {
     this.id = id;
     this.name = name;
     this.image = options.image ?? 'node:22-slim';
@@ -199,7 +198,9 @@ export class SshWorkerAdapter implements AgentAdapter {
       };
     }
 
-    const target = this.options.user ? `${this.options.user}@${this.options.host}` : this.options.host;
+    const target = this.options.user
+      ? `${this.options.user}@${this.options.host}`
+      : this.options.host;
     const sshArgs = [target];
     if (this.options.port) {
       sshArgs.push('-p', String(this.options.port));
@@ -220,7 +221,10 @@ export class SshWorkerAdapter implements AgentAdapter {
 
     return {
       success: result.exitCode === 0,
-      message: result.exitCode === 0 ? 'SSH remote worker completed successfully' : 'SSH remote worker execution failed',
+      message:
+        result.exitCode === 0
+          ? 'SSH remote worker completed successfully'
+          : 'SSH remote worker execution failed',
       output: result.stdout || result.stderr,
       durationMs: Date.now() - startTime,
     };

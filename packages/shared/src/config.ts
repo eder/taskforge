@@ -65,13 +65,11 @@ export const TaskForgeConfigSchema = z.object({
       maxMessagesPerRound: 6,
       maxRounds: 3,
     }),
-  agents: z
-    .record(AgentConfigSchema)
-    .default({
-      claude: { enabled: true, maxParallel: 1 },
-      codex: { enabled: true, maxParallel: 2 },
-      agy: { enabled: true, maxParallel: 1 },
-    }),
+  agents: z.record(AgentConfigSchema).default({
+    claude: { enabled: true, maxParallel: 1 },
+    codex: { enabled: true, maxParallel: 2 },
+    agy: { enabled: true, maxParallel: 1 },
+  }),
   verification: z
     .object({
       tests: z.boolean().default(true),
@@ -227,9 +225,12 @@ export function loadConfig(configPath?: string): TaskForgeConfig {
     const parsedYaml = yaml.parse(rawContent);
     return TaskForgeConfigSchema.parse(parsedYaml ?? {});
   } catch (error) {
-    throw new ConfigurationError(`Failed to load config from ${resolvedPath}: ${(error as Error).message}`, {
-      path: resolvedPath,
-      error,
-    });
+    throw new ConfigurationError(
+      `Failed to load config from ${resolvedPath}: ${(error as Error).message}`,
+      {
+        path: resolvedPath,
+        error,
+      },
+    );
   }
 }

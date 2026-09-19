@@ -470,7 +470,9 @@ export class AssignmentRepository {
   }
 
   listByTask(taskId: string): AssignmentRecord[] {
-    const rows = this.db.prepare('SELECT * FROM assignments WHERE task_id = ?').all(taskId) as Array<{
+    const rows = this.db
+      .prepare('SELECT * FROM assignments WHERE task_id = ?')
+      .all(taskId) as Array<{
       id: string;
       task_id: string;
       run_id: string;
@@ -544,12 +546,7 @@ export class ExecutionRepository {
     };
   }
 
-  complete(
-    id: string,
-    status: ExecutionStatus,
-    exitCode?: number,
-    errorMessage?: string,
-  ): void {
+  complete(id: string, status: ExecutionStatus, exitCode?: number, errorMessage?: string): void {
     const now = new Date().toISOString();
     this.db
       .prepare(
@@ -559,7 +556,9 @@ export class ExecutionRepository {
   }
 
   listByTask(taskId: string): ExecutionRecord[] {
-    const rows = this.db.prepare('SELECT * FROM executions WHERE task_id = ?').all(taskId) as Array<{
+    const rows = this.db
+      .prepare('SELECT * FROM executions WHERE task_id = ?')
+      .all(taskId) as Array<{
       id: string;
       run_id: string;
       task_id: string;
@@ -830,7 +829,11 @@ export class CostRepository {
     }));
   }
 
-  getTotalCostByRun(runId: string): { totalCostUsd: number; totalInputTokens: number; totalOutputTokens: number } {
+  getTotalCostByRun(runId: string): {
+    totalCostUsd: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+  } {
     const row = this.db
       .prepare(
         `SELECT
@@ -908,9 +911,7 @@ export class RunMetricsRepository {
   }
 
   getByRun(runId: string): RunMetricsRecord | undefined {
-    const r = this.db
-      .prepare('SELECT * FROM run_metrics WHERE run_id = ?')
-      .get(runId) as
+    const r = this.db.prepare('SELECT * FROM run_metrics WHERE run_id = ?').get(runId) as
       | {
           id: string;
           run_id: string;
@@ -974,4 +975,3 @@ export class RunMetricsRepository {
     }));
   }
 }
-

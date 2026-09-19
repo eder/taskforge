@@ -19,7 +19,12 @@ export type OperatorIntent =
   | { type: 'add_constraint'; constraint: string; readOnlyScope?: string }
   | { type: 'approve_plan' }
   | { type: 'reject_plan'; feedback?: string }
-  | { type: 'approve_interaction'; requestId?: string; scope?: InteractionScope; rawAnswer?: string }
+  | {
+      type: 'approve_interaction';
+      requestId?: string;
+      scope?: InteractionScope;
+      rawAnswer?: string;
+    }
   | { type: 'deny_interaction'; requestId?: string; reason?: string }
   | { type: 'inspect_pending_interactions' }
   | { type: 'submit_goal'; goal: string }
@@ -43,7 +48,8 @@ export class OperatorIntentParser {
     if (text.startsWith('/plan')) return { type: 'inspect_plan' };
     if (text.startsWith('/cost')) return { type: 'inspect_cost' };
     if (text.startsWith('/stats')) return { type: 'inspect_stats' };
-    if (text.startsWith('/dash') || text.startsWith('/graph') || text.startsWith('/status')) return { type: 'inspect_dashboard' };
+    if (text.startsWith('/dash') || text.startsWith('/graph') || text.startsWith('/status'))
+      return { type: 'inspect_dashboard' };
     if (text.startsWith('/pause')) return { type: 'pause_execution' };
     if (text.startsWith('/resume')) return { type: 'resume_execution' };
     if (text.startsWith('/pending')) return { type: 'inspect_pending_interactions' };
@@ -65,7 +71,8 @@ export class OperatorIntentParser {
       return { type: 'deny_interaction', requestId: parts[1], reason: parts.slice(2).join(' ') };
     }
 
-    if (text.startsWith('/reject')) return { type: 'reject_plan', feedback: text.replace('/reject', '').trim() };
+    if (text.startsWith('/reject'))
+      return { type: 'reject_plan', feedback: text.replace('/reject', '').trim() };
 
     if (text.startsWith('/reassign')) {
       const parts = text.split(/\s+/);
@@ -102,7 +109,11 @@ export class OperatorIntentParser {
       return { type: 'inspect_tasks' };
     }
 
-    if (lower.includes('quem está mexendo') || lower.includes('quem está trabalhando') || lower.includes('who is working on')) {
+    if (
+      lower.includes('quem está mexendo') ||
+      lower.includes('quem está trabalhando') ||
+      lower.includes('who is working on')
+    ) {
       const taskMatch = text.match(/(TASK-\d+)/i);
       return { type: 'inspect_tasks', taskId: taskMatch ? taskMatch[1].toUpperCase() : undefined };
     }
@@ -253,7 +264,9 @@ export class OperatorIntentParser {
     }
 
     // Read-only scope restriction (Spec Section 4.3 example)
-    const scopeMatch = text.match(/(?:não deixa ninguém (?:escrever|mexer) em|do not allow anyone to (?:write|touch|modify) in)\s+([\w\-./*]+)/i);
+    const scopeMatch = text.match(
+      /(?:não deixa ninguém (?:escrever|mexer) em|do not allow anyone to (?:write|touch|modify) in)\s+([\w\-./*]+)/i,
+    );
     if (scopeMatch) {
       return {
         type: 'add_constraint',
@@ -285,13 +298,33 @@ export class OperatorIntentParser {
       lower.includes('allow')
     ) {
       let scope: import('@taskforge/shared').InteractionScope = 'task';
-      if (lower.includes('só para essa task') || lower.includes('apenas nesta task') || lower.includes('nesta tarefa') || lower.includes('only for this task')) {
+      if (
+        lower.includes('só para essa task') ||
+        lower.includes('apenas nesta task') ||
+        lower.includes('nesta tarefa') ||
+        lower.includes('only for this task')
+      ) {
         scope = 'task';
-      } else if (lower.includes('sempre') || lower.includes('no projeto') || lower.includes('projeto todo') || lower.includes('whole project') || lower.includes('always')) {
+      } else if (
+        lower.includes('sempre') ||
+        lower.includes('no projeto') ||
+        lower.includes('projeto todo') ||
+        lower.includes('whole project') ||
+        lower.includes('always')
+      ) {
         scope = 'project';
-      } else if (lower.includes('nesta run') || lower.includes('nesta execução') || lower.includes('this run')) {
+      } else if (
+        lower.includes('nesta run') ||
+        lower.includes('nesta execução') ||
+        lower.includes('this run')
+      ) {
         scope = 'run';
-      } else if (lower.includes('uma vez') || lower.includes('só agora') || lower.includes('once') || lower.includes('just once')) {
+      } else if (
+        lower.includes('uma vez') ||
+        lower.includes('só agora') ||
+        lower.includes('once') ||
+        lower.includes('just once')
+      ) {
         scope = 'once';
       }
       return { type: 'approve_interaction', scope, rawAnswer: text };
@@ -347,7 +380,9 @@ export class OperatorAgent {
 
     switch (intent.type) {
       case 'inspect_tasks': {
-        const tasks = (state.tasks as Array<{ id: string; title: string; status: string; agent?: string }>) || [];
+        const tasks =
+          (state.tasks as Array<{ id: string; title: string; status: string; agent?: string }>) ||
+          [];
         if (tasks.length === 0) {
           return isEn ? 'No active tasks in this run.' : 'Nenhuma tarefa em execução no momento.';
         }
@@ -356,7 +391,8 @@ export class OperatorAgent {
         return [
           header,
           ...tasks.map(
-            (t) => `  ● ${t.id}: ${t.title} [${t.status.toUpperCase()}]${t.agent ? ` (${agentLabel}: ${t.agent})` : ''}`,
+            (t) =>
+              `  ● ${t.id}: ${t.title} [${t.status.toUpperCase()}]${t.agent ? ` (${agentLabel}: ${t.agent})` : ''}`,
           ),
         ].join('\n');
       }
@@ -422,14 +458,25 @@ export class OperatorAgent {
         return isEn ? 'Operation denied by operator.' : 'Operação negada pelo operador.';
 
       case 'inspect_pending_interactions': {
-        const pending = (state.pending as Array<{ id: string; agentId: string; prompt: string; resource?: string }>) || [];
+        const pending =
+          (state.pending as Array<{
+            id: string;
+            agentId: string;
+            prompt: string;
+            resource?: string;
+          }>) || [];
         if (pending.length === 0) {
-          return isEn ? 'No interactions pending human approval.' : 'Nenhuma interação pendente de aprovação humana.';
+          return isEn
+            ? 'No interactions pending human approval.'
+            : 'Nenhuma interação pendente de aprovação humana.';
         }
         if (isEn) {
           return [
             'Pending interactions awaiting approval:',
-            ...pending.map((p) => `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`),
+            ...pending.map(
+              (p) =>
+                `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`,
+            ),
             '',
             'To approve: type "y", "yes", /approve <id> [task|run|project] or respond naturally (e.g. "allow install for this task")',
             'To deny: type "n", "no" or /deny <id>',
@@ -437,7 +484,9 @@ export class OperatorAgent {
         }
         return [
           'Interações pendentes de aprovação:',
-          ...pending.map((p) => `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`),
+          ...pending.map(
+            (p) => `  ● [${p.id}] ${p.agentId}: ${p.prompt}${p.resource ? ` (${p.resource})` : ''}`,
+          ),
           '',
           'Para aprovar: digite "y", "yes", /approve <id> [task|run|project] ou responda naturalmente (ex: "pode instalar")',
           'Para negar: digite "n", "no" ou /deny <id>',

@@ -135,11 +135,9 @@ describe('Phases 20-22: Advanced UX (TUI), GitHub Workflow & Remote Workers', ()
       const runId = 'run-gh-test';
       const goalId = 'goal-gh-test';
 
-      db.prepare(`INSERT INTO runs (id, goal_id, status, created_at) VALUES (?, ?, 'completed', ?)`).run(
-        runId,
-        goalId,
-        new Date().toISOString(),
-      );
+      db.prepare(
+        `INSERT INTO runs (id, goal_id, status, created_at) VALUES (?, ?, 'completed', ?)`,
+      ).run(runId, goalId, new Date().toISOString());
 
       db.prepare(
         `INSERT INTO goals (id, description, repository, created_at) VALUES (?, 'Implement OAuth login', ?, ?)`,

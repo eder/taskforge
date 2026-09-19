@@ -4,7 +4,8 @@ export class StaticRoutingProvider implements RoutingProvider {
   readonly id = 'static';
 
   async route(input: RoutingInput): Promise<RoutingDecision> {
-    const desc = `${input.task.title} ${input.task.description} ${input.task.contract.objective}`.toLowerCase();
+    const desc =
+      `${input.task.title} ${input.task.description} ${input.task.contract.objective}`.toLowerCase();
 
     const isInvestigation =
       input.task.type === 'investigation' ||
@@ -58,7 +59,8 @@ export class StaticRoutingProvider implements RoutingProvider {
           initialAlignment: true,
           synthesisBeforeImplementation: true,
         },
-        reason: 'Task exhibits high uncertainty and potential financial or consistency risk: parallel investigation with multi-agent evidence synthesis selected.',
+        reason:
+          'Task exhibits high uncertainty and potential financial or consistency risk: parallel investigation with multi-agent evidence synthesis selected.',
       };
     }
 
@@ -79,7 +81,8 @@ export class StaticRoutingProvider implements RoutingProvider {
           {
             role: 'reviewer',
             requiredCapabilities: ['canRead'],
-            objective: 'Independent review of implementation against contract and security constraints',
+            objective:
+              'Independent review of implementation against contract and security constraints',
             preferredAgent: 'claude',
           },
         ],
@@ -112,7 +115,8 @@ export class StaticRoutingProvider implements RoutingProvider {
         initialAlignment: false,
         synthesisBeforeImplementation: false,
       },
-      reason: 'Straightforward engineering task with clear boundaries: minimum sufficient team is 1 worker.',
+      reason:
+        'Straightforward engineering task with clear boundaries: minimum sufficient team is 1 worker.',
     };
   }
 }

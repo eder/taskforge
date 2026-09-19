@@ -71,7 +71,9 @@ export class PerformanceEngine {
     const successes = rows.filter((r) => r.status === 'success' || r.exit_code === 0).length;
     const successRate = Number((successes / sampleSize).toFixed(3));
 
-    const firstPassCount = rows.filter((r) => r.rework_count === 0 && (r.status === 'success' || r.exit_code === 0)).length;
+    const firstPassCount = rows.filter(
+      (r) => r.rework_count === 0 && (r.status === 'success' || r.exit_code === 0),
+    ).length;
     const firstPassRate = Number((firstPassCount / sampleSize).toFixed(3));
 
     const totalDuration = rows.reduce((acc, r) => acc + (r.duration_ms ?? 0), 0);
@@ -84,20 +86,21 @@ export class PerformanceEngine {
     const reworkRate = Number((totalRework / sampleSize).toFixed(3));
 
     // Check escalations in event log
-    const escalationCount = (
-      this.db
-        .prepare(
-          `SELECT COUNT(*) as cnt FROM events
+    const escalationCount =
+      (
+        this.db
+          .prepare(
+            `SELECT COUNT(*) as cnt FROM events
            WHERE type = 'COLLABORATION_ESCALATED'
              AND json_extract(payload_json, '$.workerAgentId') = ?`,
-        )
-        .get(dimensions.agentId) as { cnt: number } | undefined
-    )?.cnt ?? 0;
+          )
+          .get(dimensions.agentId) as { cnt: number } | undefined
+      )?.cnt ?? 0;
 
     const escalationRate = Number((escalationCount / sampleSize).toFixed(3));
 
     // Quality score based on first pass rate and low rework
-    const qualityScore = Math.max(0, Math.min(1, firstPassRate - (reworkRate * 0.1)));
+    const qualityScore = Math.max(0, Math.min(1, firstPassRate - reworkRate * 0.1));
 
     // Composite score formula from Section 26.2:
     // score ≈ success_probability × quality_score - cost_penalty - latency_penalty - rework_penalty - coordination_penalty
@@ -106,7 +109,12 @@ export class PerformanceEngine {
     const reworkPenalty = Math.min(0.2, reworkRate * 0.1);
     const coordinationPenalty = Math.min(0.1, escalationRate * 0.05);
 
-    const rawScore = (successRate * qualityScore) - costPenalty - latencyPenalty - reworkPenalty - coordinationPenalty;
+    const rawScore =
+      successRate * qualityScore -
+      costPenalty -
+      latencyPenalty -
+      reworkPenalty -
+      coordinationPenalty;
     const compositeScore = Number(Math.max(0, Math.min(1, rawScore)).toFixed(3));
 
     return {

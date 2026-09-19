@@ -42,7 +42,11 @@ export class TaskTokenEstimator {
       contextMultiplier = 2.0;
       expectedOutputTokens = 1000;
     } else if (task.type === 'implementation') {
-      if (descLower.includes('refactor') || descLower.includes('migration') || descLower.includes('rewrite')) {
+      if (
+        descLower.includes('refactor') ||
+        descLower.includes('migration') ||
+        descLower.includes('rewrite')
+      ) {
         complexity = 'heavy';
         contextMultiplier = 6.0;
         expectedOutputTokens = 4000;

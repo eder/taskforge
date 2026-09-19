@@ -35,33 +35,49 @@ export class InteractionGateway {
   private pendingInteractions: Map<string, PendingPromise> = new Map();
   private listeners: Set<InteractionListener> = new Set();
 
-  constructor(options: {
-    config?: TaskForgeConfig;
-    permissionEngine?: PermissionEngine;
-    questionRouter?: QuestionRouter;
-    interactionRepo?: InteractionRepository;
-  } = {}) {
-    this.config = options.config ?? ({
-      permissions: {
-        filesystem: { workspace_write: 'allow', outside_workspace: 'ask_human', delete_files: 'ask_human' },
-        commands: { tests: 'allow', lint: 'allow', package_install: 'ask_human', network: 'ask_human', sudo: 'deny' },
-        git: { commit: 'allow', push: 'ask_human', force_push: 'deny', merge_main: 'deny' },
-        fallback: 'ask_human',
-      },
-      headless: {
-        onHumanQuestion: 'block',
-        onUnknownPermission: 'deny',
-        onAuthenticationRequired: 'fail',
-        onConfirmationRequired: 'block',
-      },
-      interactions: {
-        humanResponseTimeout: 1800000,
-        onTimeout: { permission: 'deny', question: 'block', confirmation: 'block' },
-      },
-    } as unknown as TaskForgeConfig);
+  constructor(
+    options: {
+      config?: TaskForgeConfig;
+      permissionEngine?: PermissionEngine;
+      questionRouter?: QuestionRouter;
+      interactionRepo?: InteractionRepository;
+    } = {},
+  ) {
+    this.config =
+      options.config ??
+      ({
+        permissions: {
+          filesystem: {
+            workspace_write: 'allow',
+            outside_workspace: 'ask_human',
+            delete_files: 'ask_human',
+          },
+          commands: {
+            tests: 'allow',
+            lint: 'allow',
+            package_install: 'ask_human',
+            network: 'ask_human',
+            sudo: 'deny',
+          },
+          git: { commit: 'allow', push: 'ask_human', force_push: 'deny', merge_main: 'deny' },
+          fallback: 'ask_human',
+        },
+        headless: {
+          onHumanQuestion: 'block',
+          onUnknownPermission: 'deny',
+          onAuthenticationRequired: 'fail',
+          onConfirmationRequired: 'block',
+        },
+        interactions: {
+          humanResponseTimeout: 1800000,
+          onTimeout: { permission: 'deny', question: 'block', confirmation: 'block' },
+        },
+      } as unknown as TaskForgeConfig);
 
     this.interactionRepo = options.interactionRepo;
-    this.permissionEngine = options.permissionEngine ?? new PermissionEngine(this.config.permissions, this.interactionRepo);
+    this.permissionEngine =
+      options.permissionEngine ??
+      new PermissionEngine(this.config.permissions, this.interactionRepo);
     this.questionRouter = options.questionRouter ?? new QuestionRouter(this.permissionEngine);
   }
 
@@ -75,7 +91,7 @@ export class InteractionGateway {
     session: AgentSession,
     ctx: InteractionHandlerContext,
   ): Promise<void> {
-    const isHeadless = ctx.isHeadless ?? (this.config.ui?.mode === 'headless');
+    const isHeadless = ctx.isHeadless ?? this.config.ui?.mode === 'headless';
 
     switch (event.type) {
       case 'permission_request': {
@@ -152,9 +168,10 @@ export class InteractionGateway {
             resource: event.resource,
             status: 'pending',
             priority: 'normal',
-            timeoutMs: typeof this.config.interactions.humanResponseTimeout === 'number'
-              ? this.config.interactions.humanResponseTimeout
-              : 1800000,
+            timeoutMs:
+              typeof this.config.interactions.humanResponseTimeout === 'number'
+                ? this.config.interactions.humanResponseTimeout
+                : 1800000,
             createdAt: new Date().toISOString(),
           },
           session,
@@ -249,9 +266,10 @@ export class InteractionGateway {
             prompt: event.prompt,
             status: 'pending',
             priority: 'normal',
-            timeoutMs: typeof this.config.interactions.humanResponseTimeout === 'number'
-              ? this.config.interactions.humanResponseTimeout
-              : 1800000,
+            timeoutMs:
+              typeof this.config.interactions.humanResponseTimeout === 'number'
+                ? this.config.interactions.humanResponseTimeout
+                : 1800000,
             createdAt: new Date().toISOString(),
           },
           session,

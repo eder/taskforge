@@ -5,7 +5,7 @@ export class CostEstimator {
     // Anthropic models ($ per 1M tokens)
     'claude-3-7-sonnet': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
     'claude-3-5-sonnet': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
-    'claude': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
+    claude: { inputPerMillion: 3.0, outputPerMillion: 15.0 },
     'claude-3-haiku': { inputPerMillion: 0.25, outputPerMillion: 1.25 },
 
     // OpenAI models ($ per 1M tokens)
@@ -13,13 +13,13 @@ export class CostEstimator {
     'gpt-4o-mini': { inputPerMillion: 0.15, outputPerMillion: 0.6 },
     'gpt-5.6-luna': { inputPerMillion: 2.0, outputPerMillion: 8.0 },
     'gpt-5.6-terra': { inputPerMillion: 5.0, outputPerMillion: 20.0 },
-    'codex': { inputPerMillion: 2.5, outputPerMillion: 10.0 },
+    codex: { inputPerMillion: 2.5, outputPerMillion: 10.0 },
 
     // Google models ($ per 1M tokens)
     'gemini-1.5-pro': { inputPerMillion: 1.25, outputPerMillion: 5.0 },
     'gemini-1.5-flash': { inputPerMillion: 0.075, outputPerMillion: 0.3 },
     'gemini-2.0-flash': { inputPerMillion: 0.1, outputPerMillion: 0.4 },
-    'gemini': { inputPerMillion: 1.25, outputPerMillion: 5.0 },
+    gemini: { inputPerMillion: 1.25, outputPerMillion: 5.0 },
 
     // Default fallback ($3 / $15)
     default: { inputPerMillion: 3.0, outputPerMillion: 15.0 },

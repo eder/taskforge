@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  StaticRoutingProvider,
-  OpenAIRoutingProvider,
-  AgentSelector,
-} from '../src/index.js';
+import { StaticRoutingProvider, OpenAIRoutingProvider, AgentSelector } from '../src/index.js';
 import { Task } from '@taskforge/core';
 import { AgentRegistry, FakeAgent } from '@taskforge/agents';
 
@@ -78,7 +74,11 @@ describe('Router and AgentSelector', () => {
 
     const selector = new AgentSelector(registry);
     const selected = await selector.selectAgents([
-      { role: 'researcher', requiredCapabilities: ['bash', 'file_editor'], objective: 'Research root cause' },
+      {
+        role: 'researcher',
+        requiredCapabilities: ['bash', 'file_editor'],
+        objective: 'Research root cause',
+      },
       { role: 'implementer', requiredCapabilities: ['file_editor', 'git'], objective: 'Fix bug' },
     ]);
 

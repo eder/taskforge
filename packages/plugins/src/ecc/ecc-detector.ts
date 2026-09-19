@@ -60,9 +60,7 @@ export class ECCDetector {
     if (fs.existsSync(rulesDir)) {
       try {
         const files = fs.readdirSync(rulesDir);
-        availableRules.push(
-          ...files.map((f) => f.replace(/\.(md|json|ya?ml)$/, '').toLowerCase()),
-        );
+        availableRules.push(...files.map((f) => f.replace(/\.(md|json|ya?ml)$/, '').toLowerCase()));
       } catch {
         // ignore read error
       }
@@ -83,7 +81,15 @@ export class ECCDetector {
 
     // Default ECC standard capabilities if minimal directory exists
     if (availableSkills.length === 0) {
-      availableSkills.push('auth/security', 'backend-patterns', 'tdd', 'code-review', 'frontend-patterns', 'kubernetes', 'ml');
+      availableSkills.push(
+        'auth/security',
+        'backend-patterns',
+        'tdd',
+        'code-review',
+        'frontend-patterns',
+        'kubernetes',
+        'ml',
+      );
     }
 
     return {

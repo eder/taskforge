@@ -108,7 +108,12 @@ export class InteractionRepository {
     return rows.map((r) => this.mapRequest(r));
   }
 
-  public findActiveApproval(category: string, resource: string, taskId?: string, runId?: string): InteractionResponse | undefined {
+  public findActiveApproval(
+    category: string,
+    resource: string,
+    taskId?: string,
+    runId?: string,
+  ): InteractionResponse | undefined {
     // Check if there is an approved interaction response with scope 'project', or 'run' for the same run, or 'task' for the same task
     const stmt = this.db.prepare(`
       SELECT r.*, req.category, req.resource, req.task_id, req.run_id

@@ -52,7 +52,9 @@ export class ECCPlugin implements TaskForgePlugin {
     const text = `${objective} ${type}`.toLowerCase();
     const selected: string[] = [];
 
-    const isSecurityOrAuth = /auth|security|oauth|jwt|login|credential|secret|token|password/.test(text);
+    const isSecurityOrAuth = /auth|security|oauth|jwt|login|credential|secret|token|password/.test(
+      text,
+    );
     const isBackend = /backend|api|server|database|sql|endpoint|route|service/.test(text);
     const isFrontend = /frontend|ui|component|css|html|react|vue|svelte/.test(text);
 
@@ -114,10 +116,7 @@ export class ECCPlugin implements TaskForgePlugin {
 
     return {
       ...ctx,
-      additionalInstructions: [
-        ...(ctx.additionalInstructions ?? []),
-        ...instructions,
-      ],
+      additionalInstructions: [...(ctx.additionalInstructions ?? []), ...instructions],
     };
   }
 

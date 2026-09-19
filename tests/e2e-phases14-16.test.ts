@@ -3,7 +3,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
-import { AgentRegistry, FakeAgent, ClaudeCodeAdapter, CodexAdapter, AntigravityAdapter } from '@taskforge/agents';
+import {
+  AgentRegistry,
+  FakeAgent,
+  ClaudeCodeAdapter,
+  CodexAdapter,
+  AntigravityAdapter,
+} from '@taskforge/agents';
 import { RunOrchestrator } from '@taskforge/scheduler';
 import { PluginManager, ECCPlugin } from '@taskforge/plugins';
 import { getDefaultConfig, TaskForgeConfig } from '@taskforge/shared';

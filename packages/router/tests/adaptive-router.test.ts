@@ -1,11 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TaskForgeDatabase } from '@taskforge/persistence';
 import { PerformanceEngine } from '@taskforge/telemetry';
-import {
-  AdaptiveRoutingProvider,
-  StaticRoutingProvider,
-  RoutingInput,
-} from '../src/index.js';
+import { AdaptiveRoutingProvider, StaticRoutingProvider, RoutingInput } from '../src/index.js';
 import { Task } from '@taskforge/core';
 
 describe('Phase 19: Adaptive Routing Provider', () => {

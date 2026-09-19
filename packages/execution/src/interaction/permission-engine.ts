@@ -1,8 +1,4 @@
-import {
-  PermissionDecision,
-  InteractionScope,
-  TaskForgeConfig,
-} from '@taskforge/shared';
+import { PermissionDecision, InteractionScope, TaskForgeConfig } from '@taskforge/shared';
 import { InteractionRepository } from '@taskforge/persistence';
 
 export interface PermissionEvaluationContext {
@@ -16,12 +12,12 @@ export interface PermissionEvaluationContext {
 export class PermissionEngine {
   private config: TaskForgeConfig['permissions'];
   private interactionRepo?: InteractionRepository;
-  private inMemoryApprovals: Map<string, { decision: PermissionDecision; scope: InteractionScope; taskId?: string; runId?: string }> = new Map();
+  private inMemoryApprovals: Map<
+    string,
+    { decision: PermissionDecision; scope: InteractionScope; taskId?: string; runId?: string }
+  > = new Map();
 
-  constructor(
-    config?: TaskForgeConfig['permissions'],
-    interactionRepo?: InteractionRepository,
-  ) {
+  constructor(config?: TaskForgeConfig['permissions'], interactionRepo?: InteractionRepository) {
     this.config = config ?? {
       filesystem: {
         workspace_write: 'allow',
@@ -61,8 +57,10 @@ export class PermissionEngine {
       const memApproval = this.inMemoryApprovals.get(memKey);
       if (memApproval) {
         if (memApproval.scope === 'project') return memApproval.decision;
-        if (memApproval.scope === 'run' && runId && memApproval.runId === runId) return memApproval.decision;
-        if (memApproval.scope === 'task' && taskId && memApproval.taskId === taskId) return memApproval.decision;
+        if (memApproval.scope === 'run' && runId && memApproval.runId === runId)
+          return memApproval.decision;
+        if (memApproval.scope === 'task' && taskId && memApproval.taskId === taskId)
+          return memApproval.decision;
       }
     }
 
@@ -75,7 +73,12 @@ export class PermissionEngine {
       if (op === 'outside_workspace' || op.includes('outside') || op.includes('write_outside')) {
         return this.config.filesystem.outside_workspace;
       }
-      if (op === 'delete_files' || op.includes('delete') || op.includes('unlink') || op.includes('remove')) {
+      if (
+        op === 'delete_files' ||
+        op.includes('delete') ||
+        op.includes('unlink') ||
+        op.includes('remove')
+      ) {
         return this.config.filesystem.delete_files;
       }
       return this.config.fallback;
@@ -86,16 +89,38 @@ export class PermissionEngine {
       if (cmd.includes('sudo') || cmd.includes('doas') || cmd.includes('su -')) {
         return this.config.commands.sudo;
       }
-      if (cmd.includes('test') || cmd.includes('vitest') || cmd.includes('jest') || cmd.includes('pytest')) {
+      if (
+        cmd.includes('test') ||
+        cmd.includes('vitest') ||
+        cmd.includes('jest') ||
+        cmd.includes('pytest')
+      ) {
         return this.config.commands.tests;
       }
-      if (cmd.includes('lint') || cmd.includes('eslint') || cmd.includes('prettier') || cmd.includes('typecheck')) {
+      if (
+        cmd.includes('lint') ||
+        cmd.includes('eslint') ||
+        cmd.includes('prettier') ||
+        cmd.includes('typecheck')
+      ) {
         return this.config.commands.lint;
       }
-      if (cmd.includes('install') || cmd.includes('add') || cmd.includes('pnpm add') || cmd.includes('npm i') || cmd.includes('pip install')) {
+      if (
+        cmd.includes('install') ||
+        cmd.includes('add') ||
+        cmd.includes('pnpm add') ||
+        cmd.includes('npm i') ||
+        cmd.includes('pip install')
+      ) {
         return this.config.commands.package_install;
       }
-      if (cmd.includes('curl') || cmd.includes('wget') || cmd.includes('http') || cmd.includes('fetch') || cmd.includes('ping')) {
+      if (
+        cmd.includes('curl') ||
+        cmd.includes('wget') ||
+        cmd.includes('http') ||
+        cmd.includes('fetch') ||
+        cmd.includes('ping')
+      ) {
         return this.config.commands.network;
       }
       return this.config.fallback;
@@ -106,7 +131,10 @@ export class PermissionEngine {
       if (op.includes('force') || (resource && resource.includes('--force'))) {
         return this.config.git.force_push;
       }
-      if (op.includes('merge') && (op.includes('main') || (resource && resource.includes('main')))) {
+      if (
+        op.includes('merge') &&
+        (op.includes('main') || (resource && resource.includes('main')))
+      ) {
         return this.config.git.merge_main;
       }
       if (op.includes('commit')) {

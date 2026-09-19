@@ -30,10 +30,7 @@ import {
   EscalationHandler,
 } from '@taskforge/collaboration';
 import { InteractiveShell } from '@taskforge/conversation';
-import {
-  TaskForgeConfig,
-  TaskPreflightResult,
-} from '@taskforge/shared';
+import { TaskForgeConfig, TaskPreflightResult } from '@taskforge/shared';
 
 describe('TaskForge Phases 6-13 End-to-End Orchestration', () => {
   let testDir: string;
@@ -316,21 +313,30 @@ describe('TaskForge Phases 6-13 End-to-End Orchestration', () => {
     // Create 3 parallel investigator fake agents and 1 implementer
     const inv1 = new FakeAgent('fake-investigator-1', 'Log Investigator', [
       {
-        writeFile: { path: 'findings/logs.txt', content: 'Logs confirm deadlock on transaction lock A\n' },
+        writeFile: {
+          path: 'findings/logs.txt',
+          content: 'Logs confirm deadlock on transaction lock A\n',
+        },
         gitCommitMessage: 'feat: log investigation findings',
       },
     ]);
 
     const inv2 = new FakeAgent('fake-investigator-2', 'Code Profiler', [
       {
-        writeFile: { path: 'findings/profile.txt', content: 'Contention on mutex in scheduler.ts:140\n' },
+        writeFile: {
+          path: 'findings/profile.txt',
+          content: 'Contention on mutex in scheduler.ts:140\n',
+        },
         gitCommitMessage: 'feat: profiling findings',
       },
     ]);
 
     const inv3 = new FakeAgent('fake-investigator-3', 'Repro Engineer', [
       {
-        writeFile: { path: 'findings/repro.txt', content: 'Reproduction script passes 100 concurrent workers\n' },
+        writeFile: {
+          path: 'findings/repro.txt',
+          content: 'Reproduction script passes 100 concurrent workers\n',
+        },
         gitCommitMessage: 'feat: reproduction script',
       },
     ]);
@@ -622,7 +628,10 @@ describe('TaskForge Phases 6-13 End-to-End Orchestration', () => {
     const escalationEvent = events.find((e) => e.type === 'COLLABORATION_ESCALATED');
     expect(escalationEvent).toBeDefined();
     expect(escalationEvent?.payload.initiator).toBe('fake-escalator');
-    expect(escalationEvent?.payload.requestedRoles).toEqual(['researcher', 'architecture_reviewer']);
+    expect(escalationEvent?.payload.requestedRoles).toEqual([
+      'researcher',
+      'architecture_reviewer',
+    ]);
     expect(escalationEvent?.payload.urgency).toBe('high');
   });
 });

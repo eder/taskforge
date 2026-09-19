@@ -1,10 +1,6 @@
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import {
-  AgentAssignment,
-  AgentUnavailableError,
-  TaskForgeConfig,
-} from '@taskforge/shared';
+import { AgentAssignment, AgentUnavailableError, TaskForgeConfig } from '@taskforge/shared';
 import { TaskGraph, Task } from '@taskforge/core';
 import { AgentRegistry } from '@taskforge/agents';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
@@ -83,7 +79,11 @@ export class DeterministicScheduler {
       }
     }
     const configuredAgent = this.ctx.config.planner.agent;
-    if (configuredAgent && this.ctx.agentRegistry.get(configuredAgent) && !failed.has(configuredAgent)) {
+    if (
+      configuredAgent &&
+      this.ctx.agentRegistry.get(configuredAgent) &&
+      !failed.has(configuredAgent)
+    ) {
       return configuredAgent;
     }
     const registered = this.ctx.agentRegistry.list();
@@ -138,11 +138,10 @@ export class DeterministicScheduler {
         if (this.concurrency.canSchedule(agentId)) {
           this.concurrency.acquire(task.id, agentId);
 
-          const taskPromise = this.executeTask(task, agentId)
-            .finally(() => {
-              this.concurrency.release(task.id, agentId);
-              runningPromises.delete(task.id);
-            });
+          const taskPromise = this.executeTask(task, agentId).finally(() => {
+            this.concurrency.release(task.id, agentId);
+            runningPromises.delete(task.id);
+          });
 
           runningPromises.set(task.id, taskPromise);
         }
@@ -166,7 +165,8 @@ export class DeterministicScheduler {
     const tasksCompleted = tasks.filter((t) => t.status === 'integrated').length;
     const tasksFailed = tasks.filter((t) => t.status === 'failed' || t.status === 'blocked').length;
 
-    let status: 'completed' | 'failed' = tasksFailed === 0 && graph.isAllCompleted() ? 'completed' : 'failed';
+    let status: 'completed' | 'failed' =
+      tasksFailed === 0 && graph.isAllCompleted() ? 'completed' : 'failed';
     let integrationBranch: string | undefined;
     let errorMessage: string | undefined;
 
@@ -353,7 +353,9 @@ export class DeterministicScheduler {
     taskRepo.updateStatus(task.id, 'running');
     const previousFailures = this.failedAgentsByTask.get(task.id);
     if (previousFailures && previousFailures.size > 0) {
-      this.ctx.onProgress?.(`[${task.id}] ↻ Failover reassigned to alternative agent ${agent.name}`);
+      this.ctx.onProgress?.(
+        `[${task.id}] ↻ Failover reassigned to alternative agent ${agent.name}`,
+      );
     }
     this.ctx.onProgress?.(`[${task.id}] Agent ${agent.name} executing...`);
 
@@ -478,7 +480,12 @@ export class DeterministicScheduler {
             .split('\n')
             .map((l) => l.trim())
             .filter(Boolean)
-            .find((l) => l.toLowerCase().includes('error') || l.toLowerCase().includes('limit') || l.toLowerCase().includes('failed')) || agentResult.message
+            .find(
+              (l) =>
+                l.toLowerCase().includes('error') ||
+                l.toLowerCase().includes('limit') ||
+                l.toLowerCase().includes('failed'),
+            ) || agentResult.message
         : agentResult.message;
 
       this.ctx.onProgress?.(
@@ -518,8 +525,14 @@ export class DeterministicScheduler {
       `[${task.id}] Agent ${agent.name} completed (status: ${agentResult.success ? 'success' : 'failed'} in ${(agentResult.durationMs / 1000).toFixed(1)}s)`,
     );
 
-    if (task.type === 'investigation' && agentResult.output && agentResult.output.trim().length > 0) {
-      this.ctx.onProgress?.(`[${task.id}] Analysis report prepared (${agentResult.output.trim().length} chars) ✓`);
+    if (
+      task.type === 'investigation' &&
+      agentResult.output &&
+      agentResult.output.trim().length > 0
+    ) {
+      this.ctx.onProgress?.(
+        `[${task.id}] Analysis report prepared (${agentResult.output.trim().length} chars) ✓`,
+      );
     }
 
     eventRepo.append({
@@ -572,7 +585,9 @@ export class DeterministicScheduler {
 
     // 5. Integration: cherry-pick task commit into run integration branch
     if (agentResult.commitHash && agentResult.commitHash !== baseCommit) {
-      this.ctx.onProgress?.(`[${task.id}] Integrating commit ${agentResult.commitHash.slice(0, 7)}...`);
+      this.ctx.onProgress?.(
+        `[${task.id}] Integrating commit ${agentResult.commitHash.slice(0, 7)}...`,
+      );
       await integrationService.integrateTaskCommit({
         runId,
         taskId: task.id,

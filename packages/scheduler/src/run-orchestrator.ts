@@ -108,13 +108,15 @@ export class RunOrchestrator {
 
     this.agentRegistry = options.agentRegistry ?? new AgentRegistry();
     this.planner = options.planner ?? new HeuristicPlanner();
-    this.negotiator = options.negotiator ?? new NegotiationManager(undefined, this.eventRepo, this.db);
+    this.negotiator =
+      options.negotiator ?? new NegotiationManager(undefined, this.eventRepo, this.db);
     this.router = options.router ?? new StaticRoutingProvider();
     this.agentSelector = options.agentSelector ?? new AgentSelector(this.agentRegistry);
 
     this.gitService = options.gitService ?? new GitService(this.repoRoot);
     this.worktreeManager =
-      options.worktreeManager ?? new WorktreeManager(this.repoRoot, this.config.execution.worktreesDir);
+      options.worktreeManager ??
+      new WorktreeManager(this.repoRoot, this.config.execution.worktreesDir);
     this.verificationRunner =
       options.verificationRunner ?? new VerificationRunner(this.verificationRepo, this.eventRepo);
     this.integrationService =
@@ -190,7 +192,9 @@ export class RunOrchestrator {
       if (options.fakeFallback) {
         options.onProgress?.('Deterministic execution enabled with FakeAgent.');
       } else {
-        options.onProgress?.('No real CLI harnesses detected; registering deterministic FakeAgent fallback.');
+        options.onProgress?.(
+          'No real CLI harnesses detected; registering deterministic FakeAgent fallback.',
+        );
       }
       this.config.verification.tests = false;
       this.config.verification.lint = false;
@@ -214,7 +218,9 @@ export class RunOrchestrator {
     const preferredAgentMapping: Record<string, string> = {};
     const fallbackAgent =
       this.agentRegistry.get('fake-agent') ??
-      this.agentRegistry.list().find((a) => a instanceof FakeAgent || a.id.includes('fake') || a.id.includes('test'));
+      this.agentRegistry
+        .list()
+        .find((a) => a instanceof FakeAgent || a.id.includes('fake') || a.id.includes('test'));
 
     for (const task of graph.getAllTasks()) {
       if (options.fakeFallback && fallbackAgent) {

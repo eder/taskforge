@@ -9,20 +9,64 @@ export interface SlashCommandItem {
 
 export const SLASH_COMMANDS: SlashCommandItem[] = [
   { cmd: '/exit', descEn: 'Exit interactive session', descPt: 'Sair da sessão interativa' },
-  { cmd: '/help', descEn: 'Display command reference and guide', descPt: 'Exibir comandos disponíveis e ajuda' },
-  { cmd: '/plan', descEn: 'Inspect current proposed or active plan', descPt: 'Ver plano atual proposto ou ativo' },
-  { cmd: '/tasks', descEn: 'List status of all tasks in current run', descPt: 'Listar tarefas da execução atual' },
+  {
+    cmd: '/help',
+    descEn: 'Display command reference and guide',
+    descPt: 'Exibir comandos disponíveis e ajuda',
+  },
+  {
+    cmd: '/plan',
+    descEn: 'Inspect current proposed or active plan',
+    descPt: 'Ver plano atual proposto ou ativo',
+  },
+  {
+    cmd: '/tasks',
+    descEn: 'List status of all tasks in current run',
+    descPt: 'Listar tarefas da execução atual',
+  },
   { cmd: '/status', descEn: 'Open full TUI dashboard', descPt: 'Abrir painel TUI completo' },
-  { cmd: '/agents', descEn: 'Inspect detected AI agent harnesses', descPt: 'Inspecionar agentes de IA detectados' },
-  { cmd: '/cost', descEn: 'Show tokens and financial cost report', descPt: 'Exibir relatório de tokens e custos' },
+  {
+    cmd: '/agents',
+    descEn: 'Inspect detected AI agent harnesses',
+    descPt: 'Inspecionar agentes de IA detectados',
+  },
+  {
+    cmd: '/cost',
+    descEn: 'Show tokens and financial cost report',
+    descPt: 'Exibir relatório de tokens e custos',
+  },
   { cmd: '/stats', descEn: 'Show run execution metrics', descPt: 'Exibir métricas da execução' },
-  { cmd: '/clean', descEn: 'Clean temporary worktrees and branches', descPt: 'Limpar worktrees e branches temporárias' },
-  { cmd: '/pending', descEn: 'View interactions awaiting approval', descPt: 'Ver interações aguardando aprovação' },
-  { cmd: '/approve', descEn: 'Approve plan or pending interaction', descPt: 'Aprovar plano ou interação pendente' },
+  {
+    cmd: '/clean',
+    descEn: 'Clean temporary worktrees and branches',
+    descPt: 'Limpar worktrees e branches temporárias',
+  },
+  {
+    cmd: '/pending',
+    descEn: 'View interactions awaiting approval',
+    descPt: 'Ver interações aguardando aprovação',
+  },
+  {
+    cmd: '/approve',
+    descEn: 'Approve plan or pending interaction',
+    descPt: 'Aprovar plano ou interação pendente',
+  },
   { cmd: '/deny', descEn: 'Deny pending interaction', descPt: 'Recusar interação pendente' },
-  { cmd: '/reject', descEn: 'Reject current plan with feedback', descPt: 'Rejeitar plano atual com feedback' },
-  { cmd: '/reassign', descEn: 'Reassign task to another agent', descPt: 'Reatribuir tarefa para outro agente' },
-  { cmd: '/pause', descEn: 'Pause orchestrator execution', descPt: 'Pausar execução do orquestrador' },
+  {
+    cmd: '/reject',
+    descEn: 'Reject current plan with feedback',
+    descPt: 'Rejeitar plano atual com feedback',
+  },
+  {
+    cmd: '/reassign',
+    descEn: 'Reassign task to another agent',
+    descPt: 'Reatribuir tarefa para outro agente',
+  },
+  {
+    cmd: '/pause',
+    descEn: 'Pause orchestrator execution',
+    descPt: 'Pausar execução do orquestrador',
+  },
   { cmd: '/resume', descEn: 'Resume paused execution', descPt: 'Retomar execução pausada' },
 ];
 
@@ -82,7 +126,12 @@ export class SlashMenu {
 
     // Autocomplete unique match when user typed more than just "/" and did not press backspace
     let autoCompleted: string | undefined;
-    if (!isBackspace && this.matches.length === 1 && line.length > 1 && line !== this.matches[0].cmd) {
+    if (
+      !isBackspace &&
+      this.matches.length === 1 &&
+      line.length > 1 &&
+      line !== this.matches[0].cmd
+    ) {
       autoCompleted = this.matches[0].cmd;
     }
 

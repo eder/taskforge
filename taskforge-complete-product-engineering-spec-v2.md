@@ -132,13 +132,13 @@ Every important task gets a contract: objective, allowed scope, forbidden scope,
 
 ```ts
 type TaskPreflightDecision =
-  | "accept"
-  | "challenge"
-  | "need_context"
-  | "need_dependency"
-  | "recommend_collaboration"
-  | "recommend_split"
-  | "recommend_merge";
+  | 'accept'
+  | 'challenge'
+  | 'need_context'
+  | 'need_dependency'
+  | 'recommend_collaboration'
+  | 'recommend_split'
+  | 'recommend_merge';
 ```
 
 Lifecycle:
@@ -155,14 +155,14 @@ It considers complexity, uncertainty, risk, change surface, dependencies, valida
 
 ```ts
 type CollaborationMode =
-  | "single"
-  | "pair"
-  | "parallel"
-  | "partitioned"
-  | "competitive"
-  | "review"
-  | "collaborative"
-  | "swarm";
+  | 'single'
+  | 'pair'
+  | 'parallel'
+  | 'partitioned'
+  | 'competitive'
+  | 'review'
+  | 'collaborative'
+  | 'swarm';
 ```
 
 Use OpenAI Responses API strict JSON-schema output. Example current configuration:
@@ -426,32 +426,32 @@ Do not introduce LangChain, CrewAI, Temporal, Kafka, Redis, PostgreSQL or Kubern
 
 ## Roadmap
 
-| Phase | Milestone |
-|---:|---|
-| 0 | Foundation |
-| 1 | Runtime event + Interaction Gateway primitives |
-| 2 | Process + real agent adapters |
-| 3 | Git workspace isolation |
-| 4 | Core task/DAG state |
-| 5 | Deterministic scheduler |
-| 6 | Verification/integration |
-| 7 | Interactive shell + human interaction UX |
-| 8 | Operator Agent |
-| 9 | Planner |
-| 10 | Task Contract + Preflight / negotiation |
-| 11 | OpenAI Router + static fallback |
-| 12 | Agent Selector |
-| 13 | Agent Communication Bus |
-| 14 | Collaborative Execution / AssignmentGraph |
-| 15 | Real-agent E2E v0.1 |
-| 16 | Plugin SDK |
-| 17 | ECC plugin |
-| 18 | Telemetry |
-| 19 | Performance engine |
-| 20 | Adaptive routing |
-| 21 | Advanced TUI/UX |
-| 22 | GitHub workflow |
-| 23 | Remote workers |
+| Phase | Milestone                                      |
+| ----: | ---------------------------------------------- |
+|     0 | Foundation                                     |
+|     1 | Runtime event + Interaction Gateway primitives |
+|     2 | Process + real agent adapters                  |
+|     3 | Git workspace isolation                        |
+|     4 | Core task/DAG state                            |
+|     5 | Deterministic scheduler                        |
+|     6 | Verification/integration                       |
+|     7 | Interactive shell + human interaction UX       |
+|     8 | Operator Agent                                 |
+|     9 | Planner                                        |
+|    10 | Task Contract + Preflight / negotiation        |
+|    11 | OpenAI Router + static fallback                |
+|    12 | Agent Selector                                 |
+|    13 | Agent Communication Bus                        |
+|    14 | Collaborative Execution / AssignmentGraph      |
+|    15 | Real-agent E2E v0.1                            |
+|    16 | Plugin SDK                                     |
+|    17 | ECC plugin                                     |
+|    18 | Telemetry                                      |
+|    19 | Performance engine                             |
+|    20 | Adaptive routing                               |
+|    21 | Advanced TUI/UX                                |
+|    22 | GitHub workflow                                |
+|    23 | Remote workers                                 |
 
 ---
 

@@ -41,9 +41,7 @@ export class AgentQuotaTracker {
       lower.includes('resource_exhausted');
 
     const isRateLimit =
-      lower.includes('rate limit') ||
-      lower.includes('too many requests') ||
-      lower.includes('429');
+      lower.includes('rate limit') || lower.includes('too many requests') || lower.includes('429');
 
     if (!isUsageLimit && !isRateLimit) {
       return false;
@@ -95,7 +93,12 @@ export class AgentQuotaTracker {
     this.records.delete(agentId);
   }
 
-  setManualStatus(agentId: string, status: AgentQuotaStatus, reason?: string, cooldownMinutes = 15): void {
+  setManualStatus(
+    agentId: string,
+    status: AgentQuotaStatus,
+    reason?: string,
+    cooldownMinutes = 15,
+  ): void {
     if (status === 'ready' || status === 'not_installed') {
       this.records.delete(agentId);
       return;

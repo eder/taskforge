@@ -3,7 +3,11 @@ import { TaskGraph } from '../src/task-graph.js';
 import { Task, TaskStateMachine } from '../src/models.js';
 import { InvalidTaskGraphError } from '@taskforge/shared';
 
-function createMockTask(id: string, dependencies: string[] = [], status: TaskStatus = 'accepted'): Task {
+function createMockTask(
+  id: string,
+  dependencies: string[] = [],
+  status: TaskStatus = 'accepted',
+): Task {
   return {
     id,
     goalId: 'goal-1',

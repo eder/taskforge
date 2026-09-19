@@ -50,23 +50,133 @@ export function isPortugueseText(text: string): boolean {
   }
 
   const ptWords = [
-    'criar', 'cria', 'fazer', 'faça', 'investigar', 'investiga', 'explicar', 'explique',
-    'analisar', 'analise', 'porque', 'não', 'nao', 'sim', 'da', 'das', 'dos', 'em', 'na',
-    'nos', 'nas', 'um', 'uma', 'uns', 'umas', 'que', 'com', 'por', 'tarefa', 'tarefas',
-    'plano', 'executar', 'execução', 'executa', 'agente', 'agentes', 'adicionar', 'adiciona',
-    'retomar', 'retoma', 'pausar', 'pausa', 'descartar', 'ajuda', 'olá', 'ola', 'oi',
-    'projeto', 'mostrar', 'mostra', 'quanto', 'gastei', 'quem', 'trabalhando', 'pode',
-    'rodar', 'aprova', 'apenas', 'nesta', 'neste', 'mexa', 'mexer', 'escrever',
+    'criar',
+    'cria',
+    'fazer',
+    'faça',
+    'investigar',
+    'investiga',
+    'explicar',
+    'explique',
+    'analisar',
+    'analise',
+    'porque',
+    'não',
+    'nao',
+    'sim',
+    'da',
+    'das',
+    'dos',
+    'em',
+    'na',
+    'nos',
+    'nas',
+    'um',
+    'uma',
+    'uns',
+    'umas',
+    'que',
+    'com',
+    'por',
+    'tarefa',
+    'tarefas',
+    'plano',
+    'executar',
+    'execução',
+    'executa',
+    'agente',
+    'agentes',
+    'adicionar',
+    'adiciona',
+    'retomar',
+    'retoma',
+    'pausar',
+    'pausa',
+    'descartar',
+    'ajuda',
+    'olá',
+    'ola',
+    'oi',
+    'projeto',
+    'mostrar',
+    'mostra',
+    'quanto',
+    'gastei',
+    'quem',
+    'trabalhando',
+    'pode',
+    'rodar',
+    'aprova',
+    'apenas',
+    'nesta',
+    'neste',
+    'mexa',
+    'mexer',
+    'escrever',
   ];
 
   const enWords = [
-    'create', 'make', 'investigate', 'explain', 'analyze', 'why', 'how', 'yes', 'for',
-    'from', 'of', 'in', 'at', 'on', 'the', 'that', 'with', 'by', 'task', 'tasks', 'plan',
-    'execute', 'execution', 'agent', 'agents', 'add', 'resume', 'pause', 'discard',
-    'help', 'hello', 'hi', 'what', 'is', 'are', 'can', 'you', 'please', 'run', 'build',
-    'test', 'debug', 'project', 'show', 'spend', 'who', 'working', 'change', 'modify',
-    'touch', 'allow', 'deny', 'current', 'files', 'file', 'should', 'would', 'could',
-    'endpoint', 'health', 'code',
+    'create',
+    'make',
+    'investigate',
+    'explain',
+    'analyze',
+    'why',
+    'how',
+    'yes',
+    'for',
+    'from',
+    'of',
+    'in',
+    'at',
+    'on',
+    'the',
+    'that',
+    'with',
+    'by',
+    'task',
+    'tasks',
+    'plan',
+    'execute',
+    'execution',
+    'agent',
+    'agents',
+    'add',
+    'resume',
+    'pause',
+    'discard',
+    'help',
+    'hello',
+    'hi',
+    'what',
+    'is',
+    'are',
+    'can',
+    'you',
+    'please',
+    'run',
+    'build',
+    'test',
+    'debug',
+    'project',
+    'show',
+    'spend',
+    'who',
+    'working',
+    'change',
+    'modify',
+    'touch',
+    'allow',
+    'deny',
+    'current',
+    'files',
+    'file',
+    'should',
+    'would',
+    'could',
+    'endpoint',
+    'health',
+    'code',
   ];
 
   let ptScore = 0;
@@ -171,10 +281,13 @@ export class InteractiveShell {
     }));
 
     const reports = await AgentDetector.detect(this.agentRegistry.list());
-    const cleanLabel = gitStatus.isClean ? `${colors.green}clean${colors.reset}` : `${colors.yellow}modified${colors.reset}`;
-    const routerStatus = this.config.router.provider === 'openai' && Boolean(process.env.OPENAI_API_KEY)
-      ? `${colors.green}● ready${colors.reset} ${colors.dim}(OpenAI gpt-4o)${colors.reset}`
-      : `${colors.gray}● static fallback${colors.reset}`;
+    const cleanLabel = gitStatus.isClean
+      ? `${colors.green}clean${colors.reset}`
+      : `${colors.yellow}modified${colors.reset}`;
+    const routerStatus =
+      this.config.router.provider === 'openai' && Boolean(process.env.OPENAI_API_KEY)
+        ? `${colors.green}● ready${colors.reset} ${colors.dim}(OpenAI gpt-4o)${colors.reset}`
+        : `${colors.gray}● static fallback${colors.reset}`;
 
     const lines = [
       '',
@@ -187,7 +300,9 @@ export class InteractiveShell {
       `  ${colors.dim}Git Status${colors.reset}  ${colors.yellow}${gitStatus.currentBranch}${colors.reset} ${colors.dim}(${gitStatus.headCommit.slice(0, 7)})${colors.reset} • ${cleanLabel}`,
       '',
       `  ${colors.bold}Agents${colors.reset}`,
-      ...reports.map((r) => `    ${theme.agentPill(r.id, r.name, r.ready, r.quotaStatus, r.quotaReason)}`),
+      ...reports.map(
+        (r) => `    ${theme.agentPill(r.id, r.name, r.ready, r.quotaStatus, r.quotaReason)}`,
+      ),
       '',
       `  ${colors.bold}Router${colors.reset}      OpenAI       ${routerStatus}`,
       `  ${colors.bold}ECC${colors.reset}         ${profile.hasECC ? `${colors.green}● detected${colors.reset}` : `${colors.gray}○ not detected${colors.reset}`}`,
@@ -219,7 +334,10 @@ export class InteractiveShell {
     }
 
     if (text === '/clean') {
-      const worktreeManager = new WorktreeManager(this.repoRoot, this.config.execution.worktreesDir);
+      const worktreeManager = new WorktreeManager(
+        this.repoRoot,
+        this.config.execution.worktreesDir,
+      );
       const deletedBranches = await worktreeManager.cleanOrphanedWorktreesAndBranches();
       return isEn
         ? `Cleaned up orphaned worktrees and ${deletedBranches} temporary branch(es).`
@@ -257,7 +375,10 @@ export class InteractiveShell {
           ...tasks.map((t) => {
             const icon = theme.taskTypeIcon(t.type);
             const badge = theme.statusBadge(t.status);
-            const depText = t.dependencies.length > 0 ? ` ${colors.dim}(${depPrefix}${t.dependencies.join(', ')})${colors.reset}` : '';
+            const depText =
+              t.dependencies.length > 0
+                ? ` ${colors.dim}(${depPrefix}${t.dependencies.join(', ')})${colors.reset}`
+                : '';
             return `  ${icon} ${colors.cyan}${t.id}${colors.reset}: ${colors.bold}${t.title}${colors.reset} [${t.status.toUpperCase()}] ${badge}${depText}`;
           }),
         ].join('\n');
@@ -288,8 +409,12 @@ export class InteractiveShell {
           isClean: true,
         }));
         const reports = await AgentDetector.detect(this.agentRegistry.list());
-        const runStats = this.activeRunId ? this.telemetry.getRunSummary(this.activeRunId) : undefined;
-        const costReport = this.activeRunId ? this.telemetry.getCostReport(this.activeRunId) : undefined;
+        const runStats = this.activeRunId
+          ? this.telemetry.getRunSummary(this.activeRunId)
+          : undefined;
+        const costReport = this.activeRunId
+          ? this.telemetry.getCostReport(this.activeRunId)
+          : undefined;
         return TuiDashboard.render({
           repoRoot: this.repoRoot,
           branch: gitStatus.currentBranch,
@@ -348,7 +473,10 @@ export class InteractiveShell {
         const strategyUpper = routing.strategy.toUpperCase();
         const strategyColor = strategyUpper === 'PARALLEL' ? colors.cyan : colors.green;
         const teamFormatted = selected
-          .map((s) => `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`)
+          .map(
+            (s) =>
+              `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`,
+          )
           .join(', ');
 
         const totalEstimatedTokens = tasks.reduce(
@@ -500,13 +628,15 @@ export class InteractiveShell {
             result.status === 'completed'
               ? colors.green
               : result.status === 'cancelled'
-              ? colors.yellow
-              : colors.red;
+                ? colors.yellow
+                : colors.red;
 
           const outputs = Object.entries(result.taskOutputs ?? {})
             .filter(([, text]) => text && text.trim().length > 0)
             .map(([taskId, text]) => {
-              const header = isEn ? `Explanation & Analysis [${taskId}]` : `Explicação & Análise [${taskId}]`;
+              const header = isEn
+                ? `Explanation & Analysis [${taskId}]`
+                : `Explicação & Análise [${taskId}]`;
               const highlighted = theme.renderMarkdown(text.trim());
               const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
               return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
@@ -518,15 +648,21 @@ export class InteractiveShell {
           const isSuccess = result.status === 'completed';
           const isCancelled = result.status === 'cancelled';
           const title = isSuccess
-            ? (isEn ? 'Plan executed successfully!' : 'Plano executado com sucesso!')
+            ? isEn
+              ? 'Plan executed successfully!'
+              : 'Plano executado com sucesso!'
             : isCancelled
-            ? (isEn ? 'Plan execution cancelled by user' : 'Execução cancelada pelo usuário')
-            : (isEn ? 'Plan execution encountered issues' : 'Execução do plano finalizada com pendências');
+              ? isEn
+                ? 'Plan execution cancelled by user'
+                : 'Execução cancelada pelo usuário'
+              : isEn
+                ? 'Plan execution encountered issues'
+                : 'Execução do plano finalizada com pendências';
           const titleIcon = isSuccess
             ? `${colors.green}✔${colors.reset}`
             : isCancelled
-            ? `${colors.yellow}⊘${colors.reset}`
-            : `${colors.red}✖${colors.reset}`;
+              ? `${colors.yellow}⊘${colors.reset}`
+              : `${colors.red}✖${colors.reset}`;
 
           const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
 
@@ -539,7 +675,9 @@ export class InteractiveShell {
               '',
               `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
               `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
-              result.integrationBranch ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}` : '',
+              result.integrationBranch
+                ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}`
+                : '',
               `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
               `  ${divider}`,
             ]
@@ -555,7 +693,9 @@ export class InteractiveShell {
             '',
             `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
             `    ${colors.dim}Tarefas concluídas:${colors.reset} ${colors.bold}${result.tasksCompleted}${colors.reset}, falhas: ${result.tasksFailed}`,
-            result.integrationBranch ? `    ${colors.dim}Branch de integração:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}` : '',
+            result.integrationBranch
+              ? `    ${colors.dim}Branch de integração:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}`
+              : '',
             `    ${colors.dim}Tempo total:${colors.reset}        ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
             `  ${divider}`,
           ]
@@ -1029,7 +1169,11 @@ export class InteractiveShell {
 
       isRunning = true;
       activeAbortController = new AbortController();
-      this.viewport.renderInputLine('', 0, this.sessionLanguage === 'en' ? 'Thinking...' : 'Processando...');
+      this.viewport.renderInputLine(
+        '',
+        0,
+        this.sessionLanguage === 'en' ? 'Thinking...' : 'Processando...',
+      );
 
       try {
         const reply = await this.handleInput(trimmed, activeAbortController.signal);

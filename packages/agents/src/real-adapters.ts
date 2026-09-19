@@ -1,9 +1,4 @@
-import {
-  AgentAssignment,
-  AgentCapabilities,
-  AgentContext,
-  AgentResult,
-} from '@taskforge/shared';
+import { AgentAssignment, AgentCapabilities, AgentContext, AgentResult } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import { GitService } from '@taskforge/workspace';
 import { AgentAdapter } from './adapter-interface.js';
@@ -174,4 +169,3 @@ export class AntigravityAdapter extends BaseCliAdapter {
     super({ defaultArgs: ['--dangerously-skip-permissions', '-p'], ...options });
   }
 }
-

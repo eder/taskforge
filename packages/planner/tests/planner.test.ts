@@ -37,7 +37,8 @@ describe('HeuristicPlanner', () => {
     const planner = new HeuristicPlanner();
     const goal: Goal = {
       id: 'goal-2',
-      description: 'Na raiz desse projeto eu preciso mudar o conteudo README.MD para ingles faça isso',
+      description:
+        'Na raiz desse projeto eu preciso mudar o conteudo README.MD para ingles faça isso',
       repository: '/fake/repo',
       constraints: [],
       acceptanceCriteria: [],

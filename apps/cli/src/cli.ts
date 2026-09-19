@@ -45,7 +45,9 @@ export function createCli(): Command {
       const wtManager = new WorktreeManager(repoRoot);
       const count = await wtManager.cleanOrphanedWorktreesAndBranches();
       console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge Workspace Cleanup${colors.reset}`);
-      console.log(`  ${colors.green}✔${colors.reset} Cleaned up ${count} temporary TaskForge branches and worktrees.\n`);
+      console.log(
+        `  ${colors.green}✔${colors.reset} Cleaned up ${count} temporary TaskForge branches and worktrees.\n`,
+      );
     });
 
   // tf doctor
@@ -58,17 +60,23 @@ export function createCli(): Command {
 
       // 1. Node check
       const nodeVer = process.version;
-      console.log(`  ${colors.bold}Node.js Runtime:${colors.reset}    ${nodeVer} (>= 22.0.0 required) - ${colors.green}✔ OK${colors.reset}`);
+      console.log(
+        `  ${colors.bold}Node.js Runtime:${colors.reset}    ${nodeVer} (>= 22.0.0 required) - ${colors.green}✔ OK${colors.reset}`,
+      );
 
       // 2. Git check
       const repoRoot = process.cwd();
       const gitService = new GitService(repoRoot);
       const isGit = await gitService.isGitRepo();
       if (!isGit) {
-        console.log(`  ${colors.bold}Git Repository:${colors.reset}     ${colors.red}✖ NOT A GIT REPOSITORY${colors.reset} (Run inside a git project)`);
+        console.log(
+          `  ${colors.bold}Git Repository:${colors.reset}     ${colors.red}✖ NOT A GIT REPOSITORY${colors.reset} (Run inside a git project)`,
+        );
       } else {
         const status = await gitService.getStatus();
-        const cleanBadge = status.isClean ? `${colors.green}clean${colors.reset}` : `${colors.yellow}modified${colors.reset}`;
+        const cleanBadge = status.isClean
+          ? `${colors.green}clean${colors.reset}`
+          : `${colors.yellow}modified${colors.reset}`;
         console.log(
           `  ${colors.bold}Git Repository:${colors.reset}     ${colors.green}✔ OK${colors.reset} (${colors.yellow}${status.currentBranch}${colors.reset} • ${status.headCommit.slice(0, 7)} • ${cleanBadge})`,
         );
@@ -78,9 +86,13 @@ export function createCli(): Command {
       try {
         const db = new TaskForgeDatabase(':memory:');
         db.close();
-        console.log(`  ${colors.bold}SQLite Database:${colors.reset}    ${colors.green}✔ OK${colors.reset}`);
+        console.log(
+          `  ${colors.bold}SQLite Database:${colors.reset}    ${colors.green}✔ OK${colors.reset}`,
+        );
       } catch (err) {
-        console.log(`  ${colors.bold}SQLite Database:${colors.reset}    ${colors.red}✖ FAILED (${(err as Error).message})${colors.reset}`);
+        console.log(
+          `  ${colors.bold}SQLite Database:${colors.reset}    ${colors.red}✖ FAILED (${(err as Error).message})${colors.reset}`,
+        );
       }
 
       // 4. Repository Analyzer
@@ -89,7 +101,9 @@ export function createCli(): Command {
         const profile = await analyzer.analyze();
         console.log(`  ${colors.bold}Workspace Profile:${colors.reset}  ${profile.summary}`);
         if (profile.testCommands.length > 0) {
-          console.log(`  ${colors.bold}Test Command:${colors.reset}       ${colors.dim}${profile.testCommands[0]}${colors.reset}`);
+          console.log(
+            `  ${colors.bold}Test Command:${colors.reset}       ${colors.dim}${profile.testCommands[0]}${colors.reset}`,
+          );
         }
       } catch {
         // ignore
@@ -100,11 +114,14 @@ export function createCli(): Command {
       const reports = await AgentDetector.detect(registry.list());
       console.log(`\n  ${colors.bold}Agent Harness Detection:${colors.reset}`);
       for (const rep of reports) {
-        console.log(`    ${theme.agentPill(rep.id, rep.name, rep.ready, rep.quotaStatus, rep.quotaReason)}`);
+        console.log(
+          `    ${theme.agentPill(rep.id, rep.name, rep.ready, rep.quotaStatus, rep.quotaReason)}`,
+        );
       }
-      console.log(`\n  ${colors.green}✔${colors.reset} ${colors.bold}Diagnostic complete. Everything ready!${colors.reset}\n`);
+      console.log(
+        `\n  ${colors.green}✔${colors.reset} ${colors.bold}Diagnostic complete. Everything ready!${colors.reset}\n`,
+      );
     });
-
 
   // tf cleanup
   program
@@ -148,144 +165,151 @@ export function createCli(): Command {
     .option('-y, --yes', 'Automatically confirm plan and non-interactive permissions', false)
     .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
     .option('--fake', 'Use FakeAgents for deterministic execution', false)
-    .action(async (goalText?: string, options?: { yes?: boolean; concurrency?: string; fake?: boolean }) => {
-      const repoRoot = process.cwd();
-      const config = loadConfig();
-      if (options?.concurrency) {
-        config.execution.maxParallelTasks = parseInt(options.concurrency, 10);
-      }
+    .action(
+      async (
+        goalText?: string,
+        options?: { yes?: boolean; concurrency?: string; fake?: boolean },
+      ) => {
+        const repoRoot = process.cwd();
+        const config = loadConfig();
+        if (options?.concurrency) {
+          config.execution.maxParallelTasks = parseInt(options.concurrency, 10);
+        }
 
-      const gitService = new GitService(repoRoot);
-      const isGit = await gitService.isGitRepo();
-      if (!isGit) {
-        console.error('Error: Must be run inside a Git repository.');
-        process.exit(1);
-      }
+        const gitService = new GitService(repoRoot);
+        const isGit = await gitService.isGitRepo();
+        if (!isGit) {
+          console.error('Error: Must be run inside a Git repository.');
+          process.exit(1);
+        }
 
-      const headCommit = await gitService.getHeadCommit();
-      const runId = `run-${Date.now()}`;
-      console.log(`Starting TaskForge run: ${runId}`);
-      console.log(`Base commit: ${headCommit.slice(0, 7)}`);
+        const headCommit = await gitService.getHeadCommit();
+        const runId = `run-${Date.now()}`;
+        console.log(`Starting TaskForge run: ${runId}`);
+        console.log(`Base commit: ${headCommit.slice(0, 7)}`);
 
-      const db = new TaskForgeDatabase(config.execution.databasePath);
-      const runRepo = new RunRepository(db);
-      const goalRepo = new GoalRepository(db);
-      const taskRepo = new TaskRepository(db);
-      const assignmentRepo = new AssignmentRepository(db);
-      const executionRepo = new ExecutionRepository(db);
-      const eventRepo = new EventRepository(db);
-      const verificationRepo = new VerificationRepository(db);
-      const workspaceRepo = new WorkspaceRepository(db);
+        const db = new TaskForgeDatabase(config.execution.databasePath);
+        const runRepo = new RunRepository(db);
+        const goalRepo = new GoalRepository(db);
+        const taskRepo = new TaskRepository(db);
+        const assignmentRepo = new AssignmentRepository(db);
+        const executionRepo = new ExecutionRepository(db);
+        const eventRepo = new EventRepository(db);
+        const verificationRepo = new VerificationRepository(db);
+        const workspaceRepo = new WorkspaceRepository(db);
 
-      const goal = goalRepo.create({
-        id: `goal-${Date.now()}`,
-        description: goalText ?? 'Deterministic goal execution',
-        repository: repoRoot,
-      });
+        const goal = goalRepo.create({
+          id: `goal-${Date.now()}`,
+          description: goalText ?? 'Deterministic goal execution',
+          repository: repoRoot,
+        });
 
-      runRepo.create(runId, goal.id);
+        runRepo.create(runId, goal.id);
 
-      const taskId = `TASK-${Date.now().toString().slice(-4)}`;
-      const agentRegistry = new AgentRegistry();
-      const preferredAgentMapping: Record<string, string> = {};
-      if (options?.fake) {
-        config.verification.tests = false;
-        config.verification.lint = false;
-        config.verification.typecheck = false;
-        config.verification.review = false;
-        preferredAgentMapping[taskId] = 'fake-agent';
-        agentRegistry.register(
-          new FakeAgent('fake-agent', 'Fake Agent', [
-            {
-              writeFile: {
-                path: 'taskforge-output.txt',
-                content: `Executed run ${runId} at ${new Date().toISOString()}\n`,
+        const taskId = `TASK-${Date.now().toString().slice(-4)}`;
+        const agentRegistry = new AgentRegistry();
+        const preferredAgentMapping: Record<string, string> = {};
+        if (options?.fake) {
+          config.verification.tests = false;
+          config.verification.lint = false;
+          config.verification.typecheck = false;
+          config.verification.review = false;
+          preferredAgentMapping[taskId] = 'fake-agent';
+          agentRegistry.register(
+            new FakeAgent('fake-agent', 'Fake Agent', [
+              {
+                writeFile: {
+                  path: 'taskforge-output.txt',
+                  content: `Executed run ${runId} at ${new Date().toISOString()}\n`,
+                },
+                gitCommitMessage: `feat: completed task in run ${runId}`,
               },
-              gitCommitMessage: `feat: completed task in run ${runId}`,
-            },
-          ]),
+            ]),
+          );
+        }
+
+        const worktreeManager = new WorktreeManager(repoRoot, config.execution.worktreesDir);
+        const verificationRunner = new VerificationRunner(verificationRepo, eventRepo);
+        const integrationService = new IntegrationService(
+          repoRoot,
+          gitService,
+          worktreeManager,
+          verificationRunner,
+          eventRepo,
         );
-      }
 
-      const worktreeManager = new WorktreeManager(repoRoot, config.execution.worktreesDir);
-      const verificationRunner = new VerificationRunner(verificationRepo, eventRepo);
-      const integrationService = new IntegrationService(
-        repoRoot,
-        gitService,
-        worktreeManager,
-        verificationRunner,
-        eventRepo,
-      );
-
-      // Define default task
-      const defaultTask: Task = {
-        id: taskId,
-        goalId: goal.id,
-        title: 'Initial Goal Execution',
-        description: goal.description,
-        type: 'implementation',
-        status: 'accepted',
-        dependencies: [],
-        contract: {
-          objective: goal.description,
-          allowedScope: ['*'],
-          forbiddenChanges: [],
-          acceptanceCriteria: ['Task completes'],
+        // Define default task
+        const defaultTask: Task = {
+          id: taskId,
+          goalId: goal.id,
+          title: 'Initial Goal Execution',
+          description: goal.description,
+          type: 'implementation',
+          status: 'accepted',
           dependencies: [],
-        },
-        acceptanceCriteria: ['Completed'],
-        reworkCount: 0,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+          contract: {
+            objective: goal.description,
+            allowedScope: ['*'],
+            forbiddenChanges: [],
+            acceptanceCriteria: ['Task completes'],
+            dependencies: [],
+          },
+          acceptanceCriteria: ['Completed'],
+          reworkCount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
 
-      taskRepo.create({
-        id: defaultTask.id,
-        runId,
-        goalId: goal.id,
-        title: defaultTask.title,
-        description: defaultTask.description,
-        type: defaultTask.type,
-        status: defaultTask.status,
-        contract: defaultTask.contract,
-      });
+        taskRepo.create({
+          id: defaultTask.id,
+          runId,
+          goalId: goal.id,
+          title: defaultTask.title,
+          description: defaultTask.description,
+          type: defaultTask.type,
+          status: defaultTask.status,
+          contract: defaultTask.contract,
+        });
 
-      const graph = new TaskGraph([defaultTask]);
+        const graph = new TaskGraph([defaultTask]);
 
-      const scheduler = new DeterministicScheduler({
-        runId,
-        baseCommit: headCommit,
-        repoRoot,
-        config,
-        graph,
-        agentRegistry,
-        preferredAgentMapping,
-        worktreeManager,
-        gitService,
-        verificationRunner,
-        integrationService,
-        runRepo,
-        taskRepo,
-        assignmentRepo,
-        executionRepo,
-        eventRepo,
-        workspaceRepo,
-      });
+        const scheduler = new DeterministicScheduler({
+          runId,
+          baseCommit: headCommit,
+          repoRoot,
+          config,
+          graph,
+          agentRegistry,
+          preferredAgentMapping,
+          worktreeManager,
+          gitService,
+          verificationRunner,
+          integrationService,
+          runRepo,
+          taskRepo,
+          assignmentRepo,
+          executionRepo,
+          eventRepo,
+          workspaceRepo,
+        });
 
-      const result = await scheduler.run();
-      console.log(`\nRun finished with status: ${result.status}`);
-      console.log(`Tasks completed: ${result.tasksCompleted}, failed: ${result.tasksFailed}`);
-      if (result.integrationBranch) {
-        console.log(`Integrated into branch: ${result.integrationBranch}`);
-      }
+        const result = await scheduler.run();
+        console.log(`\nRun finished with status: ${result.status}`);
+        console.log(`Tasks completed: ${result.tasksCompleted}, failed: ${result.tasksFailed}`);
+        if (result.integrationBranch) {
+          console.log(`Integrated into branch: ${result.integrationBranch}`);
+        }
 
-      db.close();
-    });
+        db.close();
+      },
+    );
 
   // tf run [goal]
   program
     .command('run [goal]')
-    .description('Run full multi-agent orchestration pipeline: plan, negotiate, schedule, verify and integrate')
+    .description(
+      'Run full multi-agent orchestration pipeline: plan, negotiate, schedule, verify and integrate',
+    )
     .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
     .option('--fake', 'Force deterministic fake agent fallback', false)
     .action(async (goalText?: string, options?: { concurrency?: string; fake?: boolean }) => {
@@ -326,7 +350,9 @@ export function createCli(): Command {
   program
     .command('status')
     .alias('dash')
-    .description('Display rich visual TUI dashboard of repository state, agents, worktrees, and tasks')
+    .description(
+      'Display rich visual TUI dashboard of repository state, agents, worktrees, and tasks',
+    )
     .action(async () => {
       const repoRoot = process.cwd();
       const config = loadConfig();
@@ -537,5 +563,3 @@ export function createCli(): Command {
 
   return program;
 }
-
-

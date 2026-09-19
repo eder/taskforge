@@ -169,7 +169,9 @@ describe('NegotiationManager', () => {
     const updatedTask2 = negotiated.getTask('TASK-2')!;
     expect(updatedTask2.status).toBe('accepted');
     expect(updatedTask2.dependencies).toContain('TASK-1');
-    expect(updatedTask2.contract.forbiddenChanges).toContain('Do not edit production migration files');
+    expect(updatedTask2.contract.forbiddenChanges).toContain(
+      'Do not edit production migration files',
+    );
 
     const events = eventRepo.listByRun('run-2');
     const task2Events = events.filter((e) => e.taskId === 'TASK-2');

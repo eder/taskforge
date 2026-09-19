@@ -85,7 +85,9 @@ export class GitHubWorkflowService {
     ];
 
     for (const t of audit.tasks) {
-      lines.push(`| \`${t.id}\` | ${t.title} | \`${t.type}\` | **${t.status.toUpperCase()}** | ${t.reworkCount} |`);
+      lines.push(
+        `| \`${t.id}\` | ${t.title} | \`${t.type}\` | **${t.status.toUpperCase()}** | ${t.reworkCount} |`,
+      );
     }
 
     lines.push('');
@@ -94,18 +96,24 @@ export class GitHubWorkflowService {
     lines.push('- **Lint & Formatação:** PASS');
     lines.push('- **Verificação de Tipos TypeScript:** PASS');
     if (runStats) {
-      lines.push(`- **Taxa de aprovação de primeira passagem:** ${(runStats.firstPassRate * 100).toFixed(1)}%`);
+      lines.push(
+        `- **Taxa de aprovação de primeira passagem:** ${(runStats.firstPassRate * 100).toFixed(1)}%`,
+      );
       lines.push(`- **Tempo total de execução:** ${(runStats.durationMs / 1000).toFixed(1)}s`);
     }
 
     lines.push('');
     lines.push('### 💰 Telemetria e Uso de Recursos');
     lines.push(`- **Custo estimado total:** \`$${costReport.totalCostUsd.toFixed(4)} USD\``);
-    lines.push(`- **Tokens processados:** ${costReport.totalInputTokens.toLocaleString()} input / ${costReport.totalOutputTokens.toLocaleString()} output`);
+    lines.push(
+      `- **Tokens processados:** ${costReport.totalInputTokens.toLocaleString()} input / ${costReport.totalOutputTokens.toLocaleString()} output`,
+    );
 
     lines.push('');
     lines.push('---');
-    lines.push('*Gerado automaticamente pelo control plane [TaskForge](https://github.com/taskforge).*');
+    lines.push(
+      '*Gerado automaticamente pelo control plane [TaskForge](https://github.com/taskforge).*',
+    );
 
     return lines.join('\n');
   }
@@ -115,7 +123,9 @@ export class GitHubWorkflowService {
     const branchName = `taskforge/${runId}`;
     const targetBranch = options.targetBranch ?? 'main';
     const audit = this.auditService.reconstructRun(runId);
-    const title = options.title ?? `feat(${runId}): ${audit?.goal?.description ?? 'TaskForge automated changes'}`;
+    const title =
+      options.title ??
+      `feat(${runId}): ${audit?.goal?.description ?? 'TaskForge automated changes'}`;
     const summary = this.generatePullRequestSummary(runId);
 
     const hasGh = await this.isGhInstalled();
@@ -126,7 +136,8 @@ export class GitHubWorkflowService {
         success: false,
         summary,
         commandUsed,
-        message: 'GitHub CLI (`gh`) não encontrado no sistema. Sumário da PR gerado com sucesso para submissão manual.',
+        message:
+          'GitHub CLI (`gh`) não encontrado no sistema. Sumário da PR gerado com sucesso para submissão manual.',
       };
     }
 

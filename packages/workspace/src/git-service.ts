@@ -109,7 +109,10 @@ export class GitService {
         await this.exec(['add', '-A'], cwd);
         await this.exec(['commit', '-m', 'chore: initial commit by TaskForge'], cwd);
       } else {
-        await this.exec(['commit', '--allow-empty', '-m', 'chore: initial commit by TaskForge'], cwd);
+        await this.exec(
+          ['commit', '--allow-empty', '-m', 'chore: initial commit by TaskForge'],
+          cwd,
+        );
       }
 
       return await this.exec(['rev-parse', 'HEAD'], cwd);

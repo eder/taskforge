@@ -49,8 +49,11 @@ export class TuiDashboard {
 
     for (const task of tasks) {
       const statusBadge = this.statusColor(task.status);
-      const depText = task.dependencies.length > 0 ? ` ↳ depends on: [${task.dependencies.join(', ')}]` : '';
-      lines.push(`│  ${task.id.padEnd(10)} ${statusBadge.padEnd(16)} ${task.title.slice(0, 32).padEnd(32)} │`);
+      const depText =
+        task.dependencies.length > 0 ? ` ↳ depends on: [${task.dependencies.join(', ')}]` : '';
+      lines.push(
+        `│  ${task.id.padEnd(10)} ${statusBadge.padEnd(16)} ${task.title.slice(0, 32).padEnd(32)} │`,
+      );
       if (depText) {
         lines.push(`│             \x1b[90m${depText.padEnd(52)}\x1b[0m │`);
       }

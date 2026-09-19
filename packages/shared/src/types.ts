@@ -20,12 +20,7 @@ export type TaskStatus =
   | 'blocked';
 
 export type TaskType =
-  | 'implementation'
-  | 'investigation'
-  | 'review'
-  | 'testing'
-  | 'refactoring'
-  | 'architecture';
+  'implementation' | 'investigation' | 'review' | 'testing' | 'refactoring' | 'architecture';
 
 export type AgentRole =
   | 'lead'
@@ -60,12 +55,7 @@ export type AssignmentStatus =
   | 'cancelled';
 
 export type ExecutionStatus =
-  | 'pending'
-  | 'running'
-  | 'success'
-  | 'failed'
-  | 'timeout'
-  | 'cancelled';
+  'pending' | 'running' | 'success' | 'failed' | 'timeout' | 'cancelled';
 
 export interface Constraint {
   type: string;
@@ -210,7 +200,8 @@ export interface AgentMessage {
 
 export type PermissionDecision = 'allow' | 'deny' | 'ask_human';
 export type PermissionCategory = 'filesystem' | 'commands' | 'git' | 'tools' | 'network' | 'custom';
-export type InteractionType = 'permission' | 'question' | 'confirmation' | 'input' | 'auth' | 'tool_approval';
+export type InteractionType =
+  'permission' | 'question' | 'confirmation' | 'input' | 'auth' | 'tool_approval';
 export type InteractionStatus = 'pending' | 'resolved' | 'timed_out' | 'blocked' | 'denied';
 export type InteractionPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type InteractionScope = 'once' | 'task' | 'run' | 'project';
@@ -340,10 +331,4 @@ export interface AgentSession {
 }
 
 export type QuestionRoutingOutcome =
-  | 'AUTO_RESOLVE'
-  | 'ROUTE_TO_AGENT'
-  | 'ASK_HUMAN'
-  | 'POLICY_ALLOW'
-  | 'POLICY_DENY'
-  | 'BLOCK';
-
+  'AUTO_RESOLVE' | 'ROUTE_TO_AGENT' | 'ASK_HUMAN' | 'POLICY_ALLOW' | 'POLICY_DENY' | 'BLOCK';

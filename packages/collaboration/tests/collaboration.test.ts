@@ -151,7 +151,11 @@ describe('Collaboration Package', () => {
       taskId: 'task-1',
       investigationOutputs: [
         { role: 'researcher', agentId: 'agent-1', output: 'Found memory leak in worker pool' },
-        { role: 'reproduction_engineer', agentId: 'agent-2', output: 'Created repro script demonstrating OOM' },
+        {
+          role: 'reproduction_engineer',
+          agentId: 'agent-2',
+          output: 'Created repro script demonstrating OOM',
+        },
       ],
     });
 

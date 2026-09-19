@@ -11,20 +11,20 @@ export const colors = {
   underline: '\x1b[4m',
 
   // Modern 256-color palette
-  brand: '\x1b[38;5;141m',       // Soft Lilac / Purple (Claude/TaskForge signature)
-  brandLight: '\x1b[38;5;183m',  // Light Lilac
-  cyan: '\x1b[38;5;75m',         // Electric Sky Blue / Cyan (Antigravity)
-  cyanLight: '\x1b[38;5;117m',   // Ice Cyan
-  green: '\x1b[38;5;78m',        // Mint Emerald Green (Codex / Success)
-  greenLight: '\x1b[38;5;120m',  // Spring Green
-  yellow: '\x1b[38;5;215m',      // Warm Amber / Gold (Warning / Attention)
-  coral: '\x1b[38;5;209m',       // Terracotta / Peach (Claude Agent)
-  red: '\x1b[38;5;203m',         // Coral Red (Error / Failure)
-  magenta: '\x1b[38;5;177m',     // Orchid Magenta (Gemini Agent)
-  gray: '\x1b[38;5;244m',        // Medium Slate Gray
-  darkGray: '\x1b[38;5;239m',    // Dark Slate Gray
-  lightGray: '\x1b[38;5;250m',   // Near White Gray
-  white: '\x1b[97m',             // Pure Bright White
+  brand: '\x1b[38;5;141m', // Soft Lilac / Purple (Claude/TaskForge signature)
+  brandLight: '\x1b[38;5;183m', // Light Lilac
+  cyan: '\x1b[38;5;75m', // Electric Sky Blue / Cyan (Antigravity)
+  cyanLight: '\x1b[38;5;117m', // Ice Cyan
+  green: '\x1b[38;5;78m', // Mint Emerald Green (Codex / Success)
+  greenLight: '\x1b[38;5;120m', // Spring Green
+  yellow: '\x1b[38;5;215m', // Warm Amber / Gold (Warning / Attention)
+  coral: '\x1b[38;5;209m', // Terracotta / Peach (Claude Agent)
+  red: '\x1b[38;5;203m', // Coral Red (Error / Failure)
+  magenta: '\x1b[38;5;177m', // Orchid Magenta (Gemini Agent)
+  gray: '\x1b[38;5;244m', // Medium Slate Gray
+  darkGray: '\x1b[38;5;239m', // Dark Slate Gray
+  lightGray: '\x1b[38;5;250m', // Near White Gray
+  white: '\x1b[97m', // Pure Bright White
 };
 
 export const theme = {
@@ -141,7 +141,9 @@ export const theme = {
           inCodeBlock = true;
           codeLang = line.trim().slice(3).trim();
           const langLabel = codeLang ? ` ${codeLang} ` : ' code ';
-          output.push(`  ${colors.darkGray}╭─${colors.reset}${colors.dim}${langLabel}${colors.reset}${colors.darkGray}${'─'.repeat(Math.max(2, 54 - langLabel.length - 2))}╮${colors.reset}`);
+          output.push(
+            `  ${colors.darkGray}╭─${colors.reset}${colors.dim}${langLabel}${colors.reset}${colors.darkGray}${'─'.repeat(Math.max(2, 54 - langLabel.length - 2))}╮${colors.reset}`,
+          );
         } else {
           inCodeBlock = false;
           output.push(`  ${colors.darkGray}╰${'─'.repeat(54)}╯${colors.reset}`);
@@ -150,7 +152,9 @@ export const theme = {
       }
 
       if (inCodeBlock) {
-        output.push(`  ${colors.darkGray}│${colors.reset}  ${colors.cyanLight}${line}${colors.reset}`);
+        output.push(
+          `  ${colors.darkGray}│${colors.reset}  ${colors.cyanLight}${line}${colors.reset}`,
+        );
         continue;
       }
 
@@ -178,7 +182,10 @@ export const theme = {
       }
 
       // Bold **text** or __text__
-      formatted = formatted.replace(/\*\*(.*?)\*\*/g, `${colors.bold}${colors.white}$1${colors.reset}`);
+      formatted = formatted.replace(
+        /\*\*(.*?)\*\*/g,
+        `${colors.bold}${colors.white}$1${colors.reset}`,
+      );
       formatted = formatted.replace(/__(.*?)__/g, `${colors.bold}${colors.white}$1${colors.reset}`);
 
       // Inline code `code`
@@ -200,7 +207,10 @@ export const theme = {
       if (rest.includes('Assigned to')) {
         return `  ${colors.brand}✦${colors.reset} ${tid} ${colors.bold}${rest}${colors.reset}`;
       }
-      if (rest.includes('Created isolated worktree') || rest.includes('Created isolated read-only workspace')) {
+      if (
+        rest.includes('Created isolated worktree') ||
+        rest.includes('Created isolated read-only workspace')
+      ) {
         return `  ${colors.gray}│${colors.reset}  ${colors.cyan}📁${colors.reset} ${colors.dim}${rest}${colors.reset}`;
       }
       if (rest.includes('executing...')) {
@@ -215,7 +225,10 @@ export const theme = {
       if (rest.includes('Running verification')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.yellow}🧪${colors.reset} ${rest}`;
       }
-      if (rest.includes('Verified successfully') || rest.includes('Verification checks completed')) {
+      if (
+        rest.includes('Verified successfully') ||
+        rest.includes('Verification checks completed')
+      ) {
         return `  ${colors.gray}│${colors.reset}  ${colors.green}✔${colors.reset} ${colors.green}${colors.bold}${rest}${colors.reset}`;
       }
       if (rest.includes('Integrating commit')) {

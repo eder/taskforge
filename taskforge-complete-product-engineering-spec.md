@@ -3,6 +3,7 @@
 TASKFORGE
 
 # Complete Product & Engineering
+
 Specification + Roadmap
 
 Conversational control plane for self-organizing coding-agent teams
@@ -16,7 +17,7 @@ TaskForge entende, planeja, forma o time, faz os agentes negociarem a task,
 executa em worktrees isoladas, verifica, revisa e integra o resultado.
 ```
 
-Working name: TaskForge  •  Directory: taskforge  •  Primary CLI: tf  •  September 2026
+Working name: TaskForge • Directory: taskforge • Primary CLI: tf • September 2026
 
 ## 1. Executive Summary
 
@@ -62,24 +63,24 @@ The user describes what they want built or investigated. TaskForge determines ho
 
 ## 2. Decisions Frozen for the First Product Version
 
-| Decision | Choice |
-| --- | --- |
-| Working product name | TaskForge |
-| Repository / directory | taskforge |
-| Primary executable | tf |
-| Long executable alias | taskforge |
-| Primary UX | Interactive natural-language terminal session |
-| Automation UX | Headless `tf exec` and structured API later |
-| Core language | TypeScript on Node.js 22+ |
-| State | SQLite + Git |
-| Workspace isolation | Git worktrees |
-| Initial workers | Claude Code, Codex, Gemini CLI |
+| Decision                   | Choice                                             |
+| -------------------------- | -------------------------------------------------- |
+| Working product name       | TaskForge                                          |
+| Repository / directory     | taskforge                                          |
+| Primary executable         | tf                                                 |
+| Long executable alias      | taskforge                                          |
+| Primary UX                 | Interactive natural-language terminal session      |
+| Automation UX              | Headless `tf exec` and structured API later        |
+| Core language              | TypeScript on Node.js 22+                          |
+| State                      | SQLite + Git                                       |
+| Workspace isolation        | Git worktrees                                      |
+| Initial workers            | Claude Code, Codex, Gemini CLI                     |
 | Initial intelligent router | OpenAI Responses API with strict structured output |
-| Router failure fallback | Deterministic static routing strategy |
-| ECC | Optional plugin, not a core dependency |
-| Parallel writable work | Separate worktree per assignment |
-| Merge to main | Never automatic in early releases |
-| Default human gate | Show plan/team for approval before risky execution |
+| Router failure fallback    | Deterministic static routing strategy              |
+| ECC                        | Optional plugin, not a core dependency             |
+| Parallel writable work     | Separate worktree per assignment                   |
+| Merge to main              | Never automatic in early releases                  |
+| Default human gate         | Show plan/team for approval before risky execution |
 
 ### 2.1 Naming conventions used in the codebase
 
@@ -101,18 +102,18 @@ TaskForge is a lightweight control plane for heterogeneous coding-agent teams. I
 
 A useful analogy is Kubernetes for engineering tasks, but the analogy has limits: TaskForge schedules cognitive/engineering work rather than containers.
 
-| Control-plane concern | TaskForge responsibility |
-| --- | --- |
-| What work exists | Goal interpretation, planning, task graph |
-| Who should do it | Router roles + agent selection |
-| How many workers | Execution strategy / team shape |
-| Where it runs | Isolated worktrees and processes |
-| When it runs | Dependency-aware scheduler |
-| How workers coordinate | Negotiation layer + communication bus |
-| Whether it is correct | Deterministic verification + independent review |
+| Control-plane concern   | TaskForge responsibility                                     |
+| ----------------------- | ------------------------------------------------------------ |
+| What work exists        | Goal interpretation, planning, task graph                    |
+| Who should do it        | Router roles + agent selection                               |
+| How many workers        | Execution strategy / team shape                              |
+| Where it runs           | Isolated worktrees and processes                             |
+| When it runs            | Dependency-aware scheduler                                   |
+| How workers coordinate  | Negotiation layer + communication bus                        |
+| Whether it is correct   | Deterministic verification + independent review              |
 | What happens on failure | Retry, reassignment, collaboration escalation or human block |
-| What is authoritative | SQLite task/run state + Git code state |
-| How it learns | Telemetry and later performance-aware routing |
+| What is authoritative   | SQLite task/run state + Git code state                       |
+| How it learns           | Telemetry and later performance-aware routing                |
 
 ### 3.1 What TaskForge is not
 
@@ -123,6 +124,7 @@ A useful analogy is Kubernetes for engineering tasks, but the analogy has limits
 - Not a wrapper that sends the same prompt to three models and votes.
 - Not an ECC fork.
 - Not a hosted multi-tenant SaaS in the initial product.
+
 ## 4. User Experience: Conversation First
 
 > **Natural language is the primary interface. Commands are shortcuts, not the product.**
@@ -198,16 +200,16 @@ Restrição aplicada. legacy-payments/** agora é read-only para este run.
 
 Slash commands are deterministic shortcuts for power users. Every slash command should have a natural-language equivalent.
 
-| Shortcut | Equivalent natural language |
-| --- | --- |
-| /agents | “quem está disponível?” |
-| /tasks | “o que está acontecendo?” |
+| Shortcut      | Equivalent natural language          |
+| ------------- | ------------------------------------ |
+| /agents       | “quem está disponível?”              |
+| /tasks        | “o que está acontecendo?”            |
 | /task TASK-12 | “o que está acontecendo na TASK-12?” |
-| /cost | “quanto já gastei?” |
-| /plan | “me mostra o plano” |
-| /pause | “para a execução por enquanto” |
-| /resume | “continua” |
-| /logs TASK-12 | “me mostra os logs da TASK-12” |
+| /cost         | “quanto já gastei?”                  |
+| /plan         | “me mostra o plano”                  |
+| /pause        | “para a execução por enquanto”       |
+| /resume       | “continua”                           |
+| /logs TASK-12 | “me mostra os logs da TASK-12”       |
 
 ### 4.5 Headless mode
 
@@ -297,6 +299,7 @@ Before planning, TaskForge builds a compact repository profile rather than pushi
 - README, AGENTS.md, CLAUDE.md and local agent instructions.
 - ECC presence and configuration.
 - High-level change surface relevant to the current goal.
+
 ```text
 interface RepositoryProfile {
   languages: string[];
@@ -412,6 +415,7 @@ The first implementation uses the OpenAI Responses API and strict JSON-schema ou
 - Override permissions.
 - Merge branches.
 - Bypass verification.
+
 ### 8.2 Router considers
 
 - Task size and type.
@@ -426,6 +430,7 @@ The first implementation uses the OpenAI Responses API and strict JSON-schema ou
 - Current worker availability and concurrency.
 - Budget/cost preference.
 - Expected coordination overhead.
+
 ### 8.3 Minimum sufficient team
 
 The Router must explicitly prefer the smallest team that can safely perform the work. Collaboration is not inherently better; it consumes money, time and context.
@@ -548,16 +553,16 @@ type CollaborationMode =
   | "swarm";
 ```
 
-| Mode | Meaning | Typical use |
-| --- | --- | --- |
-| single | One worker owns the task | Straightforward implementation |
-| pair | Driver + active partner/reviewer | Sensitive implementation, difficult refactor |
-| parallel | Several workers independently investigate the same question | High uncertainty / root-cause analysis |
-| partitioned | One business task split into different sub-areas | Large feature with clean internal boundaries |
-| competitive | Independent solutions in isolated worktrees | Difficult bug/algorithm when alternatives are valuable |
-| review | Implementer + independent reviewer(s) | High risk or quality gate |
-| collaborative | Roles coordinate through messages and synthesis | Complex cross-cutting task |
-| swarm | Team shape can change dynamically during the task | Experimental / later-stage autonomous operation |
+| Mode          | Meaning                                                     | Typical use                                            |
+| ------------- | ----------------------------------------------------------- | ------------------------------------------------------ |
+| single        | One worker owns the task                                    | Straightforward implementation                         |
+| pair          | Driver + active partner/reviewer                            | Sensitive implementation, difficult refactor           |
+| parallel      | Several workers independently investigate the same question | High uncertainty / root-cause analysis                 |
+| partitioned   | One business task split into different sub-areas            | Large feature with clean internal boundaries           |
+| competitive   | Independent solutions in isolated worktrees                 | Difficult bug/algorithm when alternatives are valuable |
+| review        | Implementer + independent reviewer(s)                       | High risk or quality gate                              |
+| collaborative | Roles coordinate through messages and synthesis             | Complex cross-cutting task                             |
+| swarm         | Team shape can change dynamically during the task           | Experimental / later-stage autonomous operation        |
 
 ### 10.1 Task execution strategy
 
@@ -624,6 +629,7 @@ An agent may recommend a specific peer, but role/capability requests are preferr
 - Agent confidence materially drops because evidence conflicts.
 - Task needs independent reproduction or validation.
 - Agent detects that proposed task split is unsafe.
+
 ## 12. Agent-to-Agent Communication Bus
 
 Agents need a controlled way to exchange technical questions and evidence. Do not create an unbounded group chat.
@@ -834,15 +840,15 @@ Same task does not mean same writable filesystem. Parallel writers must be isola
 
 ### 16.1 Workspace rules by strategy
 
-| Strategy | Workspace behavior |
-| --- | --- |
-| single | One task worktree |
-| parallel investigation | Shared read-only snapshot or separate read-only contexts |
-| pair | One driver worktree; partner reviews via diff/messages unless explicitly safe |
-| competitive | One isolated writable worktree per solution |
-| partitioned | Separate worktrees per assignment; integrate after verified boundaries |
-| review | Reviewer receives diff/read-only view; no silent edits |
-| collaborative | Writer assignments isolated; synthesis/integration is explicit |
+| Strategy               | Workspace behavior                                                            |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| single                 | One task worktree                                                             |
+| parallel investigation | Shared read-only snapshot or separate read-only contexts                      |
+| pair                   | One driver worktree; partner reviews via diff/messages unless explicitly safe |
+| competitive            | One isolated writable worktree per solution                                   |
+| partitioned            | Separate worktrees per assignment; integrate after verified boundaries        |
+| review                 | Reviewer receives diff/read-only view; no silent edits                        |
+| collaborative          | Writer assignments isolated; synthesis/integration is explicit                |
 
 ### 16.2 Git safety
 
@@ -851,6 +857,7 @@ Same task does not mean same writable filesystem. Parallel writers must be isola
 - Never allow two parallel writable assignments to share a worktree.
 - Preserve failed worktrees until cleanup policy permits deletion.
 - Never push or merge to main automatically in v0.x.
+
 ## 17. Execution Runtime
 
 The runtime manages processes and sessions. It does not make planning or staffing decisions.
@@ -877,6 +884,7 @@ interface ExecutionRecord {
 - Record session IDs.
 - Expose live activity to the conversation runtime.
 - Support agent steering/messages where the adapter/harness allows it.
+
 ## 18. Verification, Review and Rework
 
 > **An agent saying “done” is not evidence of completion.**
@@ -1004,15 +1012,15 @@ TaskForge must run correctly with zero plugins.
 
 ECC is the first real plugin. TaskForge should detect it and selectively use relevant capabilities rather than copying ECC internals into the core.
 
-| ECC can enhance | TaskForge still owns |
-| --- | --- |
-| Skills and engineering workflows | Planning and task graph |
-| Rules / standards | Routing and team formation |
-| Memory / learned patterns | Scheduling and process lifecycle |
-| Security scanning | Worktree isolation and permissions |
-| Quality gates | Authoritative verification state |
-| Harness configuration | Git integration and final branch |
-| Continuous learning | TaskForge telemetry and performance engine |
+| ECC can enhance                  | TaskForge still owns                       |
+| -------------------------------- | ------------------------------------------ |
+| Skills and engineering workflows | Planning and task graph                    |
+| Rules / standards                | Routing and team formation                 |
+| Memory / learned patterns        | Scheduling and process lifecycle           |
+| Security scanning                | Worktree isolation and permissions         |
+| Quality gates                    | Authoritative verification state           |
+| Harness configuration            | Git integration and final branch           |
+| Continuous learning              | TaskForge telemetry and performance engine |
 
 ### 21.2 Selective capability loading
 
@@ -1099,6 +1107,7 @@ The Router may prefer Codex for a role, but the Scheduler can choose another eli
 - Plugin errors cannot corrupt core run state.
 - External AI services can advise but do not own control-plane integrity.
 - No automatic push or merge to protected branches in early releases.
+
 ### 23.1 Environment policy
 
 ```text
@@ -1174,15 +1183,15 @@ security:
 
 ## 25. CLI and Operator Surface
 
-| Entry | Purpose |
-| --- | --- |
-| tf | Start interactive conversation |
-| taskforge | Long alias for `tf` |
-| tf exec <goal> | Headless run for automation |
-| tf doctor | Environment/provider/worktree checks |
-| tf inspect <run> | Non-interactive run inspection |
-| tf resume <run> | Resume interrupted run later |
-| tf cleanup | Explicit cleanup of eligible artifacts |
+| Entry            | Purpose                                |
+| ---------------- | -------------------------------------- |
+| tf               | Start interactive conversation         |
+| taskforge        | Long alias for `tf`                    |
+| tf exec <goal>   | Headless run for automation            |
+| tf doctor        | Environment/provider/worktree checks   |
+| tf inspect <run> | Non-interactive run inspection         |
+| tf resume <run>  | Resume interrupted run later           |
+| tf cleanup       | Explicit cleanup of eligible artifacts |
 
 ### 25.1 In-session deterministic shortcuts
 
@@ -1217,6 +1226,7 @@ Telemetry begins early; adaptive routing comes later. Never invent agent perform
 - Message rounds.
 - Integration success.
 - Token usage and cost when reliably exposed.
+
 ### 26.1 Performance dimensions
 
 ```text
@@ -1246,12 +1256,12 @@ Always show sample size and confidence. Do not hide uncertainty.
 
 ## 27. Testing Strategy
 
-| Layer | Tests |
-| --- | --- |
-| Unit | DAG, state machine, intent parsing contracts, routing schema, scheduler, collaboration limits, configuration |
-| Integration | SQLite, Git worktrees, process runtime, fake routing provider, agent communication bus, plugins, verification |
-| End-to-end | Temporary Git repository + FakeAgents + Router stub + concurrent work + negotiation + commits + integration |
-| Optional provider tests | Real Claude/Codex/Gemini/OpenAI smoke tests gated by credentials, never required for normal CI |
+| Layer                   | Tests                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Unit                    | DAG, state machine, intent parsing contracts, routing schema, scheduler, collaboration limits, configuration  |
+| Integration             | SQLite, Git worktrees, process runtime, fake routing provider, agent communication bus, plugins, verification |
+| End-to-end              | Temporary Git repository + FakeAgents + Router stub + concurrent work + negotiation + commits + integration   |
+| Optional provider tests | Real Claude/Codex/Gemini/OpenAI smoke tests gated by credentials, never required for normal CI                |
 
 ### 27.1 FakeAgent
 
@@ -1262,25 +1272,26 @@ Always show sample size and confidence. Do not hide uncertainty.
 - Write a file and commit.
 - Return review findings.
 - Simulate a conflict or repeated verification failure.
+
 ### 27.2 FakeRouter
 
 Tests must use deterministic Router decisions so CI does not require OpenAI credentials and routing behavior is reproducible.
 
 ## 28. Technology and Repository Layout
 
-| Concern | Choice |
-| --- | --- |
-| Language | TypeScript |
-| Runtime | Node.js 22+ |
-| Package manager | pnpm |
-| Schema validation | Zod |
-| Persistence | SQLite |
-| Git | Native Git CLI |
-| Process execution | child_process or execa |
-| CLI/TUI | Start lightweight; choose Ink or equivalent only when needed |
-| Testing | Vitest |
-| Lint/format | ESLint + Prettier |
-| CI | GitHub Actions |
+| Concern           | Choice                                                       |
+| ----------------- | ------------------------------------------------------------ |
+| Language          | TypeScript                                                   |
+| Runtime           | Node.js 22+                                                  |
+| Package manager   | pnpm                                                         |
+| Schema validation | Zod                                                          |
+| Persistence       | SQLite                                                       |
+| Git               | Native Git CLI                                               |
+| Process execution | child_process or execa                                       |
+| CLI/TUI           | Start lightweight; choose Ink or equivalent only when needed |
+| Testing           | Vitest                                                       |
+| Lint/format       | ESLint + Prettier                                            |
+| CI                | GitHub Actions                                               |
 
 ```text
 taskforge/
@@ -1312,31 +1323,31 @@ Do not create empty packages just to match this tree. Add them as vertical slice
 
 ## 29. Delivery Roadmap
 
-| Phase | Milestone | Scope | Exit criteria |
-| --- | --- | --- | --- |
-| 0 | Foundation | pnpm workspace, strict TS, config, logging, SQLite, events, CI | `tf --help`; test/lint/typecheck green |
-| 1 | Process + Agent runtime | AgentAdapter, FakeAgent, Claude/Codex/Gemini detection & execution | Each adapter can run a trivial isolated task |
-| 2 | Git workspace isolation | RepositoryAnalyzer, Git service, WorktreeManager | FakeAgent writes/commits without touching primary tree |
-| 3 | Core task/DAG state | Goal, Task, state machine, dependencies, persistence | Deterministic DAG execution primitives |
-| 4 | Deterministic scheduler | Runnable queue, concurrency, cancellation, events | Independent fake tasks run in parallel |
-| 5 | Verification/integration | Tests/lint/typecheck/build, run branch, cherry-pick | Verified fake work integrates safely |
-| 6 | Interactive shell | `tf` session, conversation runtime, slash-command framework | User can inspect/control a fake run conversationally |
-| 7 | Operator Agent | Natural-language intents mapped to typed commands | User can pause/reassign/restrict via language |
-| 8 | Planner | Structured proposed TaskGraph | Goal → proposed plan with approval |
-| 9 | Task Contract + Preflight | Accept/challenge/context/split/merge negotiation | Workers can reject bad tasks before execution |
-| 10 | OpenAI Router | Strict structured routing, fallback static strategy | Task → minimum team shape + roles |
-| 11 | Agent selector | Role/capability → concrete available worker | Provider-neutral staffing |
-| 12 | Collaboration bus | Agent messages, limits, persistence | Pair/parallel collaboration works with FakeAgents |
-| 13 | Collaborative execution | AssignmentGraph, synthesis, emergent escalation | One task can involve 2–3 agents safely |
-| 14 | Real-agent E2E v0.1 | Claude + Codex + Gemini on real repo | Conversation → team → verified integration branch |
-| 15 | Plugin SDK | Plugin hooks/config/error isolation | Core runs with zero plugins |
-| 16 | ECC plugin | Selective skills/rules/security/quality gates | ECC removable without core breakage |
-| 17 | Telemetry & stats | Routing/execution/rework/cost history | `/cost`, stats and run evidence |
-| 18 | Performance engine | Aggregations by role/task/repo | Historical signals with sample sizes |
-| 19 | Adaptive routing | History-aware role/agent selection | Adaptive strategy behind feature flag |
-| 20 | Advanced UX | Richer TUI task/team graph, streaming status | Operator experience approaches polished coding CLIs |
-| 21 | GitHub workflow | Issue → run → PR, evidence summary | Optional automation |
-| 22 | Remote workers | Docker/SSH/remote execution | Only after local system is stable |
+| Phase | Milestone                 | Scope                                                              | Exit criteria                                          |
+| ----- | ------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------ |
+| 0     | Foundation                | pnpm workspace, strict TS, config, logging, SQLite, events, CI     | `tf --help`; test/lint/typecheck green                 |
+| 1     | Process + Agent runtime   | AgentAdapter, FakeAgent, Claude/Codex/Gemini detection & execution | Each adapter can run a trivial isolated task           |
+| 2     | Git workspace isolation   | RepositoryAnalyzer, Git service, WorktreeManager                   | FakeAgent writes/commits without touching primary tree |
+| 3     | Core task/DAG state       | Goal, Task, state machine, dependencies, persistence               | Deterministic DAG execution primitives                 |
+| 4     | Deterministic scheduler   | Runnable queue, concurrency, cancellation, events                  | Independent fake tasks run in parallel                 |
+| 5     | Verification/integration  | Tests/lint/typecheck/build, run branch, cherry-pick                | Verified fake work integrates safely                   |
+| 6     | Interactive shell         | `tf` session, conversation runtime, slash-command framework        | User can inspect/control a fake run conversationally   |
+| 7     | Operator Agent            | Natural-language intents mapped to typed commands                  | User can pause/reassign/restrict via language          |
+| 8     | Planner                   | Structured proposed TaskGraph                                      | Goal → proposed plan with approval                     |
+| 9     | Task Contract + Preflight | Accept/challenge/context/split/merge negotiation                   | Workers can reject bad tasks before execution          |
+| 10    | OpenAI Router             | Strict structured routing, fallback static strategy                | Task → minimum team shape + roles                      |
+| 11    | Agent selector            | Role/capability → concrete available worker                        | Provider-neutral staffing                              |
+| 12    | Collaboration bus         | Agent messages, limits, persistence                                | Pair/parallel collaboration works with FakeAgents      |
+| 13    | Collaborative execution   | AssignmentGraph, synthesis, emergent escalation                    | One task can involve 2–3 agents safely                 |
+| 14    | Real-agent E2E v0.1       | Claude + Codex + Gemini on real repo                               | Conversation → team → verified integration branch      |
+| 15    | Plugin SDK                | Plugin hooks/config/error isolation                                | Core runs with zero plugins                            |
+| 16    | ECC plugin                | Selective skills/rules/security/quality gates                      | ECC removable without core breakage                    |
+| 17    | Telemetry & stats         | Routing/execution/rework/cost history                              | `/cost`, stats and run evidence                        |
+| 18    | Performance engine        | Aggregations by role/task/repo                                     | Historical signals with sample sizes                   |
+| 19    | Adaptive routing          | History-aware role/agent selection                                 | Adaptive strategy behind feature flag                  |
+| 20    | Advanced UX               | Richer TUI task/team graph, streaming status                       | Operator experience approaches polished coding CLIs    |
+| 21    | GitHub workflow           | Issue → run → PR, evidence summary                                 | Optional automation                                    |
+| 22    | Remote workers            | Docker/SSH/remote execution                                        | Only after local system is stable                      |
 
 ### 29.1 What must not be built too early
 
@@ -1349,6 +1360,7 @@ Do not create empty packages just to match this tree. Add them as vertical slice
 - Autonomous merge-conflict resolution.
 - Unlimited swarm mode.
 - Billing.
+
 ## 30. Milestone Demonstrations
 
 ### 30.1 Demonstration A: deterministic orchestration
@@ -1411,6 +1423,7 @@ Final branch passes verification.
 - Run recovery/cancellation correctness.
 - No corruption of primary working tree.
 - Percentage of routing decisions successfully executed.
+
 ### 31.2 Collaboration quality
 
 - Collaboration escalation that materially changes outcome.
@@ -1418,12 +1431,14 @@ Final branch passes verification.
 - Reduction in rework after preflight.
 - Messages per successful collaborative task.
 - Time/cost overhead of collaboration versus single-agent work.
+
 ### 31.3 Efficiency later
 
 - Cost per successful task.
 - Tokens per successful task.
 - Wall-clock savings from useful parallelism.
 - Performance by role and agent with sample size.
+
 ## 32. Error Taxonomy and Recovery
 
 ```text
@@ -1466,6 +1481,7 @@ This section is deliberately written so the entire document can be given to Clau
 1. Persist authoritative state outside conversation text.
 1. Record major architecture changes in ADRs.
 1. Keep AGENTS.md/CLAUDE.md concise; point to docs rather than copying the full spec.
+
 ### 33.1 Bootstrap implementation request
 
 ```text
@@ -1580,6 +1596,7 @@ References:
 - OpenAI API Models: https://platform.openai.com/docs/models
 - OpenAI API Structured Outputs / Responses reference: https://platform.openai.com/docs/api-reference
 - ECC repository: https://github.com/affaan-m/ECC
+
 ## 36. Final Product Principle
 
 > **TaskForge is not “three AIs answering a prompt.”**

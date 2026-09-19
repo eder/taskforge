@@ -1,9 +1,5 @@
 import { AgentAdapter } from './adapter-interface.js';
-import {
-  ClaudeCodeAdapter,
-  CodexAdapter,
-  AntigravityAdapter,
-} from './real-adapters.js';
+import { ClaudeCodeAdapter, CodexAdapter, AntigravityAdapter } from './real-adapters.js';
 import { AgentQuotaTracker, AgentQuotaStatus } from './quota-tracker.js';
 
 export interface AgentDetectionReport {

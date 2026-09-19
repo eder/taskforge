@@ -1,9 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  TaskForgeDatabase,
-  CostRepository,
-  RunMetricsRepository,
-} from '@taskforge/persistence';
+import { TaskForgeDatabase, CostRepository, RunMetricsRepository } from '@taskforge/persistence';
 import { CostEstimator } from './cost-estimator.js';
 import { RunCostReport, RunSummaryStats, TaskCostSummary } from './types.js';
 
@@ -24,11 +20,7 @@ export class TelemetryCollector {
     inputTokens: number;
     outputTokens: number;
   }): TaskCostSummary {
-    const costUsd = CostEstimator.estimateCost(
-      item.modelName,
-      item.inputTokens,
-      item.outputTokens,
-    );
+    const costUsd = CostEstimator.estimateCost(item.modelName, item.inputTokens, item.outputTokens);
 
     this.costRepo.record({
       id: `cost-${randomUUID()}`,

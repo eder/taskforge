@@ -1,4 +1,5 @@
 # TaskForge: Architecture & Verification Guide (Phases 6–13)
+
 **Milestone 2: Conversational REPL, Operator Agent, Dynamic Planning, Negotiation, Routing, and Collaborative Multi-Agent Execution**
 
 ---
@@ -8,6 +9,7 @@
 Milestone 2 implements the conversational control plane, dynamic task generation, structured preflight negotiation, provider routing, agent selection, structured message bus, and collaborative multi-agent execution workflows specified in Sections 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, and 34 of `taskforge-complete-product-engineering-spec.md`.
 
 The core invariant of TaskForge is maintained at all times:
+
 > **AI models propose, interpret, and challenge. Deterministic TypeScript/Node.js control plane code governs state transitions, Git operations, permissions, process execution, and verification.**
 
 ```mermaid
@@ -32,23 +34,25 @@ flowchart TD
 
 ## 2. Package Architecture (Milestone 2)
 
-| Package | Role & Responsibility | Spec Reference |
-|---|---|---|
-| `@taskforge/conversation` | Interactive CLI REPL (`tf`), terminal banner with repository health, clean/modified status, detected agents, router status, and ECC detection. | Section 6, 24 |
-| `@taskforge/operator` | Natural language intent parser (Portuguese and English) and slash commands (`/tasks`, `/agents`, `/plan`, `/pause`, `/resume`, `/reassign`, `/constraint`). Formats responses without executing code directly. | Section 4, 5 |
-| `@taskforge/planner` | `HeuristicPlanner` breaking goals into DAGs with strict `TaskContract` (allowedScope, forbiddenChanges, acceptanceCriteria, dependencies). Propagates goal constraints to all subtasks. | Section 7, 28 |
-| `@taskforge/negotiation` | Worker Preflight protocol: evaluates contracts before execution. Handles `accept`, `challenge`, `need_dependency`, `recommend_merge`, updating the `TaskGraph` deterministically and auditing to `preflight_results`. | Section 8 |
-| `@taskforge/router` | Routing decisions with strict JSON Schema via OpenAI Structured Outputs (`OpenAIRoutingProvider`) with resilient fallback to deterministic heuristics (`StaticRoutingProvider`). Classifies roles neutrally without vendor bias. | Section 9, 29 |
+| Package                    | Role & Responsibility                                                                                                                                                                                                                                  | Spec Reference         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------- |
+| `@taskforge/conversation`  | Interactive CLI REPL (`tf`), terminal banner with repository health, clean/modified status, detected agents, router status, and ECC detection.                                                                                                         | Section 6, 24          |
+| `@taskforge/operator`      | Natural language intent parser (Portuguese and English) and slash commands (`/tasks`, `/agents`, `/plan`, `/pause`, `/resume`, `/reassign`, `/constraint`). Formats responses without executing code directly.                                         | Section 4, 5           |
+| `@taskforge/planner`       | `HeuristicPlanner` breaking goals into DAGs with strict `TaskContract` (allowedScope, forbiddenChanges, acceptanceCriteria, dependencies). Propagates goal constraints to all subtasks.                                                                | Section 7, 28          |
+| `@taskforge/negotiation`   | Worker Preflight protocol: evaluates contracts before execution. Handles `accept`, `challenge`, `need_dependency`, `recommend_merge`, updating the `TaskGraph` deterministically and auditing to `preflight_results`.                                  | Section 8              |
+| `@taskforge/router`        | Routing decisions with strict JSON Schema via OpenAI Structured Outputs (`OpenAIRoutingProvider`) with resilient fallback to deterministic heuristics (`StaticRoutingProvider`). Classifies roles neutrally without vendor bias.                       | Section 9, 29          |
 | `@taskforge/collaboration` | `CommunicationBus` with message guardrails (max 10 messages/round, loop prevention, persistence in `agent_messages`), `AssignmentGraph` with parallel investigation and `SynthesisCoordinator`, and `EscalationHandler` for `COLLABORATION_ESCALATED`. | Section 10, 11, 12, 13 |
-| `@taskforge/scheduler` | Enhanced `DeterministicScheduler` supporting preflight negotiation hooks, collaborative multi-assignment execution, and emergent collaboration escalation. | Section 13, 20 |
-| `apps/cli` | Invoking `tf` with no arguments directly launches the interactive conversational REPL shell. | Section 6, 34 |
+| `@taskforge/scheduler`     | Enhanced `DeterministicScheduler` supporting preflight negotiation hooks, collaborative multi-assignment execution, and emergent collaboration escalation.                                                                                             | Section 13, 20         |
+| `apps/cli`                 | Invoking `tf` with no arguments directly launches the interactive conversational REPL shell.                                                                                                                                                           | Section 6, 34          |
 
 ---
 
 ## 3. Detailed Phase Breakdown
 
 ### Phase 6: Interactive Shell REPL (`tf`)
+
 - Running `tf` opens the interactive prompt `> `:
+
 ```text
  TaskForge
  /Users/edereduardo/projects/taskforge  •  main  •  clean
@@ -66,10 +70,12 @@ flowchart TD
 ────────────────────────────────────
 > _
 ```
+
 - Real-time detection of local harness readiness (`claude`, `codex`, `gemini`).
 - Clean exit via `/exit` or `/quit` with graceful stream teardown.
 
 ### Phase 7: Operator Agent Intent Layer
+
 - Interprets user input via rule-based semantic NLP with zero hallucination.
 - Supported operations:
   - **Inspection**: `/tasks`, `/agents`, `/plan`, `/cost`, "como estão as tarefas?", "quais agentes estão disponíveis?".
@@ -79,6 +85,7 @@ flowchart TD
   - **Goal Proposal**: "implemente autenticação JWT", "investigar e resolver memory leak crítico".
 
 ### Phase 8: Planner
+
 - Generates topologically valid `TaskGraph` instances.
 - Populates explicit `TaskContract` on each node:
   - `allowedScope`: Glob patterns of files writable by this task.
@@ -87,6 +94,7 @@ flowchart TD
   - `dependencies`: Upstream task IDs required before task can execute.
 
 ### Phase 9: Task Contract & Preflight Negotiation
+
 - Before execution, contracts are presented to worker agents.
 - Workers return structured `TaskPreflightResult`:
   - `accept`: Task transitions `preflight -> accepted -> ready`.
@@ -94,14 +102,17 @@ flowchart TD
 - All decisions persisted in SQLite `preflight_results` table.
 
 ### Phase 10: Router Provider (Strict Structured Output + Static Fallback)
+
 - Neutral taxonomy of roles: `researcher`, `reproduction_engineer`, `lead`, `implementer`, `reviewer`, `tester`, `architecture_reviewer`, `security_reviewer`, `critic`, `integrator`.
 - Provider selects strategy: `single`, `pair`, `parallel`, `partitioned`, `competitive`, `review`, `collaborative`, `swarm`.
 - Strict JSON Schema with fallback to `StaticRoutingProvider` when API keys are absent or network errors occur.
 
 ### Phase 11: Agent Selector
+
 - Maps abstract role requests (e.g. `researcher` needing `canRead`, `implementer` needing `canWrite`) to concrete available agents registered in `AgentRegistry` (Claude, Codex, Gemini, or specialized workers).
 
 ### Phase 12: Agent Communication Bus
+
 - Inter-agent messaging system supporting types: `query`, `finding`, `challenge`, `proposal`.
 - Enforces guardrails:
   - Configurable message limits per round (default 6 to 10).
@@ -110,6 +121,7 @@ flowchart TD
 - Every message audited to SQLite table `agent_messages` and event `AGENT_MESSAGE_SENT`.
 
 ### Phase 13: Collaborative Execution, Synthesis, and Emergent Escalation
+
 - **Parallel Investigation**: Multiple agents (e.g., 3 FakeAgents) investigate different aspects simultaneously in isolated Git worktrees.
 - **Synthesis Node (`SynthesisCoordinator`)**: Synthesizes evidence, root causes, and recommended fixes before the implementer generates code changes.
 - **Emergent Escalation (`COLLABORATION_ESCALATED`)**: When a worker discovers scope complexity exceeding single-agent capacity, it returns `CollaborationProposal`. The control plane emits `COLLABORATION_ESCALATED` and halts or reorganizes assignments.
@@ -125,6 +137,7 @@ pnpm lint && pnpm typecheck && pnpm test
 ```
 
 ### Test Summary
+
 - **14 Test Files Passed**
 - **44 Tests Passed**
 - **0 Failures, 0 Warnings**

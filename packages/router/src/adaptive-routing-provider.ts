@@ -42,7 +42,8 @@ export class AdaptiveRoutingProvider implements RoutingProvider {
 
         const isConfidenceAcceptable =
           minConfidence === 'low' ||
-          (minConfidence === 'medium' && (stats.confidence === 'medium' || stats.confidence === 'high')) ||
+          (minConfidence === 'medium' &&
+            (stats.confidence === 'medium' || stats.confidence === 'high')) ||
           (minConfidence === 'high' && stats.confidence === 'high');
 
         if (isConfidenceAcceptable && stats.sampleSize > 0) {

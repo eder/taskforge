@@ -2,7 +2,10 @@ import { RepositoryProfile, Constraint } from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
 
 export function isPureExplanationGoal(description: string): boolean {
-  const desc = description.toLowerCase().replace(/[?!.,;:]+/g, ' ').trim();
+  const desc = description
+    .toLowerCase()
+    .replace(/[?!.,;:]+/g, ' ')
+    .trim();
 
   // Actionable verbs imply code modification
   const hasActionVerb =
@@ -71,7 +74,9 @@ export class HeuristicPlanner implements Planner {
 
     const isFullStack =
       (desc.includes('frontend') && desc.includes('backend')) ||
-      (profile?.frameworks?.some((f) => f.includes('React') || f.includes('Vue') || f.includes('Next')) &&
+      (profile?.frameworks?.some(
+        (f) => f.includes('React') || f.includes('Vue') || f.includes('Next'),
+      ) &&
         (desc.includes('auth') || desc.includes('oauth') || desc.includes('endpoint')));
 
     if (isPureExplanation) {
@@ -87,7 +92,9 @@ export class HeuristicPlanner implements Planner {
           objective: `Analyze repository and explain to user: ${goal.description}`,
           allowedScope: [],
           forbiddenChanges: ['*'],
-          acceptanceCriteria: ['Comprehensive explanation of project architecture and functionality generated'],
+          acceptanceCriteria: [
+            'Comprehensive explanation of project architecture and functionality generated',
+          ],
           dependencies: [],
         },
         acceptanceCriteria: ['Explanation provided'],
@@ -122,12 +129,15 @@ export class HeuristicPlanner implements Planner {
       };
       tasks.push(task1);
     } else if (isInvestigationNeeded) {
-      const isExplanation = desc.includes('explique') || desc.includes('explain') || desc.includes('entenda');
+      const isExplanation =
+        desc.includes('explique') || desc.includes('explain') || desc.includes('entenda');
       // 1. Investigation task
       const task1: Task = {
         id: 'TASK-01',
         goalId: goal.id,
-        title: isExplanation ? 'Analyze Architecture and Project Scope' : 'Investigate Root Cause and Architecture',
+        title: isExplanation
+          ? 'Analyze Architecture and Project Scope'
+          : 'Investigate Root Cause and Architecture',
         description: `Analyze flow and structure related to: ${goal.description}`,
         type: 'investigation',
         status: 'proposed',
@@ -226,7 +236,10 @@ export class HeuristicPlanner implements Planner {
           objective: 'Frontend user interface',
           allowedScope: ['src/frontend/**', 'client/**', 'components/**'],
           forbiddenChanges: ['src/backend/**'],
-          acceptanceCriteria: ['UI components render and connect to backend', 'Frontend tests pass'],
+          acceptanceCriteria: [
+            'UI components render and connect to backend',
+            'Frontend tests pass',
+          ],
           dependencies: ['TASK-01'],
         },
         acceptanceCriteria: ['Frontend operational'],
@@ -271,7 +284,10 @@ export class HeuristicPlanner implements Planner {
           objective: goal.description,
           allowedScope: ['*'],
           forbiddenChanges: [],
-          acceptanceCriteria: goal.acceptanceCriteria.length > 0 ? goal.acceptanceCriteria : ['Implementation satisfies goal'],
+          acceptanceCriteria:
+            goal.acceptanceCriteria.length > 0
+              ? goal.acceptanceCriteria
+              : ['Implementation satisfies goal'],
           dependencies: [],
         },
         acceptanceCriteria: ['Implementation satisfies goal'],
@@ -308,7 +324,8 @@ export class HeuristicPlanner implements Planner {
     if (goal.constraints && goal.constraints.length > 0) {
       for (const t of tasks) {
         for (const c of goal.constraints) {
-          const val = typeof c === 'string' ? (c as string) : (c as Constraint).value ?? JSON.stringify(c);
+          const val =
+            typeof c === 'string' ? (c as string) : ((c as Constraint).value ?? JSON.stringify(c));
           t.contract.forbiddenChanges.push(val);
         }
       }

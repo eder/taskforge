@@ -118,7 +118,8 @@ export class SynthesisCoordinator {
 
     return {
       rootCause: `Synthesized root cause from ${input.investigationOutputs.length} workers:\n${combined}`,
-      recommendedFix: 'Apply idempotent locking and state guardrails based on multi-worker investigation',
+      recommendedFix:
+        'Apply idempotent locking and state guardrails based on multi-worker investigation',
       requiredTest: 'Regression test covering concurrent operations without duplicate side effects',
     };
   }

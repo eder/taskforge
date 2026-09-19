@@ -1,10 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TaskForgeDatabase } from '@taskforge/persistence';
-import {
-  CostEstimator,
-  TelemetryCollector,
-  PerformanceEngine,
-} from '../src/index.js';
+import { CostEstimator, TelemetryCollector, PerformanceEngine } from '../src/index.js';
 
 describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
   let db: TaskForgeDatabase;
@@ -35,9 +31,10 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       const runId = 'run-cost-test';
 
       // Insert dummy task in DB for foreign key constraint
-      db.prepare(
-        `INSERT INTO runs (id, status, created_at) VALUES (?, 'running', ?)`,
-      ).run(runId, new Date().toISOString());
+      db.prepare(`INSERT INTO runs (id, status, created_at) VALUES (?, 'running', ?)`).run(
+        runId,
+        new Date().toISOString(),
+      );
 
       db.prepare(
         `INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at)

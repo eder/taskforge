@@ -1,10 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  VerificationCheck,
-  VerificationResult,
-  TaskForgeConfig,
-} from '@taskforge/shared';
+import { VerificationCheck, VerificationResult, TaskForgeConfig } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import { EventRepository, VerificationRepository } from '@taskforge/persistence';
 
@@ -78,7 +74,11 @@ export class VerificationRunner {
 
     const testResolved = resolveScript('test', customCommands?.testCommand, 'pnpm test');
     const lintResolved = resolveScript('lint', customCommands?.lintCommand, 'pnpm lint');
-    const typecheckResolved = resolveScript('typecheck', customCommands?.typecheckCommand, 'pnpm typecheck');
+    const typecheckResolved = resolveScript(
+      'typecheck',
+      customCommands?.typecheckCommand,
+      'pnpm typecheck',
+    );
     const buildResolved = resolveScript('build', customCommands?.buildCommand, 'pnpm build');
 
     const checksToRun: Array<{ name: string; command: string; enabled: boolean }> = [

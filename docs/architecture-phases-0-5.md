@@ -44,12 +44,14 @@ This document describes the foundation and deterministic orchestration engine im
 ```
 
 ### Phase 0: Foundation
+
 - **Monorepo & Tooling**: pnpm workspace, Node.js 22+, strict TypeScript (`tsc -b`), ESLint (flat config), Vitest, Prettier, GitHub Actions CI workflow (`.github/workflows/ci.yml`).
 - **Configuration**: Zod-validated configuration schema matching `.taskforge/config.yaml` specification with safe defaults.
 - **Persistence Schema**: SQLite with WAL mode, foreign keys enabled, complete schema covering runs, goals, tasks, task_dependencies, task_contracts, assignments, executions, verification_results, workspaces, and audit events.
 - **Audit Reconstruction**: `AuditService` reconstructs goals, tasks, timeline events, and execution records by `runId`.
 
 ### Phase 1: Process & Agent Runtime
+
 - **ProcessRunner**: Subprocess management with PID tracking, AbortSignal cancellation, timeout enforcement, process-group termination (`SIGTERM` -> `SIGKILL`), and stdout/stderr capture to streams and log files.
 - **Environment Sanitization**: Strict allowlist filtering (`PATH`, `HOME`, etc.) and pattern-based denial (`*PASSWORD*`, `*SECRET*`, `*TOKEN*`, `*API_KEY*`).
 - **AgentAdapter Interface**: Typed interface with `detect()`, `capabilities()`, `execute()`, `send()`, and `cancel()`.
@@ -58,11 +60,13 @@ This document describes the foundation and deterministic orchestration engine im
 - **AgentDetector & Registry**: Automatic discovery and status reporting (`tf doctor`).
 
 ### Phase 2: Git Workspace Isolation
+
 - **GitService**: Safe native Git operations (status, rev-parse, branches, staging, commits, cherry-picks). Invariant: never silently cleans or resets user working tree.
 - **WorktreeManager**: Dynamically provisions isolated Git worktrees under `.taskforge/worktrees/<taskId>/<assignmentId>`. Asserts that parallel writable work never shares a workspace. Preserves failed worktrees when requested.
 - **RepositoryAnalyzer**: Inspects languages (TypeScript, JavaScript, Python, Rust, Go), package managers, frameworks, and checks for ECC (`.ecc/`).
 
 ### Phase 3: Core Task & DAG State
+
 - **Goal & Task Models**: Strongly typed domain models including `TaskContract` (objective, allowedScope, forbiddenChanges, acceptanceCriteria).
 - **TaskStateMachine**: Deterministic state machine governing lifecycle:
   `proposed` -> `preflight` -> `negotiating` -> `accepted` -> `ready` -> `assigned` -> `running` -> `completed` -> `verification` -> `verified` -> `integrated` (with rework and failure transitions).
@@ -70,10 +74,12 @@ This document describes the foundation and deterministic orchestration engine im
 - **Extensible Interfaces**: Prepared clean interfaces for future components (`Planner`, `Router`, `Negotiator`).
 
 ### Phase 4: Deterministic Scheduler
+
 - **ConcurrencyManager**: Manages slots against `execution.maxParallelTasks` and per-agent `maxParallel` limits.
 - **DeterministicScheduler**: Main execution loop that schedules runnable tasks, provisions isolated worktrees, invokes agent adapters, drives verification, triggers rework loops, and integrates verified commits.
 
 ### Phase 5: Verification & Integration
+
 - **VerificationRunner**: Executes test, lint, typecheck, and build commands in assignment worktrees. Captures exit codes, stdout, and duration.
 - **IntegrationService**: Creates dedicated integration branch `taskforge/run-<run-id>`. Safely cherry-picks verified commits using a synchronization queue lock to prevent Git index conflicts. Detects merge conflicts and aborts without repository corruption.
 - **CLI Commands**:
@@ -105,6 +111,7 @@ All automated test suites pass with 100% success (`pnpm test`, `pnpm lint`, `pnp
 ## 4. Known Limitations & Out of Scope for Bootstrap
 
 As per specification section 33.1, the following are deliberately deferred to subsequent milestones:
+
 - **Interactive TUI / Terminal Shell**: The current interface is command-line based (`tf exec`, `tf doctor`, `tf inspect`). The interactive conversational loop starts in Phase 6.
 - **Operator Agent & Natural Language Intent Mapping**: Reserved for Phase 7.
 - **LLM Planner**: Initial task graphs in headless mode are defined deterministically; LLM-based graph generation is reserved for Phase 8.

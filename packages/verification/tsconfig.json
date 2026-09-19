@@ -5,10 +5,6 @@
     "rootDir": "./src",
     "composite": true
   },
-  "references": [
-    { "path": "../shared" },
-    { "path": "../execution" },
-    { "path": "../persistence" }
-  ],
+  "references": [{ "path": "../shared" }, { "path": "../execution" }, { "path": "../persistence" }],
   "include": ["src/**/*"]
 }
