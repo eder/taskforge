@@ -43,6 +43,7 @@ export interface RunOptions {
   preplannedGraph?: TaskGraph;
   fakeFallback?: boolean;
   onProgress?: (message: string) => void;
+  abortSignal?: AbortSignal;
 }
 
 export interface OrchestrationResult {
@@ -257,6 +258,7 @@ export class RunOrchestrator {
       workspaceRepo: this.workspaceRepo,
       interactionGateway: this.interactionGateway,
       onProgress: options.onProgress,
+      abortSignal: options.abortSignal,
     });
 
     const schedulerResult = await scheduler.run();

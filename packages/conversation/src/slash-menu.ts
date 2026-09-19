@@ -138,8 +138,8 @@ export class SlashMenu {
       this.scrollOffset = this.selectedIndex - maxVisible + 1;
     }
 
-    // Place menu directly above pinned footer divider (which sits at rows - 2)
-    const startRow = Math.max(1, this.rows - 2 - boxHeight);
+    // Place menu directly above persistent bottom input line (which sits at rows)
+    const startRow = Math.max(1, this.rows - boxHeight);
 
     // Save cursor position
     this.outStream.write('\x1b7');
@@ -205,7 +205,7 @@ export class SlashMenu {
     if (!this.isInteractive || this.menuHeight === 0) return;
     const streamAny = this.outStream as unknown as { rows?: number };
     const rows = streamAny.rows || 24;
-    const startRow = Math.max(1, rows - 2 - this.menuHeight);
+    const startRow = Math.max(1, rows - this.menuHeight);
 
     this.outStream.write('\x1b7');
     for (let i = 0; i < this.menuHeight; i++) {

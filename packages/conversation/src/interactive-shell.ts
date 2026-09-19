@@ -82,6 +82,22 @@ export function isPortugueseText(text: string): boolean {
   return false;
 }
 
+export function findWordLeft(text: string, pos: number): number {
+  if (pos <= 0) return 0;
+  let i = pos - 1;
+  while (i > 0 && /\s/.test(text[i])) i--;
+  while (i > 0 && !/\s/.test(text[i - 1])) i--;
+  return i;
+}
+
+export function findWordRight(text: string, pos: number): number {
+  if (pos >= text.length) return text.length;
+  let i = pos;
+  while (i < text.length && !/\s/.test(text[i])) i++;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  return i;
+}
+
 export class InteractiveShell {
   private repoRoot: string;
   private config: TaskForgeConfig;
@@ -182,7 +198,7 @@ export class InteractiveShell {
     return lines.join('\n');
   }
 
-  async handleInput(input: string): Promise<string> {
+  async handleInput(input: string, abortSignal?: AbortSignal): Promise<string> {
     const text = input.trim();
     if (!text) return '';
 
@@ -454,6 +470,7 @@ export class InteractiveShell {
             {
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
+              abortSignal,
               onProgress: (msg) => {
                 this.viewport.writeUpper(theme.formatProgressMessage(msg));
               },
@@ -472,7 +489,12 @@ export class InteractiveShell {
             escalationsCount: 0,
           });
 
-          const statusColor = result.status === 'completed' ? colors.green : colors.red;
+          const statusColor =
+            result.status === 'completed'
+              ? colors.green
+              : result.status === 'cancelled'
+              ? colors.yellow
+              : colors.red;
 
           const outputs = Object.entries(result.taskOutputs ?? {})
             .filter(([, text]) => text && text.trim().length > 0)
@@ -486,10 +508,17 @@ export class InteractiveShell {
           const outputPrefix = outputs ? `${outputs}\n` : '';
 
           const isSuccess = result.status === 'completed';
+          const isCancelled = result.status === 'cancelled';
           const title = isSuccess
             ? (isEn ? 'Plan executed successfully!' : 'Plano executado com sucesso!')
+            : isCancelled
+            ? (isEn ? 'Plan execution cancelled by user' : 'Execução cancelada pelo usuário')
             : (isEn ? 'Plan execution encountered issues' : 'Execução do plano finalizada com pendências');
-          const titleIcon = isSuccess ? `${colors.green}✔${colors.reset}` : `${colors.red}✖${colors.reset}`;
+          const titleIcon = isSuccess
+            ? `${colors.green}✔${colors.reset}`
+            : isCancelled
+            ? `${colors.yellow}⊘${colors.reset}`
+            : `${colors.red}✖${colors.reset}`;
 
           if (isEn) {
             return [
@@ -610,97 +639,353 @@ export class InteractiveShell {
     const inStream = this.options.input ?? process.stdin;
     const outStream = this.options.output ?? process.stdout;
 
-    // Initialize viewport (if interactive, sets DECSTBM scrolling margin, clears screen, draws fixed footer)
+    // Non-interactive fallback (tests, pipes, CI)
+    if (!this.viewport.isInteractive) {
+      this.viewport.writeUpper(banner);
+      const rl = readline.createInterface({
+        input: inStream,
+        output: outStream,
+        terminal: false,
+      });
+
+      for await (const line of rl) {
+        const trimmed = line.trim();
+        if (trimmed === '/exit' || trimmed === '/quit') break;
+        if (!trimmed) continue;
+        const reply = await this.handleInput(trimmed);
+        if (reply) {
+          outStream.write(`${reply}\n`);
+        }
+      }
+      return;
+    }
+
+    // Interactive Terminal REPL with persistent bottom line starting with `> `
     this.viewport.init();
     this.viewport.writeUpper(banner);
 
-    const promptStr = theme.prompt(gitStatus.currentBranch, repoName);
+    const inStreamAny = inStream as unknown as {
+      setRawMode?: (mode: boolean) => void;
+      resume?: () => void;
+      pause?: () => void;
+    };
+    if (typeof inStreamAny.setRawMode === 'function') {
+      try {
+        inStreamAny.setRawMode(true);
+      } catch {}
+    }
+    inStreamAny.resume?.();
 
-    const rl = readline.createInterface({
-      input: inStream,
-      output: outStream,
-      prompt: this.viewport.isInteractive ? `${colors.brand}╰─${colors.green}❯${colors.reset} ` : promptStr,
-    });
+    readline.emitKeypressEvents(inStream);
 
-    const origTtyWrite = (rl as any)._ttyWrite?.bind(rl);
-    if (typeof origTtyWrite === 'function') {
-      (rl as any)._ttyWrite = (s: string, key?: readline.Key) => {
-        if (this.slashMenu.isOpen && key) {
-          if (key.name === 'up') {
-            this.slashMenu.selectPrev();
-            return;
-          }
-          if (key.name === 'down') {
-            this.slashMenu.selectNext();
-            return;
-          }
-          if (key.name === 'tab') {
-            const selected = this.slashMenu.getSelected();
-            if (selected) {
-              (rl as any).line = selected.cmd;
-              (rl as any).cursor = selected.cmd.length;
-              (rl as any)._refreshLine?.();
-              this.slashMenu.update(rl.line);
-            }
-            return;
-          }
-          if (key.name === 'escape') {
-            this.slashMenu.close();
-            return;
-          }
-          if (key.name === 'return' || key.name === 'enter') {
-            const selected = this.slashMenu.getSelected();
-            if (selected && (rl.line === '/' || !rl.line.includes(' '))) {
-              (rl as any).line = selected.cmd;
-              (rl as any).cursor = selected.cmd.length;
-            }
-            this.slashMenu.close();
-            origTtyWrite(s, key);
-            return;
-          }
+    let buffer = '';
+    let cursorIndex = 0;
+    const history: string[] = [];
+    let historyIndex = -1;
+    let savedInput = '';
+    let isRunning = false;
+    let activeAbortController: AbortController | undefined;
+    let closed = false;
+    let pendingResolve: ((line: string | null) => void) | null = null;
+
+    const readNextLine = (): Promise<string | null> => {
+      return new Promise((resolve) => {
+        pendingResolve = resolve;
+      });
+    };
+
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      this.slashMenu.close();
+      this.viewport.cleanup();
+      inStream.removeListener('keypress', onKeypress);
+      if (typeof inStreamAny.setRawMode === 'function') {
+        try {
+          inStreamAny.setRawMode(false);
+        } catch {}
+      }
+      worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
+    };
+
+    const onKeypress = (str: string | undefined, key: readline.Key | undefined) => {
+      if (closed) return;
+
+      // Ctrl+C: Cancel current running operation or exit safely
+      if (key?.ctrl && key?.name === 'c') {
+        if (isRunning && activeAbortController) {
+          activeAbortController.abort();
+          this.viewport.writeUpper(
+            `\n${colors.red}^C ${this.sessionLanguage === 'en' ? 'Operation cancelled by user.' : 'Operação cancelada pelo usuário.'}${colors.reset}\n`,
+          );
+          buffer = '';
+          cursorIndex = 0;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          return;
         }
 
-        origTtyWrite(s, key);
+        if (buffer.length > 0) {
+          buffer = '';
+          cursorIndex = 0;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          return;
+        }
 
-        const isBackspace = Boolean(key && (key.name === 'backspace' || key.name === 'delete'));
-        if (rl.line.startsWith('/')) {
-          const updateRes = this.slashMenu.update(rl.line, isBackspace);
+        const exitMsg =
+          this.sessionLanguage === 'en'
+            ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
+            : `\n${colors.brand}✦${colors.reset} Até logo!\n`;
+        this.viewport.writeUpper(exitMsg);
+        cleanup();
+        const res = pendingResolve;
+        pendingResolve = null;
+        res?.(null);
+        process.exit(0);
+        return;
+      }
+
+      // Ctrl+D: Exit CLI when input is empty; delete char under cursor if not empty
+      if (key?.ctrl && key?.name === 'd') {
+        if (buffer.length === 0) {
+          const exitMsg =
+            this.sessionLanguage === 'en'
+              ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
+              : `\n${colors.brand}✦${colors.reset} Até logo!\n`;
+          this.viewport.writeUpper(exitMsg);
+          cleanup();
+          const res = pendingResolve;
+          pendingResolve = null;
+          res?.(null);
+          process.exit(0);
+          return;
+        }
+
+        if (cursorIndex < buffer.length) {
+          buffer = buffer.slice(0, cursorIndex) + buffer.slice(cursorIndex + 1);
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          if (buffer.startsWith('/')) {
+            this.slashMenu.update(buffer, false);
+          } else {
+            this.slashMenu.close();
+          }
+        }
+        return;
+      }
+
+      // If an operation is actively running, ignore other key entries (except Ctrl+C above)
+      if (isRunning) {
+        return;
+      }
+
+      // Return / Enter: submit line
+      if (key?.name === 'return' || key?.name === 'enter') {
+        if (this.slashMenu.isOpen) {
+          const selected = this.slashMenu.getSelected();
+          if (selected && (buffer === '/' || !buffer.includes(' '))) {
+            buffer = selected.cmd;
+          }
+          this.slashMenu.close();
+        }
+
+        const submitted = buffer;
+        buffer = '';
+        cursorIndex = 0;
+        historyIndex = -1;
+        savedInput = '';
+
+        if (submitted.trim()) {
+          history.push(submitted);
+        }
+
+        // Echo user prompt into the upper scrolling history
+        this.viewport.writeUpper(`${colors.bold}${colors.green}>${colors.reset} ${submitted}`);
+
+        const res = pendingResolve;
+        pendingResolve = null;
+        res?.(submitted);
+        return;
+      }
+
+      // Slash menu navigation with Up / Down / Tab / Esc
+      if (this.slashMenu.isOpen && key) {
+        if (key.name === 'up') {
+          this.slashMenu.selectPrev();
+          return;
+        }
+        if (key.name === 'down') {
+          this.slashMenu.selectNext();
+          return;
+        }
+        if (key.name === 'tab') {
+          const selected = this.slashMenu.getSelected();
+          if (selected) {
+            buffer = selected.cmd;
+            cursorIndex = buffer.length;
+            this.slashMenu.update(buffer);
+            this.viewport.renderInputLine(buffer, cursorIndex, '');
+          }
+          return;
+        }
+        if (key.name === 'escape') {
+          this.slashMenu.close();
+          return;
+        }
+      }
+
+      // Backspace
+      if (key?.name === 'backspace') {
+        if (cursorIndex > 0) {
+          buffer = buffer.slice(0, cursorIndex - 1) + buffer.slice(cursorIndex);
+          cursorIndex--;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          if (buffer.startsWith('/')) {
+            this.slashMenu.update(buffer, true);
+          } else {
+            this.slashMenu.close();
+          }
+        }
+        return;
+      }
+
+      // Delete key
+      if (key?.name === 'delete') {
+        if (cursorIndex < buffer.length) {
+          buffer = buffer.slice(0, cursorIndex) + buffer.slice(cursorIndex + 1);
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          if (buffer.startsWith('/')) {
+            this.slashMenu.update(buffer, false);
+          } else {
+            this.slashMenu.close();
+          }
+        }
+        return;
+      }
+
+      // Left arrow (with word jump support)
+      if (key?.name === 'left') {
+        if (key.meta || key.ctrl) {
+          cursorIndex = findWordLeft(buffer, cursorIndex);
+        } else if (cursorIndex > 0) {
+          cursorIndex--;
+        }
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        return;
+      }
+
+      // Right arrow (with word jump support)
+      if (key?.name === 'right') {
+        if (key.meta || key.ctrl) {
+          cursorIndex = findWordRight(buffer, cursorIndex);
+        } else if (cursorIndex < buffer.length) {
+          cursorIndex++;
+        }
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        return;
+      }
+
+      // Home / Ctrl+A
+      if (key?.name === 'home' || (key?.ctrl && key?.name === 'a')) {
+        cursorIndex = 0;
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        return;
+      }
+
+      // End / Ctrl+E
+      if (key?.name === 'end' || (key?.ctrl && key?.name === 'e')) {
+        cursorIndex = buffer.length;
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        return;
+      }
+
+      // Ctrl+U (delete to start of line)
+      if (key?.ctrl && key?.name === 'u') {
+        buffer = buffer.slice(cursorIndex);
+        cursorIndex = 0;
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        if (!buffer.startsWith('/')) this.slashMenu.close();
+        return;
+      }
+
+      // Ctrl+K (delete to end of line)
+      if (key?.ctrl && key?.name === 'k') {
+        buffer = buffer.slice(0, cursorIndex);
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        if (!buffer.startsWith('/')) this.slashMenu.close();
+        return;
+      }
+
+      // Ctrl+W (delete previous word)
+      if (key?.ctrl && key?.name === 'w') {
+        const newIdx = findWordLeft(buffer, cursorIndex);
+        buffer = buffer.slice(0, newIdx) + buffer.slice(cursorIndex);
+        cursorIndex = newIdx;
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        if (!buffer.startsWith('/')) this.slashMenu.close();
+        return;
+      }
+
+      // Up arrow: Command history previous
+      if (key?.name === 'up') {
+        if (history.length > 0) {
+          if (historyIndex === -1) {
+            savedInput = buffer;
+            historyIndex = history.length - 1;
+          } else if (historyIndex > 0) {
+            historyIndex--;
+          }
+          buffer = history[historyIndex];
+          cursorIndex = buffer.length;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+        }
+        return;
+      }
+
+      // Down arrow: Command history next
+      if (key?.name === 'down') {
+        if (historyIndex !== -1) {
+          if (historyIndex < history.length - 1) {
+            historyIndex++;
+            buffer = history[historyIndex];
+          } else {
+            historyIndex = -1;
+            buffer = savedInput;
+          }
+          cursorIndex = buffer.length;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+        }
+        return;
+      }
+
+      // Printable character entry
+      if (str && !key?.ctrl && !key?.meta) {
+        buffer = buffer.slice(0, cursorIndex) + str + buffer.slice(cursorIndex);
+        cursorIndex += str.length;
+
+        if (buffer.startsWith('/')) {
+          const updateRes = this.slashMenu.update(buffer, false);
           if (updateRes.autoCompleted) {
-            (rl as any).line = updateRes.autoCompleted;
-            (rl as any).cursor = (rl as any).line.length;
-            (rl as any)._refreshLine?.();
-            this.slashMenu.update(rl.line, false);
+            buffer = updateRes.autoCompleted;
+            cursorIndex = buffer.length;
+            this.slashMenu.update(buffer, false);
           }
         } else {
           this.slashMenu.close();
         }
-      };
-    }
 
-    const cleanup = () => {
-      this.slashMenu.close();
-      this.viewport.cleanup();
-      worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+      }
     };
+
+    inStream.on('keypress', onKeypress);
 
     process.on('SIGINT', cleanup);
     process.on('exit', cleanup);
-    rl.on('SIGINT', () => {
-      cleanup();
-      process.exit(0);
-    });
 
-    let closed = false;
-    rl.on('close', () => {
-      closed = true;
-      cleanup();
-    });
+    while (!closed) {
+      this.viewport.renderInputLine(buffer, cursorIndex, '');
+      const line = await readNextLine();
+      if (line === null) break;
 
-    this.slashMenu.close();
-    this.viewport.preparePrompt(rl);
-
-    for await (const line of rl) {
-      this.slashMenu.close();
       const trimmed = line.trim();
       if (trimmed === '/exit' || trimmed === '/quit') {
         const exitMsg =
@@ -708,48 +993,33 @@ export class InteractiveShell {
             ? `\n${colors.brand}✦${colors.reset} Goodbye!\n`
             : `\n${colors.brand}✦${colors.reset} Até logo!\n`;
         this.viewport.writeUpper(exitMsg);
-        cleanup();
         break;
       }
 
       if (!trimmed) {
-        if (!closed) {
-          try {
-            this.viewport.preparePrompt(rl);
-          } catch {
-            closed = true;
-          }
-        }
         continue;
       }
 
-      if (this.viewport.isInteractive) {
-        // Echo entered user prompt to upper scrolling history
-        const userPromptEcho = `${colors.brand}╭─${colors.reset} ${colors.bold}✦ TaskForge${colors.reset} ${colors.gray}[${colors.cyan}${repoName}${colors.gray} • ${colors.yellow}${gitStatus.currentBranch}${colors.gray}]${colors.reset}\n${colors.brand}╰─${colors.green}❯${colors.reset} ${trimmed}`;
-        this.viewport.writeUpper(userPromptEcho);
-        this.viewport.drawFooter(this.sessionLanguage === 'en' ? 'Thinking...' : 'Processando...');
-      }
+      isRunning = true;
+      activeAbortController = new AbortController();
+      this.viewport.renderInputLine('', 0, this.sessionLanguage === 'en' ? 'Thinking...' : 'Processando...');
 
-      const reply = await this.handleInput(trimmed);
-      if (reply) {
-        this.viewport.writeUpper(`\n${reply}\n`);
-      }
-      if (!closed) {
-        try {
-          this.viewport.preparePrompt(rl);
-        } catch {
-          closed = true;
+      try {
+        const reply = await this.handleInput(trimmed, activeAbortController.signal);
+        if (reply) {
+          this.viewport.writeUpper(`\n${reply}\n`);
         }
+      } catch (err: any) {
+        if (!activeAbortController.signal.aborted) {
+          this.viewport.writeUpper(`\n${colors.red}Error: ${err?.message || err}${colors.reset}\n`);
+        }
+      } finally {
+        isRunning = false;
+        activeAbortController = undefined;
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
       }
     }
 
     cleanup();
-    if (!closed) {
-      try {
-        rl.close();
-      } catch {
-        // ignore
-      }
-    }
   }
 }
