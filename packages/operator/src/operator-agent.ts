@@ -43,7 +43,7 @@ export class OperatorIntentParser {
     if (text.startsWith('/plan')) return { type: 'inspect_plan' };
     if (text.startsWith('/cost')) return { type: 'inspect_cost' };
     if (text.startsWith('/stats')) return { type: 'inspect_stats' };
-    if (text.startsWith('/dash') || text.startsWith('/graph')) return { type: 'inspect_dashboard' };
+    if (text.startsWith('/dash') || text.startsWith('/graph') || text.startsWith('/status')) return { type: 'inspect_dashboard' };
     if (text.startsWith('/pause')) return { type: 'pause_execution' };
     if (text.startsWith('/resume')) return { type: 'resume_execution' };
     if (text.startsWith('/pending')) return { type: 'inspect_pending_interactions' };

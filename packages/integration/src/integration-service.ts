@@ -96,7 +96,7 @@ export class IntegrationService {
     config: TaskForgeConfig,
     baseCommit: string,
   ): Promise<{ branchName: string; verified: boolean }> {
-    const branchName = this.getBranchName(runId);
+    const branchName = await this.initIntegrationBranch(runId, baseCommit);
     const wt = await this.worktreeManager.createWorktree(`integration-${runId}`, 'main-worker', branchName);
 
     let verified = true;

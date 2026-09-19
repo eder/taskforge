@@ -110,7 +110,68 @@ export const theme = {
     const branchLabel = branch ? `${colors.yellow}${branch}${colors.reset}` : 'unknown';
     const repoLabel = repoName ? `${colors.cyan}${repoName}${colors.reset}` : 'repo';
 
-    return `${colors.brand}╭─${colors.reset} ${colors.bold}✦ TaskForge${colors.reset} ${colors.gray}[${colors.reset}${repoLabel} ${colors.gray}•${colors.reset} ${branchLabel}${colors.gray}]${colors.reset}\n${colors.brand}╰─${colors.green}❯${colors.reset} `;
+    return `${colors.darkGray}─────────────────────────────────────────────────────────────────${colors.reset}\n${colors.brand}╭─${colors.reset} ${colors.bold}✦ TaskForge${colors.reset} ${colors.gray}[${colors.reset}${repoLabel} ${colors.gray}•${colors.reset} ${branchLabel}${colors.gray}]${colors.reset}\n${colors.brand}╰─${colors.green}❯${colors.reset} `;
+  },
+
+  renderMarkdown: (md: string): string => {
+    const lines = md.split('\n');
+    let inCodeBlock = false;
+    let codeLang = '';
+    const output: string[] = [];
+
+    for (const line of lines) {
+      if (line.trim().startsWith('```')) {
+        if (!inCodeBlock) {
+          inCodeBlock = true;
+          codeLang = line.trim().slice(3).trim();
+          const langLabel = codeLang ? ` ${codeLang} ` : ' code ';
+          output.push(`  ${colors.darkGray}╭─${colors.reset}${colors.dim}${langLabel}${colors.reset}${colors.darkGray}${'─'.repeat(Math.max(2, 54 - langLabel.length - 2))}╮${colors.reset}`);
+        } else {
+          inCodeBlock = false;
+          output.push(`  ${colors.darkGray}╰${'─'.repeat(54)}╯${colors.reset}`);
+        }
+        continue;
+      }
+
+      if (inCodeBlock) {
+        output.push(`  ${colors.darkGray}│${colors.reset}  ${colors.cyanLight}${line}${colors.reset}`);
+        continue;
+      }
+
+      // Headers #, ##, ###
+      if (/^#{1,4}\s+/.test(line)) {
+        const text = line.replace(/^#+\s+/, '');
+        output.push(`\n${colors.bold}${colors.brand}✦ ${text}${colors.reset}`);
+        continue;
+      }
+
+      // Blockquotes >
+      if (/^>\s+/.test(line)) {
+        const text = line.replace(/^>\s+/, '');
+        output.push(`  ${colors.brand}│${colors.reset} ${colors.dim}${text}${colors.reset}`);
+        continue;
+      }
+
+      let formatted = line;
+
+      // Bullet points - or *
+      if (/^\s*[-*]\s+/.test(formatted)) {
+        formatted = formatted.replace(/^(\s*)[-*]\s+/, `$1  ${colors.brand}●${colors.reset} `);
+      } else if (/^\s*\d+\.\s+/.test(formatted)) {
+        formatted = formatted.replace(/^(\s*)(\d+\.)\s+/, `$1  ${colors.cyan}$2${colors.reset} `);
+      }
+
+      // Bold **text** or __text__
+      formatted = formatted.replace(/\*\*(.*?)\*\*/g, `${colors.bold}${colors.white}$1${colors.reset}`);
+      formatted = formatted.replace(/__(.*?)__/g, `${colors.bold}${colors.white}$1${colors.reset}`);
+
+      // Inline code `code`
+      formatted = formatted.replace(/`([^`]+)`/g, `${colors.yellow}$1${colors.reset}`);
+
+      output.push(formatted);
+    }
+
+    return output.join('\n');
   },
 
   formatProgressMessage: (msg: string): string => {
@@ -125,10 +186,6 @@ export const theme = {
       }
       if (rest.includes('Created isolated worktree')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.cyan}📁${colors.reset} ${colors.dim}${rest}${colors.reset}`;
-      }
-      if (rest.startsWith('Output:\n')) {
-        const body = rest.replace(/^Output:\n/, '');
-        return `\n${colors.brand}╭── ✦ Agent Analysis ${tid} ──────────────────────────────────────╮${colors.reset}\n${body}\n${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`;
       }
       if (rest.includes('executing...')) {
         return `  ${colors.gray}│${colors.reset}  ${colors.yellow}⚡${colors.reset} ${rest}`;

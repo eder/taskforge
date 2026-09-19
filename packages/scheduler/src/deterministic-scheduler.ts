@@ -66,6 +66,7 @@ export interface SchedulerResult {
 export class DeterministicScheduler {
   private concurrency: ConcurrencyManager;
   private taskOutputs: Record<string, string> = {};
+  private hasIntegratedCommits = false;
 
   constructor(private ctx: SchedulerContext) {
     this.concurrency = new ConcurrencyManager(ctx.config);
@@ -87,6 +88,7 @@ export class DeterministicScheduler {
   }
 
   async run(): Promise<SchedulerResult> {
+    this.hasIntegratedCommits = false;
     const { runId, graph, eventRepo, runRepo, abortSignal, baseCommit } = this.ctx;
 
     eventRepo.append({
@@ -158,7 +160,7 @@ export class DeterministicScheduler {
     let integrationBranch: string | undefined;
     let errorMessage: string | undefined;
 
-    if (status === 'completed') {
+    if (status === 'completed' && this.hasIntegratedCommits) {
       try {
         const final = await this.ctx.integrationService.finalizeRun(
           runId,
@@ -170,6 +172,8 @@ export class DeterministicScheduler {
         status = 'failed';
         errorMessage = (err as Error).message;
       }
+    } else if (status === 'completed' && !this.hasIntegratedCommits) {
+      integrationBranch = undefined;
     } else {
       errorMessage = `Tasks not all integrated: completed=${tasksCompleted}, failed=${tasksFailed}, allCompleted=${graph.isAllCompleted()}`;
     }
@@ -275,6 +279,7 @@ export class DeterministicScheduler {
           commitHash: res.commitHash,
           baseCommit,
         });
+        this.hasIntegratedCommits = true;
       }
 
       graph.updateTaskStatus(task.id, 'integrated');
@@ -474,7 +479,7 @@ export class DeterministicScheduler {
     );
 
     if (task.type === 'investigation' && agentResult.output && agentResult.output.trim().length > 0) {
-      this.ctx.onProgress?.(`[${task.id}] Output:\n${agentResult.output.trim()}`);
+      this.ctx.onProgress?.(`[${task.id}] Analysis report prepared (${agentResult.output.trim().length} chars) ✓`);
     }
 
     eventRepo.append({
@@ -533,6 +538,7 @@ export class DeterministicScheduler {
         commitHash: agentResult.commitHash,
         baseCommit,
       });
+      this.hasIntegratedCommits = true;
       this.ctx.onProgress?.(`[${task.id}] Integrated successfully ✓`);
     }
 

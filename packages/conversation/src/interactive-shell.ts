@@ -461,7 +461,8 @@ export class InteractiveShell {
             .filter(([, text]) => text && text.trim().length > 0)
             .map(([taskId, text]) => {
               const header = isEn ? `Explanation & Analysis [${taskId}]` : `Explicação & Análise [${taskId}]`;
-              return `${colors.brand}╭── ✦ ${header} ────────────────────────────────╮${colors.reset}\n${text.trim()}\n${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`;
+              const highlighted = theme.renderMarkdown(text.trim());
+              return `${colors.brand}╭── ✦ ${header} ────────────────────────────────╮${colors.reset}\n${highlighted}\n${colors.brand}╰────────────────────────────────────────────────────────────────╯${colors.reset}\n`;
             })
             .join('\n\n');
 
