@@ -20,6 +20,10 @@ export class AgentPreflightEvaluator implements PreflightEvaluator {
       return this.options.evaluateWorkerFn(task, agent);
     }
 
+    if (agent && typeof (agent as any).preflight === 'function') {
+      return (agent as any).preflight(task);
+    }
+
     const contract = task.contract;
     const missingContext: string[] = [];
     const concerns: string[] = [];
@@ -271,6 +275,48 @@ export class NegotiationManager {
       } else if (preflight.decision === 'recommend_merge') {
         graph.updateTaskStatus(task.id, 'negotiating');
         // Merging tasks into one
+        graph.updateTaskStatus(task.id, 'accepted');
+      } else if (preflight.decision === 'recommend_collaboration') {
+        graph.updateTaskStatus(task.id, 'negotiating');
+        if (preflight.collaboration) {
+          task.contract.metadata = {
+            ...task.contract.metadata,
+            recommendCollaboration: true,
+            collaboration: preflight.collaboration,
+          };
+        }
+        graph.updateTaskStatus(task.id, 'accepted');
+        if (this.eventRepo) {
+          this.eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId,
+            taskId: task.id,
+            type: 'TASK_COLLABORATION_RECOMMENDED',
+            payload: {
+              understanding: preflight.understanding,
+              collaboration: preflight.collaboration,
+            },
+            timestamp: new Date(),
+          });
+        }
+      } else if (preflight.decision === 'recommend_split') {
+        graph.updateTaskStatus(task.id, 'negotiating');
+        graph.updateTaskStatus(task.id, 'accepted');
+        if (this.eventRepo) {
+          this.eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId,
+            taskId: task.id,
+            type: 'TASK_SPLIT_RECOMMENDED',
+            payload: { understanding: preflight.understanding },
+            timestamp: new Date(),
+          });
+        }
+      } else if (preflight.decision === 'need_context') {
+        graph.updateTaskStatus(task.id, 'negotiating');
+        if (preflight.missingContext.length > 0) {
+          task.contract.forbiddenChanges.push(...preflight.missingContext);
+        }
         graph.updateTaskStatus(task.id, 'accepted');
       } else {
         throw new TaskNegotiationError(

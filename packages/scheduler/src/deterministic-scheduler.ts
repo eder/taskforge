@@ -250,6 +250,21 @@ export class DeterministicScheduler {
         }
         graph.updateTaskStatus(task.id, 'accepted');
         taskRepo.updateStatus(task.id, 'accepted');
+      } else if (pf.decision === 'recommend_collaboration') {
+        graph.updateTaskStatus(task.id, 'negotiating');
+        taskRepo.updateStatus(task.id, 'negotiating');
+        if (pf.collaboration) {
+          task.contract.metadata = {
+            ...task.contract.metadata,
+            recommendCollaboration: true,
+            collaboration: pf.collaboration,
+          };
+        }
+        if (pf.concerns?.length > 0) {
+          task.contract.forbiddenChanges.push(...pf.concerns);
+        }
+        graph.updateTaskStatus(task.id, 'accepted');
+        taskRepo.updateStatus(task.id, 'accepted');
       } else if (pf.decision === 'accept') {
         graph.updateTaskStatus(task.id, 'accepted');
         taskRepo.updateStatus(task.id, 'accepted');
@@ -304,6 +319,7 @@ export class DeterministicScheduler {
           config,
           taskType: task.type,
         });
+
 
         if (!verResult.passed) {
           const rework = taskRepo.incrementRework(task.id);
