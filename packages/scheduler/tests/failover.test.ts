@@ -117,7 +117,7 @@ describe('DeterministicScheduler Agent Failover', () => {
       },
     ]);
 
-    const agentRegistry = new AgentRegistry();
+    const agentRegistry = new AgentRegistry(false);
     agentRegistry.register(failingAgent);
     agentRegistry.register(healthyAgent);
 
@@ -159,7 +159,7 @@ describe('DeterministicScheduler Agent Failover', () => {
 
     const result = await scheduler.run();
 
-    expect(result.status).toBe('completed');
+    expect(result.status, result.error).toBe('completed');
     expect(result.tasksCompleted).toBe(1);
     expect(result.tasksFailed).toBe(0);
 
