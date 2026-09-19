@@ -174,10 +174,10 @@ describe('Phases 20-22: Advanced UX (TUI), GitHub Workflow & Remote Workers', ()
       expect(summary).toContain('TaskForge Automated Run Summary');
       expect(summary).toContain('Implement OAuth login');
       expect(summary).toContain('TASK-01');
-      expect(summary).toContain('Evidências de Qualidade & Verificação');
-      expect(summary).toContain('Testes Automatizados:** PASS');
-      expect(summary).toContain('Telemetria e Uso de Recursos');
-      expect(summary).toContain('Tokens processados');
+      expect(summary).toContain('Quality & Verification Evidence');
+      expect(summary).toContain('Automated Tests:** PASS');
+      expect(summary).toContain('Telemetry & Resource Utilization');
+      expect(summary).toContain('Tokens processed');
     });
 
     it('creates pull request or provides fallback summary if gh is unavailable', async () => {

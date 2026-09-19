@@ -9,7 +9,7 @@ export function isPureExplanationGoal(description: string): boolean {
 
   // Actionable verbs imply code modification
   const hasActionVerb =
-    /\b(create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|cria|criar|adicione|adicionar|construa|construir|implemente|implementar|faça|fazer|corrige|corrigir|refatore|refatorar|delete|deletar|remova|remover|atualize|atualizar)\b/i.test(
+    /\b(create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update)\b/i.test(
       desc,
     );
   if (hasActionVerb) {
@@ -22,13 +22,6 @@ export function isPureExplanationGoal(description: string): boolean {
     /what\s+does\s+it\s+do/i,
     /how\s+(does\s+)?(this\s+|the\s+)?(project|repo|repository|codebase|app|system|it)\s+(work|works|operate|function)/i,
     /(explain|describe|overview|tell\s+me\s+about)\s+(this\s+|the\s+)?(project|repo|repository|codebase|app|system|architecture)/i,
-    /o\s+que\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app|código)?\s*(faz|é|e)/i,
-    /o\s+que\s+faz\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app)/i,
-    /como\s+(funciona|opera)\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app)/i,
-    /como\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app)\s+(funciona|opera)/i,
-    /(explique|explica|descreva|descreve|fale\s+sobre|entenda|entender)\s+(o\s+|esse\s+|este\s+)?(projeto|repo|repositório|código|sistema|app)/i,
-    /para\s+que\s+serve\s+(esse\s+|este\s+|o\s+)?(projeto|repo|repositório|sistema|app)/i,
-    /qual\s+(o\s+)?(objetivo|propósito)\s+(desse\s+|deste\s+|do\s+)?(projeto|repo|repositório)/i,
   ];
 
   return explanationPatterns.some((pattern) => pattern.test(desc));
@@ -38,10 +31,10 @@ export function isLightweightGoal(description: string): boolean {
   const desc = description.toLowerCase();
   const lightweightPatterns = [
     /\breadme(\.md)?\b/i,
-    /\b(docs?|documentation|documenta[çc][ãa]o)\b/i,
+    /\b(docs?|documentation)\b/i,
     /\b(markdown|\.md)\b/i,
-    /\b(license|licen[çc]a)\b/i,
-    /\b(typo|translate|tradu[zç]|traduzir)\b/i,
+    /\b(license)\b/i,
+    /\b(typo|translate)\b/i,
     /\b(changelog|contributing)\b/i,
   ];
   return lightweightPatterns.some((pattern) => pattern.test(desc));
@@ -58,18 +51,14 @@ export class HeuristicPlanner implements Planner {
 
     const isInvestigationNeeded =
       isPureExplanation ||
-      desc.includes('investiga') ||
       desc.includes('investigate') ||
       desc.includes('bug') ||
-      desc.includes('duplica') ||
+      desc.includes('duplicate') ||
       desc.includes('flaky') ||
       desc.includes('reproduce') ||
-      desc.includes('explique') ||
       desc.includes('explain') ||
-      desc.includes('analis') ||
-      desc.includes('analyz') ||
+      desc.includes('analyze') ||
       desc.includes('audit') ||
-      desc.includes('entenda') ||
       desc.includes('understand');
 
     const isFullStack =
@@ -129,8 +118,7 @@ export class HeuristicPlanner implements Planner {
       };
       tasks.push(task1);
     } else if (isInvestigationNeeded) {
-      const isExplanation =
-        desc.includes('explique') || desc.includes('explain') || desc.includes('entenda');
+      const isExplanation = desc.includes('explain') || desc.includes('understand');
       // 1. Investigation task
       const task1: Task = {
         id: 'TASK-01',

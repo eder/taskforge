@@ -15,3 +15,6 @@ coverage/
 .taskforge/*.db-journal
 .taskforge/*.db-wal
 .taskforge/*.db-shm
+
+# Local roadmap & planning
+ROADMAP.md

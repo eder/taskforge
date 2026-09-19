@@ -27,26 +27,26 @@ describe('OperatorAgent Intent Layer', () => {
     }
   });
 
-  it('parses natural language intents in Portuguese and English', () => {
-    expect(operator.parseIntent('quais agentes estão instalados?').type).toBe('inspect_agents');
+  it('parses natural language intents', () => {
+    expect(operator.parseIntent('who is available?').type).toBe('inspect_agents');
     expect(operator.parseIntent('show available agents').type).toBe('inspect_agents');
 
-    expect(operator.parseIntent('listar todas as tarefas do run').type).toBe('inspect_tasks');
-    expect(operator.parseIntent('como estão as tarefas?').type).toBe('inspect_tasks');
+    expect(operator.parseIntent('list tasks').type).toBe('inspect_tasks');
+    expect(operator.parseIntent('what is happening with tasks?').type).toBe('inspect_tasks');
 
-    expect(operator.parseIntent('por favor pausar a execução').type).toBe('pause_execution');
-    expect(operator.parseIntent('retomar execução agora').type).toBe('resume_execution');
+    expect(operator.parseIntent('please pause execution').type).toBe('pause_execution');
+    expect(operator.parseIntent('resume execution now').type).toBe('resume_execution');
 
-    const constraintIntent = operator.parseIntent('não modifique o schema de banco');
+    const constraintIntent = operator.parseIntent('do not modify database schema');
     expect(constraintIntent.type).toBe('add_constraint');
 
-    const reassignIntent = operator.parseIntent('cancele a tarefa TASK-9 e reatribua para codex');
+    const reassignIntent = operator.parseIntent('reassign TASK-9 to codex');
     expect(reassignIntent.type).toBe('cancel_and_reassign');
 
-    const goalIntent = operator.parseIntent('implemente suporte a autenticação por chave de api');
+    const goalIntent = operator.parseIntent('implement API key authentication support');
     expect(goalIntent.type).toBe('submit_goal');
     if (goalIntent.type === 'submit_goal') {
-      expect(goalIntent.goal).toBe('implemente suporte a autenticação por chave de api');
+      expect(goalIntent.goal).toBe('implement API key authentication support');
     }
   });
 

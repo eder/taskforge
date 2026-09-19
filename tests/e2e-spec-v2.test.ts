@@ -484,7 +484,7 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
   });
 
   describe('6. Conversational Approvals in Interactive Shell', () => {
-    it('processes natural language approvals: "pode instalar só para essa task"', async () => {
+    it('processes natural language approvals: "allow installation only for this task"', async () => {
       const shell = new InteractiveShell({
         repoRoot: testRepoRoot,
         database: db,
@@ -499,7 +499,7 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
         assignmentId: 'asgn-14',
         agentId: 'codex',
         type: 'permission',
-        prompt: 'Ele quer instalar: @fastify/oauth2',
+        prompt: 'Agent wants to install: @fastify/oauth2',
         category: 'commands',
         resource: '@fastify/oauth2',
         status: 'pending',
@@ -513,8 +513,9 @@ describe('TaskForge Spec v2: Agent Interaction Gateway & Human-in-the-Loop', () 
       expect(pendingResponse).toContain('@fastify/oauth2');
 
       // Operator natural approval
-      const approvalResponse = await shell.handleInput('pode instalar só para essa task');
-      expect(approvalResponse).toContain('permitido');
+      const approvalResponse = await shell.handleInput('allow installation only for this task');
+      expect(approvalResponse).toContain('allowed');
+      expect(approvalResponse).toContain('scope: task');
     });
   });
 

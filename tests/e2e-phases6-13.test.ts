@@ -165,22 +165,22 @@ describe('TaskForge Phases 6-13 End-to-End Orchestration', () => {
     expect(banner).toContain('clean');
 
     // Natural language inspection & commands
-    const agentsResp = await shell.handleInput('quais agentes estão disponíveis?');
-    expect(agentsResp).toContain('Agentes disponíveis:');
+    const agentsResp = await shell.handleInput('who is available?');
+    expect(agentsResp).toContain('Available agents:');
 
-    const pauseResp = await shell.handleInput('pausar execução do run');
-    expect(pauseResp).toContain('pausada');
+    const pauseResp = await shell.handleInput('pause execution');
+    expect(pauseResp).toContain('Execution paused safely');
 
-    const resumeResp = await shell.handleInput('retomar a execução');
-    expect(resumeResp).toContain('retomada');
+    const resumeResp = await shell.handleInput('resume execution');
+    expect(resumeResp).toContain('Execution resumed');
 
-    const constraintResp = await shell.handleInput('não altere o arquivo database.sqlite');
-    expect(constraintResp).toContain('Restrição');
+    const constraintResp = await shell.handleInput('do not change database.sqlite');
+    expect(constraintResp).toContain('Constraint added successfully');
 
     // Submitting goal via natural language invokes Planner, Negotiator, Router, and AgentSelector
-    const planResp = await shell.handleInput('investigar e resolver memory leak crítico');
-    expect(planResp).toContain('Estratégia recomendada:');
-    expect(planResp).toContain('tarefas estruturadas');
+    const planResp = await shell.handleInput('investigate and resolve critical memory leak');
+    expect(planResp).toContain('Recommended strategy:');
+    expect(planResp).toContain('structured tasks:');
   });
 
   it('Phase 8 & 9: Planner with Preflight Negotiation and Challenge Resolution', async () => {

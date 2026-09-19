@@ -3,71 +3,26 @@ import { colors } from './theme.js';
 
 export interface SlashCommandItem {
   cmd: string;
-  descEn: string;
-  descPt: string;
+  desc: string;
 }
 
 export const SLASH_COMMANDS: SlashCommandItem[] = [
-  { cmd: '/exit', descEn: 'Exit interactive session', descPt: 'Sair da sessão interativa' },
-  {
-    cmd: '/help',
-    descEn: 'Display command reference and guide',
-    descPt: 'Exibir comandos disponíveis e ajuda',
-  },
-  {
-    cmd: '/plan',
-    descEn: 'Inspect current proposed or active plan',
-    descPt: 'Ver plano atual proposto ou ativo',
-  },
-  {
-    cmd: '/tasks',
-    descEn: 'List status of all tasks in current run',
-    descPt: 'Listar tarefas da execução atual',
-  },
-  { cmd: '/status', descEn: 'Open full TUI dashboard', descPt: 'Abrir painel TUI completo' },
-  {
-    cmd: '/agents',
-    descEn: 'Inspect detected AI agent harnesses',
-    descPt: 'Inspecionar agentes de IA detectados',
-  },
-  {
-    cmd: '/cost',
-    descEn: 'Show tokens and financial cost report',
-    descPt: 'Exibir relatório de tokens e custos',
-  },
-  { cmd: '/stats', descEn: 'Show run execution metrics', descPt: 'Exibir métricas da execução' },
-  {
-    cmd: '/clean',
-    descEn: 'Clean temporary worktrees and branches',
-    descPt: 'Limpar worktrees e branches temporárias',
-  },
-  {
-    cmd: '/pending',
-    descEn: 'View interactions awaiting approval',
-    descPt: 'Ver interações aguardando aprovação',
-  },
-  {
-    cmd: '/approve',
-    descEn: 'Approve plan or pending interaction',
-    descPt: 'Aprovar plano ou interação pendente',
-  },
-  { cmd: '/deny', descEn: 'Deny pending interaction', descPt: 'Recusar interação pendente' },
-  {
-    cmd: '/reject',
-    descEn: 'Reject current plan with feedback',
-    descPt: 'Rejeitar plano atual com feedback',
-  },
-  {
-    cmd: '/reassign',
-    descEn: 'Reassign task to another agent',
-    descPt: 'Reatribuir tarefa para outro agente',
-  },
-  {
-    cmd: '/pause',
-    descEn: 'Pause orchestrator execution',
-    descPt: 'Pausar execução do orquestrador',
-  },
-  { cmd: '/resume', descEn: 'Resume paused execution', descPt: 'Retomar execução pausada' },
+  { cmd: '/exit', desc: 'Exit interactive session' },
+  { cmd: '/help', desc: 'Display command reference and guide' },
+  { cmd: '/plan', desc: 'Inspect current proposed or active plan' },
+  { cmd: '/tasks', desc: 'List status of all tasks in current run' },
+  { cmd: '/status', desc: 'Open full TUI dashboard' },
+  { cmd: '/agents', desc: 'Inspect detected AI agent harnesses' },
+  { cmd: '/cost', desc: 'Show tokens and financial cost report' },
+  { cmd: '/stats', desc: 'Show run execution metrics' },
+  { cmd: '/clean', desc: 'Clean temporary worktrees and branches' },
+  { cmd: '/pending', desc: 'View interactions awaiting approval' },
+  { cmd: '/approve', desc: 'Approve plan or pending interaction' },
+  { cmd: '/deny', desc: 'Deny pending interaction' },
+  { cmd: '/reject', desc: 'Reject current plan with feedback' },
+  { cmd: '/reassign', desc: 'Reassign task to another agent' },
+  { cmd: '/pause', desc: 'Pause orchestrator execution' },
+  { cmd: '/resume', desc: 'Resume paused execution' },
 ];
 
 export class SlashMenu {
@@ -82,7 +37,6 @@ export class SlashMenu {
 
   constructor(
     private outStream: Writable,
-    private language: 'en' | 'pt' = 'en',
     private commands: SlashCommandItem[] = SLASH_COMMANDS,
   ) {
     const streamAny = outStream as unknown as { isTTY?: boolean; rows?: number; columns?: number };
@@ -95,13 +49,6 @@ export class SlashMenu {
     );
     this.rows = streamAny.rows || 24;
     this.cols = streamAny.columns || 80;
-  }
-
-  public setLanguage(lang: 'en' | 'pt') {
-    this.language = lang;
-    if (this.isOpen) {
-      this.render();
-    }
   }
 
   public update(line: string, isBackspace = false): { autoCompleted?: string } {
@@ -197,7 +144,7 @@ export class SlashMenu {
     const innerWidth = totalWidth - 2;
 
     // Top border
-    const title = this.language === 'en' ? '✦ Commands' : '✦ Comandos';
+    const title = '✦ Commands';
     const topBarLen = Math.max(0, innerWidth - title.length - 4);
     const topBorder = `${colors.brand}╭── ${colors.bold}${title}${colors.reset}${colors.brand} ${'─'.repeat(topBarLen)}╮${colors.reset}`;
     this.outStream.write(`\x1b[${startRow};1H\x1b[2K ${topBorder}`);
@@ -215,7 +162,7 @@ export class SlashMenu {
       }
 
       const marker = isSelected ? `${colors.green}❯${colors.reset}` : ' ';
-      const desc = this.language === 'en' ? item.descEn : item.descPt;
+      const desc = item.desc;
 
       const cmdFormatted = isSelected
         ? `${colors.bold}${colors.cyan}${item.cmd.padEnd(11)}${colors.reset}`
@@ -236,10 +183,7 @@ export class SlashMenu {
 
     // Bottom border with navigation hints
     const bottomRow = startRow + boxHeight - 1;
-    const hint =
-      this.language === 'en'
-        ? '↑/↓ browse • Tab complete • Esc close'
-        : '↑/↓ navegar • Tab autocompletar • Esc fechar';
+    const hint = '↑/↓ browse • Tab complete • Esc close';
     const bottomBarLen = Math.max(0, innerWidth - hint.length - 4);
     const bottomBorder = `${colors.brand}╰── ${colors.dim}${hint}${colors.reset}${colors.brand} ${'─'.repeat(bottomBarLen)}╯${colors.reset}`;
     this.outStream.write(`\x1b[${bottomRow};1H\x1b[2K ${bottomBorder}`);

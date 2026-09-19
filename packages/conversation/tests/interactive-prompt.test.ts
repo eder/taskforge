@@ -101,13 +101,13 @@ describe('Interactive Terminal Prompt & REPL', () => {
       const runPromise = shell.start();
 
       // Feed natural language queries
-      inStream.write('o que esse projeto faz?\n');
+      inStream.write('what does this project do?\n');
       inStream.write('/exit\n');
 
       await runPromise;
 
       expect(captured).toContain('TaskForge');
-      expect(captured).toContain('Estratégia recomendada:');
+      expect(captured).toContain('Recommended strategy:');
     });
 
     it('supports abortSignal cancellation in handleInput', async () => {
@@ -115,7 +115,7 @@ describe('Interactive Terminal Prompt & REPL', () => {
       const abortCtrl = new AbortController();
       abortCtrl.abort();
 
-      const reply = await shell.handleInput('sim --fake', abortCtrl.signal);
+      const reply = await shell.handleInput('yes --fake', abortCtrl.signal);
       expect(reply).toBeDefined();
     });
 

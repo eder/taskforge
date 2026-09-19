@@ -127,14 +127,14 @@ export class TelemetryCollector {
   formatCostReport(runId: string): string {
     const report = this.getCostReport(runId);
     if (report.breakdown.length === 0) {
-      return `Nenhum custo registrado para o run ${runId}. (Tokens: 0, Custo: $0.000)`;
+      return `No costs recorded for run ${runId}. (Tokens: 0, Cost: $0.000)`;
     }
 
     const lines = [
-      `Relatório de Custos - Run ${runId}`,
-      `Total estimado: $${report.totalCostUsd.toFixed(4)} USD`,
+      `Cost Report - Run ${runId}`,
+      `Total estimated: $${report.totalCostUsd.toFixed(4)} USD`,
       `Tokens: ${report.totalInputTokens.toLocaleString()} in / ${report.totalOutputTokens.toLocaleString()} out`,
-      'Detalhamento por tarefa:',
+      'Task breakdown:',
       ...report.breakdown.map(
         (b) =>
           `  - ${b.taskId} [${b.agentId} (${b.modelName})]: $${b.costUsd.toFixed(4)} (${b.inputTokens.toLocaleString()} in / ${b.outputTokens.toLocaleString()} out)`,
@@ -146,20 +146,20 @@ export class TelemetryCollector {
   formatStatsReport(runId: string): string {
     const summary = this.getRunSummary(runId);
     if (!summary) {
-      return `Nenhuma métrica registrada para o run ${runId}.`;
+      return `No metrics recorded for run ${runId}.`;
     }
 
     const durationSec = (summary.durationMs / 1000).toFixed(1);
     const passPct = (summary.firstPassRate * 100).toFixed(1);
 
     const lines = [
-      `Métricas do Run ${runId}`,
-      `  Duração: ${durationSec}s`,
-      `  Tarefas: ${summary.tasksCompleted}/${summary.tasksCount} concluídas (${summary.tasksFailed} falhas)`,
-      `  Taxa de aprovação de primeira passagem: ${passPct}%`,
-      `  Ciclos de retrabalho: ${summary.reworkCount}`,
-      `  Escalações de colaboração: ${summary.escalationsCount}`,
-      `  Custo total: $${summary.totalCostUsd.toFixed(4)} USD`,
+      `Run Metrics - ${runId}`,
+      `  Duration: ${durationSec}s`,
+      `  Tasks: ${summary.tasksCompleted}/${summary.tasksCount} completed (${summary.tasksFailed} failed)`,
+      `  First-pass verification rate: ${passPct}%`,
+      `  Rework cycles: ${summary.reworkCount}`,
+      `  Collaboration escalations: ${summary.escalationsCount}`,
+      `  Total cost: $${summary.totalCostUsd.toFixed(4)} USD`,
     ];
     return lines.join('\n');
   }
