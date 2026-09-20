@@ -71,6 +71,10 @@ export const theme = {
       icon = `${colors.yellow}▲${colors.reset}`;
       const reasonDetail = quotaReason ? ` ${colors.dim}(${quotaReason})${colors.reset}` : '';
       statusText = `${colors.yellow}rate limited${colors.reset}${reasonDetail}`;
+    } else if (quotaStatus === 'auth_failed') {
+      icon = `${colors.red}▲${colors.reset}`;
+      const reasonDetail = quotaReason ? ` ${colors.dim}(${quotaReason})${colors.reset}` : '';
+      statusText = `${colors.red}auth failed${colors.reset}${reasonDetail}`;
     }
 
     return `${icon} ${color}${colors.bold}${name.padEnd(18)}${colors.reset} ${colors.dim}[${id.padEnd(7)}]${colors.reset} ${statusText}`;

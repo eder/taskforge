@@ -238,7 +238,11 @@ export abstract class BaseCliAdapter implements AgentAdapter {
             candidateResponse = obj.response;
           } else if (typeof obj.result === 'string' && obj.result.trim().length > 0) {
             candidateResponse = obj.result;
-          } else if (obj.type === 'result' && obj.result && typeof obj.result.response === 'string') {
+          } else if (
+            obj.type === 'result' &&
+            obj.result &&
+            typeof obj.result.response === 'string'
+          ) {
             candidateResponse = obj.result.response;
           }
 
@@ -267,7 +271,9 @@ export abstract class BaseCliAdapter implements AgentAdapter {
             errors.push(typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error));
           }
           if (obj.warning) {
-            warnings.push(typeof obj.warning === 'string' ? obj.warning : JSON.stringify(obj.warning));
+            warnings.push(
+              typeof obj.warning === 'string' ? obj.warning : JSON.stringify(obj.warning),
+            );
           }
         } catch {
           // ignore parse errors
@@ -445,8 +451,13 @@ export abstract class BaseCliAdapter implements AgentAdapter {
           'NODE_ENV',
           'LANG',
           'TERM',
+          'CLAUDE_CODE_OAUTH_TOKEN',
+          'CLAUDE_API_KEY',
           'ANTHROPIC_API_KEY',
+          'ANTHROPIC_AUTH_TOKEN',
           'OPENAI_API_KEY',
+          'TASKFORGE_OPENAI_API_KEY',
+          'CODEX_API_KEY',
           'GEMINI_API_KEY',
           'GOOGLE_API_KEY',
           'SSH_AUTH_SOCK',
@@ -458,8 +469,13 @@ export abstract class BaseCliAdapter implements AgentAdapter {
           'NVM_DIR',
           'DENO_INSTALL',
           'BUN_INSTALL',
+          'XDG_CONFIG_HOME',
+          'XDG_DATA_HOME',
+          'XDG_CACHE_HOME',
+          'CI',
+          'COLORTERM',
         ],
-        denyPatterns: ['*PASSWORD*', '*SECRET*', '*TOKEN*'],
+        denyPatterns: ['*PASSWORD*', '*SECRET*'],
       },
       abortSignal: context.abortSignal,
       timeoutMs,
@@ -499,7 +515,12 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       // ignore git error if any
     }
 
-    const outcome = this.normalizeOutcome(result.stdout, result.stderr, result.exitCode, context.logPath);
+    const outcome = this.normalizeOutcome(
+      result.stdout,
+      result.stderr,
+      result.exitCode,
+      context.logPath,
+    );
     const output = this.extractOutput(result.stdout, result.stderr, outcome);
 
     // If required actions were denied, the execution cannot be marked successful
@@ -517,7 +538,13 @@ export abstract class BaseCliAdapter implements AgentAdapter {
 
     if (hasDeniedRequiredActions) {
       const deniedList = outcome.deniedActions.map((a) => a.action).join(', ');
-      message = `${this.name} required action denied: ${deniedList}`;
+      const detail = outcome.deniedActions
+        .map((a) => a.reason || a.action)
+        .filter(Boolean)
+        .join('; ');
+      message = detail
+        ? `${this.name} required action denied: ${detail}`
+        : `${this.name} required action denied: ${deniedList}`;
       completionReason = 'REQUIRED_ACTION_DENIED';
     } else if (result.exitCode === 0) {
       message = `${this.name} completed successfully`;
@@ -530,12 +557,15 @@ export abstract class BaseCliAdapter implements AgentAdapter {
           result.stderr || result.stdout,
         );
       if (isAuthError) {
-        const authErr =
-          (outcome.errors.find((e) =>
+        const authErr = (
+          outcome.errors.find((e) =>
             /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i.test(e),
           ) ||
-            result.stderr ||
-            result.stdout).trim().split('\n')[0];
+          result.stderr ||
+          result.stdout
+        )
+          .trim()
+          .split('\n')[0];
         message = `${this.name} authentication failed: ${authErr}`;
         completionReason = 'HARNESS_FAILED';
       } else {
@@ -567,11 +597,7 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
     const defaultArgs =
       options.defaultArgs && options.defaultArgs.length > 0
         ? options.defaultArgs
-        : [
-            '--output-format=stream-json',
-            '--verbose',
-            '-p',
-          ];
+        : ['--output-format=stream-json', '--verbose', '-p'];
     super({
       ...options,
       defaultArgs,
@@ -600,10 +626,7 @@ export class CodexAdapter extends BaseCliAdapter {
     const defaultArgs =
       options.defaultArgs && options.defaultArgs.length > 0
         ? options.defaultArgs
-        : [
-            'exec',
-            '--json',
-          ];
+        : ['exec', '--json'];
     super({
       ...options,
       defaultArgs,
@@ -632,11 +655,7 @@ export class AntigravityAdapter extends BaseCliAdapter {
     const defaultArgs =
       options.defaultArgs && options.defaultArgs.length > 0
         ? options.defaultArgs
-        : [
-            '--output-format',
-            'stream-json',
-            '-p',
-          ];
+        : ['--output-format', 'stream-json', '-p'];
     super({
       ...options,
       defaultArgs,

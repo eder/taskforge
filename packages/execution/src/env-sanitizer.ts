@@ -32,12 +32,15 @@ export function sanitizeEnvironment(
     if (value === undefined) continue;
 
     // Check if key is explicitly allowed or if inherit is true
-    const isAllowed = allowedSet.has(key) || policy.inherit === true;
+    const isExplicitlyAllowed = allowedSet.has(key);
+    const isAllowed = isExplicitlyAllowed || policy.inherit === true;
     if (!isAllowed) continue;
 
-    // Check if key matches deny pattern
-    const isDenied = denyPatterns.some((pattern) => matchesPattern(key, pattern));
-    if (isDenied) continue;
+    // Check if key matches deny pattern (only if not explicitly allowed)
+    if (!isExplicitlyAllowed) {
+      const isDenied = denyPatterns.some((pattern) => matchesPattern(key, pattern));
+      if (isDenied) continue;
+    }
 
     result[key] = value;
   }
