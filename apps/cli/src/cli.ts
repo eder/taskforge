@@ -634,6 +634,34 @@ export function createCli(): Command {
             `\nCost: $${cost.totalCostUsd.toFixed(4)} (${cost.totalInputTokens + cost.totalOutputTokens} tokens)`,
           );
         }
+        if (metrics?.staffingBottlenecks) {
+          const {
+            staffingCappedCount,
+            collaborationRejectedCount,
+            collaborationDelayedCount,
+            collaborationApprovedCount,
+          } = metrics.staffingBottlenecks;
+          if (
+            staffingCappedCount > 0 ||
+            collaborationRejectedCount > 0 ||
+            collaborationDelayedCount > 0 ||
+            collaborationApprovedCount > 0
+          ) {
+            console.log(`\nCollaboration & Staffing:`);
+            if (staffingCappedCount > 0) {
+              console.log(`  ⚠ Staffing capped: ${staffingCappedCount} time(s) (hit maxAgentsPerTask limit)`);
+            }
+            if (collaborationRejectedCount > 0) {
+              console.log(`  ⚠ Collaboration rejected: ${collaborationRejectedCount} proposal(s) (hit maxAgentsPerTask limit)`);
+            }
+            if (collaborationDelayedCount > 0) {
+              console.log(`  ⏳ Collaboration delayed: ${collaborationDelayedCount} proposal(s) (waiting for concurrency slot)`);
+            }
+            if (collaborationApprovedCount > 0) {
+              console.log(`  ✓ Collaboration approved: ${collaborationApprovedCount} proposal(s)`);
+            }
+          }
+        }
       }
 
       db.close();

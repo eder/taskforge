@@ -112,12 +112,38 @@ export class TuiDashboard {
         const dur = (data.runStats.durationMs / 1000).toFixed(1);
         const pass = (data.runStats.firstPassRate * 100).toFixed(0);
         lines.push(
-          `│  Duration: ${dur}s  •  Completed: ${data.runStats.tasksCompleted}/${data.runStats.tasksCount}  •  First pass: ${pass}%  •  Rework: ${data.runStats.reworkCount} │`,
+          `│  Duration: ${dur}s • Completed: ${data.runStats.tasksCompleted}/${data.runStats.tasksCount} • First pass: ${pass}% • Rework: ${data.runStats.reworkCount}`.padEnd(64) + '│',
         );
+
+        if (data.runStats.staffingBottlenecks) {
+          const {
+            staffingCappedCount,
+            collaborationRejectedCount,
+            collaborationDelayedCount,
+            collaborationApprovedCount,
+          } = data.runStats.staffingBottlenecks;
+
+          if (
+            staffingCappedCount > 0 ||
+            collaborationRejectedCount > 0 ||
+            collaborationDelayedCount > 0 ||
+            collaborationApprovedCount > 0
+          ) {
+            const parts: string[] = [];
+            if (staffingCappedCount > 0) parts.push(`Capped: ${staffingCappedCount}`);
+            if (collaborationRejectedCount > 0) parts.push(`Rejected: ${collaborationRejectedCount}`);
+            if (collaborationDelayedCount > 0) parts.push(`Delayed: ${collaborationDelayedCount}`);
+            if (collaborationApprovedCount > 0) parts.push(`Approved: ${collaborationApprovedCount}`);
+
+            lines.push(
+              `│  Staffing/Limits: ${parts.join(' • ')}`.padEnd(64) + '│',
+            );
+          }
+        }
       }
       if (data.costReport) {
         lines.push(
-          `│  Estimated cost: $${data.costReport.totalCostUsd.toFixed(4)} USD (${data.costReport.totalInputTokens} tokens in / ${data.costReport.totalOutputTokens} out) │`,
+          `│  Estimated cost: $${data.costReport.totalCostUsd.toFixed(4)} USD (${data.costReport.totalInputTokens} in / ${data.costReport.totalOutputTokens} out)`.padEnd(64) + '│',
         );
       }
       lines.push('└────────────────────────────────────────────────────────────────┘');

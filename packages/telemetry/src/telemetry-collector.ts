@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { TaskForgeDatabase, CostRepository, RunMetricsRepository } from '@taskforge/persistence';
 import { CostEstimator } from './cost-estimator.js';
-import { RunCostReport, RunSummaryStats, TaskCostSummary } from './types.js';
+import { RunCostReport, RunSummaryStats, TaskCostSummary, StaffingBottlenecks } from './types.js';
 
 export class TelemetryCollector {
   private costRepo: CostRepository;
@@ -108,9 +108,46 @@ export class TelemetryCollector {
     };
   }
 
+  getStaffingMetrics(runId: string): StaffingBottlenecks {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT type, count(*) as count FROM events WHERE run_id = ? AND type IN ('STAFFING_CAPPED', 'COLLABORATION_REJECTED', 'COLLABORATION_APPROVED', 'COLLABORATION_DELAYED') GROUP BY type`,
+        )
+        .all(runId) as Array<{ type: string; count: number }>;
+
+      let staffingCappedCount = 0;
+      let collaborationRejectedCount = 0;
+      let collaborationApprovedCount = 0;
+      let collaborationDelayedCount = 0;
+
+      for (const row of rows) {
+        if (row.type === 'STAFFING_CAPPED') staffingCappedCount = row.count;
+        else if (row.type === 'COLLABORATION_REJECTED') collaborationRejectedCount = row.count;
+        else if (row.type === 'COLLABORATION_APPROVED') collaborationApprovedCount = row.count;
+        else if (row.type === 'COLLABORATION_DELAYED') collaborationDelayedCount = row.count;
+      }
+
+      return {
+        staffingCappedCount,
+        collaborationRejectedCount,
+        collaborationApprovedCount,
+        collaborationDelayedCount,
+      };
+    } catch {
+      return {
+        staffingCappedCount: 0,
+        collaborationRejectedCount: 0,
+        collaborationApprovedCount: 0,
+        collaborationDelayedCount: 0,
+      };
+    }
+  }
+
   getRunSummary(runId: string): RunSummaryStats | undefined {
     const m = this.metricsRepo.getByRun(runId);
     if (!m) return undefined;
+    const staffingBottlenecks = this.getStaffingMetrics(runId);
     return {
       runId: m.runId,
       durationMs: m.totalDurationMs,
@@ -121,6 +158,7 @@ export class TelemetryCollector {
       reworkCount: m.reworkCount,
       escalationsCount: m.escalationsCount,
       firstPassRate: m.firstPassRate,
+      staffingBottlenecks,
     };
   }
 
@@ -161,6 +199,32 @@ export class TelemetryCollector {
       `  Collaboration escalations: ${summary.escalationsCount}`,
       `  Total cost: $${summary.totalCostUsd.toFixed(4)} USD`,
     ];
+
+    if (summary.staffingBottlenecks) {
+      const {
+        staffingCappedCount,
+        collaborationRejectedCount,
+        collaborationApprovedCount,
+        collaborationDelayedCount,
+      } = summary.staffingBottlenecks;
+
+      if (staffingCappedCount > 0 || collaborationRejectedCount > 0) {
+        lines.push(
+          `  Staffing bottlenecks: ${staffingCappedCount} capped, ${collaborationRejectedCount} rejected (maxAgentsPerTask limit hit)`,
+        );
+      }
+      if (collaborationDelayedCount > 0) {
+        lines.push(
+          `  Concurrency delays: ${collaborationDelayedCount} delayed (waiting for concurrency slots)`,
+        );
+      }
+      if (collaborationApprovedCount > 0) {
+        lines.push(
+          `  Collaboration approved: ${collaborationApprovedCount} emergent helper assignment(s)`,
+        );
+      }
+    }
+
     return lines.join('\n');
   }
 }
