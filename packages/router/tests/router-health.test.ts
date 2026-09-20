@@ -51,4 +51,42 @@ describe('Router Health Checks', () => {
     expect(health.provider).toBe('openai');
     expect(health.details).toContain('missing API key');
   });
+
+  it('OpenAIRoutingProvider constructor respects TASKFORGE_OPENAI_API_KEY over OPENAI_API_KEY', () => {
+    const origTaskforge = process.env.TASKFORGE_OPENAI_API_KEY;
+    const origOpenai = process.env.OPENAI_API_KEY;
+
+    try {
+      process.env.TASKFORGE_OPENAI_API_KEY = 'sk-taskforge-dedicated';
+      process.env.OPENAI_API_KEY = 'sk-openai-global';
+
+      const router = new OpenAIRoutingProvider(undefined, 'gpt-4o');
+      expect((router as any).apiKey).toBe('sk-taskforge-dedicated');
+    } finally {
+      if (origTaskforge !== undefined) process.env.TASKFORGE_OPENAI_API_KEY = origTaskforge;
+      else delete process.env.TASKFORGE_OPENAI_API_KEY;
+
+      if (origOpenai !== undefined) process.env.OPENAI_API_KEY = origOpenai;
+      else delete process.env.OPENAI_API_KEY;
+    }
+  });
+
+  it('OpenAIRoutingProvider reports degraded when validateKey is true and endpoint returns 401', async () => {
+    const origFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify({ error: { code: 'invalid_api_key' } }), {
+          status: 401,
+          statusText: 'Unauthorized',
+        });
+
+      const openaiRouter = new OpenAIRoutingProvider('sk-invalid-key', 'gpt-4o');
+      const health = await openaiRouter.healthCheck({ validateKey: true });
+
+      expect(health.status).toBe('degraded');
+      expect(health.details).toContain('invalid API key');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });

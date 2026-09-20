@@ -2,6 +2,7 @@ import { z } from 'zod';
 import * as yaml from 'yaml';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { ConfigurationError } from './errors.js';
 
 export const AgentConfigSchema = z.object({
@@ -31,6 +32,7 @@ export const TaskForgeConfigSchema = z.object({
       escalationModel: z.string().default('gpt-5.6-terra'),
       fallback: z.enum(['static']).default('static'),
       adaptive: z.boolean().default(false),
+      apiKey: z.string().optional(),
     })
     .default({
       provider: 'openai',
@@ -239,23 +241,92 @@ export function getDefaultConfig(): TaskForgeConfig {
   return TaskForgeConfigSchema.parse({});
 }
 
+export function getGlobalConfigPath(): string {
+  return path.resolve(os.homedir(), '.taskforge/config.yaml');
+}
+
+export function resolveOpenAIApiKey(config?: TaskForgeConfig): string | undefined {
+  if (process.env.TASKFORGE_OPENAI_API_KEY && process.env.TASKFORGE_OPENAI_API_KEY.trim().length > 0) {
+    return process.env.TASKFORGE_OPENAI_API_KEY.trim();
+  }
+  if (config?.router?.apiKey && config.router.apiKey.trim().length > 0) {
+    return config.router.apiKey.trim();
+  }
+  if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0) {
+    return process.env.OPENAI_API_KEY.trim();
+  }
+  return undefined;
+}
+
+function deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = { ...target };
+  for (const key of Object.keys(source)) {
+    const sVal = source[key];
+    const tVal = result[key];
+    if (
+      sVal &&
+      typeof sVal === 'object' &&
+      !Array.isArray(sVal) &&
+      tVal &&
+      typeof tVal === 'object' &&
+      !Array.isArray(tVal)
+    ) {
+      result[key] = deepMerge(tVal, sVal);
+    } else if (sVal !== undefined) {
+      result[key] = sVal;
+    }
+  }
+  return result;
+}
+
 export function loadConfig(configPath?: string): TaskForgeConfig {
+  let merged: Record<string, any> = {};
+
+  // Load global ~/.taskforge/config.yaml if using default resolution
+  if (!configPath) {
+    const globalPath = getGlobalConfigPath();
+    if (fs.existsSync(globalPath)) {
+      try {
+        const rawGlobal = fs.readFileSync(globalPath, 'utf8');
+        const parsedGlobal = yaml.parse(rawGlobal);
+        if (parsedGlobal && typeof parsedGlobal === 'object') {
+          merged = deepMerge(merged, parsedGlobal);
+        }
+      } catch {
+        // ignore global config read error
+      }
+    }
+  }
+
   const resolvedPath = configPath ?? path.resolve(process.cwd(), '.taskforge/config.yaml');
-  if (!fs.existsSync(resolvedPath)) {
+  if (fs.existsSync(resolvedPath)) {
+    try {
+      const rawContent = fs.readFileSync(resolvedPath, 'utf8');
+      const parsedYaml = yaml.parse(rawContent);
+      if (parsedYaml && typeof parsedYaml === 'object') {
+        merged = deepMerge(merged, parsedYaml);
+      }
+    } catch (error) {
+      throw new ConfigurationError(
+        `Failed to load config from ${resolvedPath}: ${(error as Error).message}`,
+        {
+          path: resolvedPath,
+          error,
+        },
+      );
+    }
+  }
+
+  if (Object.keys(merged).length === 0) {
     return getDefaultConfig();
   }
 
   try {
-    const rawContent = fs.readFileSync(resolvedPath, 'utf8');
-    const parsedYaml = yaml.parse(rawContent);
-    return TaskForgeConfigSchema.parse(parsedYaml ?? {});
+    return TaskForgeConfigSchema.parse(merged);
   } catch (error) {
     throw new ConfigurationError(
-      `Failed to load config from ${resolvedPath}: ${(error as Error).message}`,
-      {
-        path: resolvedPath,
-        error,
-      },
+      `Invalid configuration: ${(error as Error).message}`,
+      { error },
     );
   }
 }

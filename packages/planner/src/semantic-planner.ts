@@ -102,7 +102,10 @@ export class SemanticPlanner implements Planner {
     fallbackPlanner?: HeuristicPlanner;
     customCaller?: ModelCaller;
   } = {}) {
-    this.apiKey = 'apiKey' in options ? options.apiKey : process.env.OPENAI_API_KEY;
+    this.apiKey =
+      'apiKey' in options
+        ? options.apiKey
+        : process.env.TASKFORGE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
     this.model = options.model ?? 'gpt-5.6-luna';
     this.timeoutMs = options.timeoutMs ?? 15000;
     this.fallbackPlanner = options.fallbackPlanner ?? new HeuristicPlanner();

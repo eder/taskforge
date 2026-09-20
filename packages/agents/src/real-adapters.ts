@@ -273,15 +273,26 @@ export abstract class BaseCliAdapter implements AgentAdapter {
           // ignore parse errors
         }
       } else {
-        const denialMatch = trimmed.match(
-          /(?:permission(?: was)? denied|action denied|denied action)[:\s]+(?:for action\s+)?([A-Za-z0-9_]+)(?:\(([^)]+)\))?/i,
+        const jetskiMatch = trimmed.match(
+          /(?:jetski:.*)?(?:a tool )?required the ["']?([A-Za-z0-9_]+)["']? permission.*(?:auto-denied|denied)/i,
         );
-        if (denialMatch) {
+        if (jetskiMatch) {
           deniedActions.push({
-            action: denialMatch[1],
-            command: denialMatch[2],
+            action: jetskiMatch[1],
             reason: trimmed,
           });
+          errors.push(trimmed);
+        } else {
+          const denialMatch = trimmed.match(
+            /(?:permission(?: was)? denied|action denied|denied action)[:\s]+(?:for action\s+)?([A-Za-z0-9_]+)(?:\(([^)]+)\))?/i,
+          );
+          if (denialMatch) {
+            deniedActions.push({
+              action: denialMatch[1],
+              command: denialMatch[2],
+              reason: trimmed,
+            });
+          }
         }
       }
     }
@@ -511,8 +522,26 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     } else if (result.exitCode === 0) {
       message = `${this.name} completed successfully`;
     } else {
-      message = `${this.name} exited with code ${result.exitCode}`;
-      completionReason = 'HARNESS_FAILED';
+      const isAuthError =
+        outcome.errors.some((e) =>
+          /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i.test(e),
+        ) ||
+        /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i.test(
+          result.stderr || result.stdout,
+        );
+      if (isAuthError) {
+        const authErr =
+          (outcome.errors.find((e) =>
+            /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i.test(e),
+          ) ||
+            result.stderr ||
+            result.stdout).trim().split('\n')[0];
+        message = `${this.name} authentication failed: ${authErr}`;
+        completionReason = 'HARNESS_FAILED';
+      } else {
+        message = `${this.name} exited with code ${result.exitCode}`;
+        completionReason = 'HARNESS_FAILED';
+      }
     }
 
     return {
@@ -535,13 +564,17 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
   readonly permissionProtocol = 'structured';
 
   constructor(options: CliAdapterOptions = {}) {
+    const defaultArgs =
+      options.defaultArgs && options.defaultArgs.length > 0
+        ? options.defaultArgs
+        : [
+            '--output-format=stream-json',
+            '--verbose',
+            '-p',
+          ];
     super({
-      defaultArgs: [
-        '--output-format=stream-json',
-        '--verbose',
-        '-p',
-      ],
       ...options,
+      defaultArgs,
     });
   }
 
@@ -564,12 +597,16 @@ export class CodexAdapter extends BaseCliAdapter {
   readonly permissionProtocol = 'provider_native';
 
   constructor(options: CliAdapterOptions = {}) {
+    const defaultArgs =
+      options.defaultArgs && options.defaultArgs.length > 0
+        ? options.defaultArgs
+        : [
+            'exec',
+            '--json',
+          ];
     super({
-      defaultArgs: [
-        'exec',
-        '--json',
-      ],
       ...options,
+      defaultArgs,
     });
   }
 
@@ -592,13 +629,17 @@ export class AntigravityAdapter extends BaseCliAdapter {
   readonly permissionProtocol = 'structured';
 
   constructor(options: CliAdapterOptions = {}) {
+    const defaultArgs =
+      options.defaultArgs && options.defaultArgs.length > 0
+        ? options.defaultArgs
+        : [
+            '--output-format',
+            'stream-json',
+            '-p',
+          ];
     super({
-      defaultArgs: [
-        '--output-format',
-        'stream-json',
-        '-p',
-      ],
       ...options,
+      defaultArgs,
     });
   }
 

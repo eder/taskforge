@@ -251,6 +251,15 @@ TaskForge includes an opt-in integration test suite (`packages/agents/tests/real
 - Unit tests verify flag safety and bidirectional I/O without needing live CLI binaries.
 - Setting `TASKFORGE_TEST_REAL_AGENTS=1` enables full end-to-end execution with detected local CLIs in CI or local developer environments.
 
+### 4.8 Default CLI Serialization & Headless Auto-Denial Handling
+- **Argument Preservation**: `CodexAdapter` (`exec --json`), `ClaudeCodeAdapter`, and `AntigravityAdapter` (`--output-format stream-json`) strictly protect their default argument vectors during initialization, preventing registry option overrides from corrupting structured event parsing.
+- **Headless Auto-Denial Detection**: When executing without human interaction, tools denied automatically by the underlying harness (e.g. `jetski: ... auto-denied`) are parsed directly from stderr/stdout, registered as `deniedActions`, and transitioned to `HARNESS_FAILED` to prevent phantom task completions.
+
+### 4.9 Credential Isolation & Active Health Probes
+- **Dedicated Key Precedence**: `TASKFORGE_OPENAI_API_KEY` takes precedence over generic `OPENAI_API_KEY`, preventing TaskForge from clashing with global shell configs or other AI tools.
+- **Global User Configuration (`~/.taskforge/config.yaml`)**: Stored in the user home directory (`chmod 600`), allowing persistent global credentials without any risk of committing secrets to Git.
+- **Active Health Probes**: `OpenAIRoutingProvider` actively probes `https://api.openai.com/v1/models` on startup and in `/health`. Revoked or expired keys display `○ invalid key (static fallback)` and immediately fall back to deterministic static routing instead of reporting false readiness.
+
 ---
 
 ## 5. Summary Cheat Sheet

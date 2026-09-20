@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
-import { TaskForgeConfig, loadConfig, DeliveryError, ConversationState, generateRunId, PlannerProvenance } from '@taskforge/shared';
+import { TaskForgeConfig, loadConfig, DeliveryError, ConversationState, generateRunId, PlannerProvenance, resolveOpenAIApiKey } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, AgentActivityTracker } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
@@ -100,17 +100,18 @@ export class InteractiveShell {
     this.operator = new OperatorAgent();
     this.agentRegistry = new AgentRegistry();
     this.gitService = new GitService(this.repoRoot);
+    const openaiApiKey = resolveOpenAIApiKey(this.config);
     this.planner = new SemanticPlanner({
-      apiKey: process.env.OPENAI_API_KEY,
+      apiKey: openaiApiKey,
       model: process.env.PLANNER_MODEL || 'gpt-5.6-luna',
     });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);
     if (this.config.router.adaptive) {
       this.router = new AdaptiveRoutingProvider(performanceEngine);
-    } else if (this.config.router.provider === 'openai' && process.env.OPENAI_API_KEY) {
+    } else if (this.config.router.provider === 'openai' && openaiApiKey) {
       this.router = new OpenAIRoutingProvider(
-        process.env.OPENAI_API_KEY,
+        openaiApiKey,
         this.config.router.model,
         15000,
         { performanceEngine },
@@ -268,10 +269,29 @@ export class InteractiveShell {
     const cleanLabel = gitStatus.isClean
       ? `${colors.green}clean${colors.reset}`
       : `${colors.yellow}modified${colors.reset}`;
-    const routerStatus =
-      this.config.router.provider === 'openai' && Boolean(process.env.OPENAI_API_KEY)
-        ? `${colors.green}● ready${colors.reset} ${colors.dim}(OpenAI ${this.config.router.model})${colors.reset}`
-        : `${colors.gray}● static fallback${colors.reset}`;
+    const apiKey = resolveOpenAIApiKey(this.config);
+    let routerStatus: string;
+    if (this.config.router.provider === 'openai') {
+      if (!apiKey) {
+        routerStatus = `${colors.gray}○ missing key${colors.reset} ${colors.dim}(static fallback)${colors.reset}`;
+      } else {
+        const shouldValidate =
+          !process.env.VITEST || process.env.TASKFORGE_TEST_VALIDATE_KEY === 'true';
+        const report =
+          shouldValidate && typeof this.router.healthCheck === 'function'
+            ? await this.router.healthCheck({ validateKey: true })
+            : { status: 'healthy' as const };
+        if (report.status === 'healthy') {
+          routerStatus = `${colors.green}● ready${colors.reset} ${colors.dim}(OpenAI ${this.config.router.model})${colors.reset}`;
+        } else if (report.details?.includes('invalid') || report.details?.includes('401')) {
+          routerStatus = `${colors.red}○ invalid key${colors.reset} ${colors.dim}(static fallback)${colors.reset}`;
+        } else {
+          routerStatus = `${colors.yellow}○ degraded${colors.reset} ${colors.dim}(static fallback)${colors.reset}`;
+        }
+      }
+    } else {
+      routerStatus = `${colors.gray}● static fallback${colors.reset}`;
+    }
 
     const lines = [
       '',
@@ -330,8 +350,10 @@ export class InteractiveShell {
       case 'inspect_health': {
         // 1. Router health probe
         let routerHealth: RouterHealthReport;
+        const shouldValidate =
+          !process.env.VITEST || process.env.TASKFORGE_TEST_VALIDATE_KEY === 'true';
         if (typeof this.router.healthCheck === 'function') {
-          routerHealth = await this.router.healthCheck();
+          routerHealth = await this.router.healthCheck({ validateKey: shouldValidate });
         } else {
           routerHealth = {
             status: 'healthy',

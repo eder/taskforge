@@ -209,7 +209,11 @@ describe('Interactive Terminal Prompt & REPL', () => {
       const runPromise = shell.start();
 
       // Wait for async shell initialization (banner, git status, keypress events)
-      await new Promise((r) => setTimeout(r, 400));
+      const startWait = Date.now();
+      while (!captured.includes('TaskForge') && Date.now() - startWait < 3000) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      await new Promise((r) => setTimeout(r, 100));
 
       // Send bracketed paste start
       const pasteContent = 'function hello() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n';
