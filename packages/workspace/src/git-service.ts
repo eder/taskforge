@@ -174,6 +174,34 @@ export class GitService {
     return this.getHeadCommit(cwd);
   }
 
+  /** Resolves the tree object a commit (or any ref) points at. */
+  async getTreeHash(ref: string, cwd: string = this.repoRoot): Promise<string> {
+    return this.exec(['rev-parse', `${ref}^{tree}`], cwd);
+  }
+
+  /**
+   * Creates a new, unreferenced commit object with the given tree and parent
+   * without touching the working tree or any branch ref. Used to represent a
+   * cumulative multi-commit result (e.g. a sequential collaborative team's
+   * final worktree state) as a single commit whose diff against `parentCommit`
+   * is the complete cumulative delta.
+   */
+  async commitTree(
+    treeHash: string,
+    parentCommit: string,
+    message: string,
+    cwd: string = this.repoRoot,
+  ): Promise<string> {
+    return this.exec(['commit-tree', treeHash, '-p', parentCommit, '-m', message], cwd);
+  }
+
+  /** Counts the commits reachable from `toRef` but not `fromRef` (i.e. `fromRef..toRef`). */
+  async countCommits(fromRef: string, toRef: string, cwd: string = this.repoRoot): Promise<number> {
+    const out = await this.exec(['rev-list', '--count', `${fromRef}..${toRef}`], cwd);
+    const count = parseInt(out, 10);
+    return Number.isFinite(count) ? count : 0;
+  }
+
   async abortCherryPick(cwd: string = this.repoRoot): Promise<void> {
     await this.exec(['cherry-pick', '--abort'], cwd);
   }
