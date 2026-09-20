@@ -1,4 +1,5 @@
-export type AgentQuotaStatus = 'ready' | 'quota_exhausted' | 'rate_limited' | 'not_installed';
+export type AgentQuotaStatus =
+  'ready' | 'quota_exhausted' | 'rate_limited' | 'not_installed' | 'auth_failed';
 
 export interface AgentQuotaRecord {
   agentId: string;
@@ -24,13 +25,32 @@ export class AgentQuotaTracker {
   }
 
   /**
-   * Evaluates agent execution output for rate limits or quota exhaustion.
-   * Returns true if a quota/rate-limit issue was identified.
+   * Evaluates agent execution output for rate limits, quota exhaustion, or auth failures.
+   * Returns true if a quota, rate-limit, or auth issue was identified.
    */
   recordFailure(agentId: string, output: string): boolean {
     if (!output || typeof output !== 'string') return false;
 
     const lower = output.toLowerCase();
+    const isAuthFailure =
+      lower.includes('failed to authenticate') ||
+      lower.includes('oauth session expired') ||
+      lower.includes('authentication_failed') ||
+      lower.includes('authentication failed') ||
+      lower.includes('invalid api key') ||
+      lower.includes('unauthorized') ||
+      lower.includes('forbidden');
+
+    if (isAuthFailure) {
+      this.records.set(agentId, {
+        agentId,
+        status: 'auth_failed',
+        reason: 'authentication failed or session expired',
+        recordedAt: Date.now(),
+      });
+      return true;
+    }
+
     const isUsageLimit =
       lower.includes('usage limit') ||
       lower.includes('upgrade to pro') ||

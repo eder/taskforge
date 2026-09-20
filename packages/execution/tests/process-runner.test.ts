@@ -20,6 +20,28 @@ describe('Execution - Environment Sanitizer', () => {
     expect(sanitized.API_PASSWORD_HASH).toBeUndefined();
     expect(sanitized.SAFE_VAR).toBeUndefined();
   });
+
+  it('preserves explicitly allowlisted tokens even when denyPatterns contains *TOKEN*', () => {
+    const parentEnv = {
+      PATH: '/bin:/usr/bin',
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-test-token',
+      OTHER_SECRET_TOKEN: 'forbidden-token',
+    };
+
+    const sanitized = sanitizeEnvironment(
+      parentEnv,
+      {},
+      {
+        inherit: false,
+        allow: ['PATH', 'CLAUDE_CODE_OAUTH_TOKEN'],
+        denyPatterns: ['*PASSWORD*', '*SECRET*', '*TOKEN*'],
+      },
+    );
+
+    expect(sanitized.PATH).toBe('/bin:/usr/bin');
+    expect(sanitized.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat-test-token');
+    expect(sanitized.OTHER_SECRET_TOKEN).toBeUndefined();
+  });
 });
 
 describe('Execution - ProcessRunner', () => {

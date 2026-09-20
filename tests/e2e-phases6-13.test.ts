@@ -562,8 +562,10 @@ describe('TaskForge Phases 6-13 End-to-End Orchestration', () => {
       },
     ]);
 
-    const agentRegistry = new AgentRegistry();
+    const agentRegistry = new AgentRegistry(false);
     agentRegistry.register(escalatingAgent);
+    const helperAgent = new FakeAgent('fake-helper', 'Helper Worker');
+    agentRegistry.register(helperAgent);
 
     const escalationHandler = new EscalationHandler(eventRepo);
 

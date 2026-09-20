@@ -265,7 +265,9 @@ async function runReviewTeam(
     return {
       success: false,
       output:
-        gateRes.evidence.explanation ?? implementerRes.output ?? 'Implementer failed completion gate',
+        gateRes.evidence.explanation ??
+        implementerRes.output ??
+        'Implementer failed completion gate',
       worktreePath: implementerRes.worktreePath,
     };
   }
@@ -384,9 +386,10 @@ async function runReviewTeam(
       ctx.activityTracker.setCriticalFindings(task.id, criticalOrMajor);
     }
 
-    const findingSummary = criticalOrMajor.length > 0
-      ? `\nCritical/Major findings:\n${criticalOrMajor.map((f) => `- [${f.severity.toUpperCase()}] ${f.file ? `${f.file}${f.line !== undefined ? `:${f.line}` : ''} ` : ''}${f.description}`).join('\n')}`
-      : '';
+    const findingSummary =
+      criticalOrMajor.length > 0
+        ? `\nCritical/Major findings:\n${criticalOrMajor.map((f) => `- [${f.severity.toUpperCase()}] ${f.file ? `${f.file}${f.line !== undefined ? `:${f.line}` : ''} ` : ''}${f.description}`).join('\n')}`
+        : '';
 
     ctx.onProgress?.(
       `[${task.id}] ✗ Review rejected: ${criticalOrMajor.length} blocking finding(s), reviewer failure: ${anyReviewerFailed}`,
@@ -406,9 +409,7 @@ async function runReviewTeam(
     };
   }
 
-  ctx.onProgress?.(
-    `[${task.id}] ✓ Review approved by all ${reviewerChain.length} reviewer(s).`,
-  );
+  ctx.onProgress?.(`[${task.id}] ✓ Review approved by all ${reviewerChain.length} reviewer(s).`);
 
   return {
     success: true,
@@ -468,6 +469,7 @@ async function runConcurrentTeam(
   const completed = new Set<string>();
   const outputs: Array<{ role: string; agentId: string; output: string }> = [];
   const failedInvestigators: string[] = [];
+  const failedDetails: Array<{ id: string; agentId: string; role: string; reason: string }> = [];
 
   const runnable = asgnGraph.getRunnableAssignments(completed);
   if (ctx.concurrency && runnable.length > 0) {
@@ -507,6 +509,8 @@ async function runConcurrentTeam(
         }
       } else {
         failedInvestigators.push(asgn.id);
+        const reason = res.message || res.output || 'Execution failed';
+        failedDetails.push({ id: asgn.id, agentId: asgn.agentId, role: asgn.role, reason });
       }
     }),
   );
@@ -519,12 +523,16 @@ async function runConcurrentTeam(
     (policy === 'all_required' || (policy === 'quorum' && failureRatio >= 0.5));
 
   if (policyViolated) {
+    const detailMsg =
+      failedDetails.length > 0
+        ? ` Reason: ${failedDetails.map((d) => `${d.agentId} (${d.role}): ${d.reason}`).join('; ')}`
+        : '';
     ctx.onProgress?.(
-      `[${task.id}] Investigation phase failed under '${policy}' policy: ${failedInvestigators.length}/${investigatorCount} investigators failed.`,
+      `[${task.id}] Investigation phase failed under '${policy}' policy: ${failedInvestigators.length}/${investigatorCount} investigators failed.${detailMsg}`,
     );
     return {
       success: false,
-      output: `Investigation phase failed under '${policy}' policy (${failedInvestigators.length}/${investigatorCount} failed)`,
+      output: `Investigation phase failed under '${policy}' policy (${failedInvestigators.length}/${investigatorCount} failed)${detailMsg}`,
     };
   }
 
@@ -640,7 +648,9 @@ async function runCompetitiveTeam(
     return {
       success: false,
       output: `All ${attempts.length} competing solutions failed:\n${attempts
-        .map((a) => `[${a.selection.agent.name}]: ${a.result.output ?? a.result.message ?? 'failed'}`)
+        .map(
+          (a) => `[${a.selection.agent.name}]: ${a.result.output ?? a.result.message ?? 'failed'}`,
+        )
         .join('\n\n')}`,
     };
   }
@@ -660,13 +670,11 @@ async function runCompetitiveTeam(
             config: ctx.config,
             taskType: task.type,
           })
-          .catch(
-            (): VerificationResult => ({
-              passed: false,
-              checks: [],
-              failureReason: 'verification threw while evaluating competing solution',
-            }),
-          ),
+          .catch((): VerificationResult => ({
+            passed: false,
+            checks: [],
+            failureReason: 'verification threw while evaluating competing solution',
+          })),
       })),
     );
 
