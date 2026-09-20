@@ -481,6 +481,126 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
     db.close();
   });
 
+  it('runs a real competitive strategy: N independent full solutions, one selected as the winner', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const assignmentRepo = new AssignmentRepository(db);
+    const registry = new AgentRegistry(false);
+
+    const solverA = new FakeAgent('solver-a', 'Solver A', [
+      {
+        writeFile: { path: 'solution.ts', content: 'export const solution = "A";\n' },
+        gitCommitMessage: 'feat: solution A',
+      },
+    ]);
+    const solverB = new FakeAgent('solver-b', 'Solver B', [
+      {
+        writeFile: { path: 'solution.ts', content: 'export const solution = "B";\n' },
+        gitCommitMessage: 'feat: solution B',
+      },
+    ]);
+    const solverC = new FakeAgent('solver-c', 'Solver C', [
+      { shouldFail: true, failMessage: 'Could not find a working approach' },
+    ]);
+
+    registry.register(solverA);
+    registry.register(solverB);
+    registry.register(solverC);
+
+    const competitiveRouter: RoutingProvider = {
+      id: 'mock-competitive-router',
+      route: async () => ({
+        strategy: 'competitive',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'high',
+        teamSize: 3,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Solve it your own way',
+            preferredAgent: 'solver-a',
+          },
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Solve it your own way',
+            preferredAgent: 'solver-b',
+          },
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Solve it your own way',
+            preferredAgent: 'solver-c',
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'Uncertain approach: let three agents compete',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: competitiveRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-COMPETITIVE-1',
+      title: 'Find the best approach to a tricky problem',
+      description: 'Let independent agents each try their own solution',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-COMPETITIVE-1',
+        objective: 'Solve the tricky problem',
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['A working solution exists'],
+      },
+    };
+    graph.addTask(task);
+
+    const result = await orchestrator.run('Solve tricky problem competitively', {
+      preplannedGraph: graph,
+    });
+
+    expect(result.status).toBe('completed');
+
+    // All 3 agents must have actually attempted a full, independent solution —
+    // the old bug ran this as parallel investigation + single implementer.
+    expect(solverA.executedAssignments.length).toBe(1);
+    expect(solverB.executedAssignments.length).toBe(1);
+    expect(solverC.executedAssignments.length).toBe(1);
+
+    const assignments = assignmentRepo.listByTask('TASK-COMPETITIVE-1');
+    expect(assignments.length).toBe(3);
+    // The failing solver's own assignment must be recorded as failed, not silently dropped.
+    const failedAssignment = assignments.find((a) => a.agentId === 'solver-c');
+    expect(failedAssignment?.status).toBe('failed');
+    // One of the two successful solvers must have been picked as the winner.
+    const completedAssignments = assignments.filter((a) => a.status === 'completed');
+    expect(completedAssignments.length).toBe(2);
+
+    db.close();
+  });
+
+
   it('aborts before synthesis when an investigator fails under the default all_required policy', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const assignmentRepo = new AssignmentRepository(db);
