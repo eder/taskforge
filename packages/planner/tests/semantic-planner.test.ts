@@ -189,7 +189,8 @@ describe('SemanticPlanner', () => {
 
     // Verify provenance is recorded
     expect(graph.metadata).toBeDefined();
-    expect(graph.metadata!.source).toBe('semantic');
+    expect(graph.metadata!.planner).toBeDefined();
+    expect(graph.metadata!.planner.source).toBe('deterministic_decomposition');
   });
 
   it('Requirement 5: falls back safely to deterministic planning when model output is invalid', async () => {
@@ -285,5 +286,112 @@ describe('SemanticPlanner', () => {
     expect(revised3.getAllTasks().length).toBe(revised2.getAllTasks().length + 1);
     const lastTask = revised3.getAllTasks()[revised3.getAllTasks().length - 1];
     expect(lastTask.type).toBe('testing');
+  });
+
+  it('rejects generic 2-task proposal for complex cross-cutting goal and falls back to meaningful decomposition', async () => {
+    const twoTaskPlan: RawPlanOutput = {
+      summary: 'Generic 2-task proposal',
+      tasks: [
+        {
+          taskId: 'TASK-01',
+          title: 'Core Implementation',
+          description: 'Implement all features in a single giant task',
+          type: 'implementation',
+          dependencies: [],
+          objective: 'Implement all features',
+          allowedScope: ['*'],
+          forbiddenChanges: [],
+          acceptanceCriteria: ['Everything works'],
+        },
+        {
+          taskId: 'TASK-02',
+          title: 'Verification and Review',
+          description: 'Review and verify everything',
+          type: 'review',
+          dependencies: ['TASK-01'],
+          objective: 'Review code',
+          allowedScope: [],
+          forbiddenChanges: ['*'],
+          acceptanceCriteria: ['Review passes'],
+        },
+      ],
+    };
+
+    const caller = vi.fn().mockResolvedValue(twoTaskPlan);
+    const planner = new SemanticPlanner({ customCaller: caller, model: 'test-model' });
+
+    const complexGoal: Goal = {
+      id: 'goal-complex-runtime',
+      description: [
+        'Self-Hosting Dogfood Goal:',
+        '- 1. Build an end-to-end task execution pipeline across subsystems.',
+        '- 2. Ensure CompletionGate verifies commits before marking success.',
+        '- 3. Integrate with Git worktree and clean up branches safely.',
+      ].join('\n'),
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(complexGoal);
+
+    // The model proposed only 2 tasks, but policy rejected it and retried
+    expect(caller).toHaveBeenCalled();
+    expect(caller.mock.calls.length).toBeGreaterThan(1);
+
+    // The plan fell back to meaningful decomposition with >= 3 tasks
+    expect(graph.getAllTasks().length).toBeGreaterThanOrEqual(3);
+
+    // Provenance accurately reflects deterministic decomposition, NOT AI model output
+    expect(graph.metadata).toBeDefined();
+    expect(graph.metadata!.planner).toBeDefined();
+    expect(graph.metadata!.planner.source).toBe('deterministic_decomposition');
+    expect(graph.metadata!.planner.fallbackReason).toBe('model_unresponsive_or_invalid');
+    expect(graph.metadata!.planner.model).toBeUndefined();
+  });
+
+  it('accurately records PlannerProvenance across planner sources', async () => {
+    // 1. Semantic Model Provenance
+    const validFourTaskPlan: RawPlanOutput = {
+      summary: 'Valid 4 task plan',
+      tasks: [
+        { taskId: 'TASK-01', title: 'Task 1', description: 'D1', type: 'investigation', dependencies: [], objective: 'Obj 1', allowedScope: [], forbiddenChanges: ['*'], acceptanceCriteria: ['C1'] },
+        { taskId: 'TASK-02', title: 'Task 2', description: 'D2', type: 'architecture', dependencies: ['TASK-01'], objective: 'Obj 2', allowedScope: ['*'], forbiddenChanges: [], acceptanceCriteria: ['C2'] },
+        { taskId: 'TASK-03', title: 'Task 3', description: 'D3', type: 'implementation', dependencies: ['TASK-02'], objective: 'Obj 3', allowedScope: ['*'], forbiddenChanges: [], acceptanceCriteria: ['C3'] },
+        { taskId: 'TASK-04', title: 'Task 4', description: 'D4', type: 'testing', dependencies: ['TASK-03'], objective: 'Obj 4', allowedScope: ['*'], forbiddenChanges: [], acceptanceCriteria: ['C4'] },
+      ],
+    };
+    const validCaller = vi.fn().mockResolvedValue(validFourTaskPlan);
+    const semanticPlanner = new SemanticPlanner({ customCaller: validCaller, model: 'gpt-5.6-luna' });
+    const simpleGoal: Goal = {
+      id: 'goal-simple',
+      description: 'Implement user login',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const semanticGraph = await semanticPlanner.plan(simpleGoal);
+    expect(semanticGraph.metadata?.planner).toEqual({
+      source: 'semantic_model',
+      provider: 'custom',
+      model: 'gpt-5.6-luna',
+      promptVersion: 'v1.0',
+      schemaVersion: 'v1.0',
+    });
+
+    // 2. Heuristic Fallback Provenance (no model configured)
+    const fallbackPlanner = new SemanticPlanner({ apiKey: undefined, model: 'gpt-5.6-luna' });
+    fallbackPlanner.setModelCaller(undefined);
+    const heuristicGraph = await fallbackPlanner.plan(simpleGoal);
+    expect(heuristicGraph.metadata?.planner).toEqual({
+      source: 'heuristic_fallback',
+      fallbackReason: 'no_model_configured',
+      model: 'gpt-5.6-luna',
+      promptVersion: 'v1.0',
+      schemaVersion: 'v1.0',
+    });
   });
 });

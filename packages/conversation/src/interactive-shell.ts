@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
-import { TaskForgeConfig, loadConfig, DeliveryError, ConversationState, generateRunId } from '@taskforge/shared';
+import { TaskForgeConfig, loadConfig, DeliveryError, ConversationState, generateRunId, PlannerProvenance } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, AgentActivityTracker } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
@@ -12,11 +12,12 @@ import {
   OpenAIRoutingProvider,
   AdaptiveRoutingProvider,
   RoutingProvider,
+  RouterHealthReport,
   AgentSelector,
 } from '@taskforge/router';
-import { TaskGraph } from '@taskforge/core';
+import { TaskGraph, Goal } from '@taskforge/core';
 import { RunOrchestrator, OrchestrationResult, sanitizeTaskOutput } from '@taskforge/scheduler';
-import { TaskForgeDatabase, InteractionRepository, RunRepository, GoalRepository } from '@taskforge/persistence';
+import { TaskForgeDatabase, DatabaseHealthReport, InteractionRepository, RunRepository, GoalRepository } from '@taskforge/persistence';
 import { TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
@@ -71,6 +72,7 @@ export class InteractiveShell {
   private deliveryService: DeliveryService;
   private githubWorkflowService: GitHubWorkflowService;
   private currentGraph?: TaskGraph;
+  private activeGoal?: Goal;
   private lastGoalDescription?: string;
   private isPaused = false;
   private activeRunId?: string;
@@ -325,6 +327,108 @@ export class InteractiveShell {
         return this.operator.formatResponse(intent, { agents: reports });
       }
 
+      case 'inspect_health': {
+        // 1. Router health probe
+        let routerHealth: RouterHealthReport;
+        if (typeof this.router.healthCheck === 'function') {
+          routerHealth = await this.router.healthCheck();
+        } else {
+          routerHealth = {
+            status: 'healthy',
+            provider: this.router.id,
+            adaptive: this.config.router.adaptive ?? false,
+            details: `Active provider: ${this.router.id}`,
+          };
+        }
+
+        // 2. Agents health probe
+        const agentReports = await AgentDetector.detect(this.agentRegistry.list());
+        const totalAgents = agentReports.length;
+        const readyAgents = agentReports.filter((a) => a.ready).length;
+        const agentStatus: 'healthy' | 'degraded' | 'unhealthy' =
+          readyAgents === totalAgents
+            ? 'healthy'
+            : readyAgents > 0
+              ? 'degraded'
+              : 'unhealthy';
+
+        // 3. Database health probe
+        const dbHealth: DatabaseHealthReport = this.db.healthCheck();
+
+        // 4. Overall system status
+        const isAllHealthy =
+          routerHealth.status === 'healthy' &&
+          agentStatus === 'healthy' &&
+          dbHealth.status === 'healthy';
+        const hasUnhealthy =
+          routerHealth.status === 'unhealthy' ||
+          agentStatus === 'unhealthy' ||
+          dbHealth.status === 'unhealthy';
+        const overallStatus = isAllHealthy
+          ? `${colors.green}${colors.bold}✔ ALL SYSTEMS OPERATIONAL${colors.reset}`
+          : hasUnhealthy
+            ? `${colors.red}${colors.bold}✖ SYSTEM UNHEALTHY${colors.reset}`
+            : `${colors.yellow}${colors.bold}⚠ SYSTEM DEGRADED${colors.reset}`;
+
+        const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
+        const header = `${colors.brand}✦ ${colors.bold}TaskForge System Health${colors.reset}\n  ${divider}`;
+
+        // Format router section
+        const routerBadge =
+          routerHealth.status === 'healthy'
+            ? `${colors.green}${colors.bold}✔ HEALTHY${colors.reset}`
+            : routerHealth.status === 'degraded'
+              ? `${colors.yellow}${colors.bold}⚠ DEGRADED${colors.reset}`
+              : `${colors.red}${colors.bold}✖ UNHEALTHY${colors.reset}`;
+        const routerDetails = [
+          `  ${colors.bold}Routing Provider:${colors.reset}   ${colors.cyan}${routerHealth.provider}${colors.reset} ${routerBadge}`,
+          routerHealth.model ? `    ${colors.dim}Model:${colors.reset}          ${routerHealth.model}` : undefined,
+          routerHealth.details ? `    ${colors.dim}Details:${colors.reset}        ${colors.dim}${routerHealth.details}${colors.reset}` : undefined,
+        ]
+          .filter(Boolean)
+          .join('\n');
+
+        // Format agent fleet section
+        const agentBadge =
+          agentStatus === 'healthy'
+            ? `${colors.green}${colors.bold}✔ HEALTHY${colors.reset}`
+            : agentStatus === 'degraded'
+              ? `${colors.yellow}${colors.bold}⚠ DEGRADED${colors.reset}`
+              : `${colors.red}${colors.bold}✖ UNHEALTHY${colors.reset}`;
+        const agentSummary = `  ${colors.bold}Agent Fleet:${colors.reset}        ${readyAgents}/${totalAgents} ready ${agentBadge}`;
+        const agentLines = agentReports
+          .map((rep) => `    ${theme.agentPill(rep.id, rep.name, rep.ready, rep.quotaStatus, rep.quotaReason)}`)
+          .join('\n');
+
+        // Format database section
+        const dbBadge =
+          dbHealth.status === 'healthy'
+            ? `${colors.green}${colors.bold}✔ HEALTHY${colors.reset}`
+            : `${colors.red}${colors.bold}✖ UNHEALTHY${colors.reset}`;
+        const dbDetails = [
+          `  ${colors.bold}Local SQLite DB:${colors.reset}    ${dbBadge} ${colors.dim}(${dbHealth.latencyMs}ms)${colors.reset}`,
+          `    ${colors.dim}Path:${colors.reset}           ${dbHealth.path}`,
+          `    ${colors.dim}Integrity:${colors.reset}      ${dbHealth.integrityOk ? `${colors.green}ok${colors.reset}` : `${colors.red}failed${colors.reset}`}${dbHealth.journalMode ? ` • WAL mode (${dbHealth.journalMode})` : ''}`,
+          `    ${colors.dim}Stats:${colors.reset}          ${dbHealth.tables} tables • ${dbHealth.totalRuns} runs • ${dbHealth.totalTasks} tasks`,
+          dbHealth.error ? `    ${colors.red}Error:${colors.reset}         ${dbHealth.error}` : undefined,
+        ]
+          .filter(Boolean)
+          .join('\n');
+
+        return [
+          header,
+          routerDetails,
+          '',
+          agentSummary,
+          agentLines,
+          '',
+          dbDetails,
+          `  ${divider}`,
+          `  ${colors.bold}Status:${colors.reset}             ${overallStatus}`,
+          `  ${divider}`,
+        ].join('\n');
+      }
+
       case 'inspect_tasks': {
         const tasks = this.currentGraph
           ? this.currentGraph.getAllTasks().map((t) => ({
@@ -544,7 +648,7 @@ export class InteractiveShell {
         this.activeRunId = generateRunId();
         this.conversationState = 'PLANNING';
         this.lastGoalDescription = intent.goal;
-        const goal = {
+        const goal: Goal = {
           id: `goal-${Date.now()}`,
           description: intent.goal,
           repository: this.repoRoot,
@@ -552,6 +656,7 @@ export class InteractiveShell {
           acceptanceCriteria: [],
           createdAt: new Date(),
         };
+        this.activeGoal = goal;
 
         const proposedGraph = await this.planner.plan(goal);
         this.currentGraph = await this.negotiator.negotiateGraph(proposedGraph, this.activeRunId);
@@ -591,12 +696,21 @@ export class InteractiveShell {
         });
 
         const plannerMeta = this.currentGraph.metadata?.planner as
-          | { source?: string; model?: string; reason?: string }
+          | PlannerProvenance
           | undefined;
-        const plannerSource =
-          plannerMeta?.source === 'semantic'
-            ? `Semantic / ${plannerMeta.model || 'gpt-5.6-luna'}`
-            : `Fallback / heuristic${plannerMeta?.reason ? ` (${plannerMeta.reason})` : ''}`;
+        let plannerSource: string;
+        if (plannerMeta?.source === 'semantic_model') {
+          const providerLabel = plannerMeta.provider === 'custom' ? 'Custom' : 'Semantic';
+          plannerSource = `${providerLabel} / ${plannerMeta.model || 'gpt-5.6-luna'}`;
+        } else if (plannerMeta?.source === 'deterministic_decomposition') {
+          plannerSource = `Deterministic decomposition${plannerMeta.fallbackReason ? ` (Fallback: ${plannerMeta.fallbackReason})` : ''}`;
+        } else if (plannerMeta?.source === 'heuristic_fallback') {
+          plannerSource = `Fallback / heuristic${plannerMeta.fallbackReason ? ` (${plannerMeta.fallbackReason})` : ''}`;
+        } else if ((this.currentGraph.metadata as any)?.source === 'semantic') {
+          plannerSource = `Semantic / ${(this.currentGraph.metadata as any)?.model || 'gpt-5.6-luna'}`;
+        } else {
+          plannerSource = `Fallback / heuristic${(this.currentGraph.metadata as any)?.fallbackReason ? ` (${(this.currentGraph.metadata as any).fallbackReason})` : ''}`;
+        }
 
         const routerSource =
           (routing as any).source === 'openai'
@@ -630,7 +744,7 @@ export class InteractiveShell {
           return 'No active plan to revise. Describe a goal first.';
         }
         this.conversationState = 'PLANNING';
-        const goal = {
+        const goal: Goal = this.activeGoal ?? {
           id: `goal-${Date.now()}`,
           description: this.lastGoalDescription ?? 'Revised goal',
           repository: this.repoRoot,
@@ -638,15 +752,23 @@ export class InteractiveShell {
           acceptanceCriteria: [],
           createdAt: new Date(),
         };
+        this.activeGoal = goal;
 
         let revisedGraph: TaskGraph;
         if ('revise' in this.planner && typeof (this.planner as any).revise === 'function') {
-          revisedGraph = await (this.planner as any).revise(this.currentGraph, intent.revision);
+          revisedGraph = await (this.planner as any).revise(
+            this.currentGraph,
+            goal,
+            intent.revision,
+          );
         } else {
           revisedGraph = await this.planner.plan(goal);
         }
 
-        this.currentGraph = await this.negotiator.negotiateGraph(revisedGraph, this.activeRunId!);
+        if (!this.activeRunId) {
+          this.activeRunId = generateRunId();
+        }
+        this.currentGraph = await this.negotiator.negotiateGraph(revisedGraph, this.activeRunId);
         this.conversationState = 'AWAITING_PLAN_APPROVAL';
 
         const tasks = this.currentGraph.getAllTasks();
@@ -906,6 +1028,7 @@ export class InteractiveShell {
           '',
           `  ${colors.bold}Quick Commands:${colors.reset}`,
           `    ${colors.brand}/agents${colors.reset}   List available agent harnesses and status`,
+          `    ${colors.brand}/health${colors.reset}   Inspect Router, agents, and local database health`,
           `    ${colors.brand}/tasks${colors.reset}    List active tasks in this run`,
           `    ${colors.brand}/runs${colors.reset}     List past runs and their git branches`,
           `    ${colors.brand}/plan${colors.reset}     View current task plan`,
@@ -1074,13 +1197,35 @@ export class InteractiveShell {
       if (closed) return;
 
       // Bracketed paste detection
-      if (key?.name === 'paste-start' || str === '\x1b[200~') {
-        isPasting = true;
-        pastingBuffer = '';
+      if (str && str.includes('\x1b[200~') && str.includes('\x1b[201~')) {
+        // eslint-disable-next-line no-control-regex
+        const clean = str.replace(/\x1b\[20[01]~/g, '');
+        insertPastedText(clean);
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
         return;
       }
-      if (key?.name === 'paste-end' || str === '\x1b[201~') {
+      if (
+        key?.name === 'paste-start' ||
+        key?.sequence === '\x1b[200~' ||
+        str === '\x1b[200~' ||
+        (str && str.startsWith('\x1b[200~'))
+      ) {
+        isPasting = true;
+        // eslint-disable-next-line no-control-regex
+        pastingBuffer = str && str.startsWith('\x1b[200~') ? str.replace(/\x1b\[200~/g, '') : '';
+        return;
+      }
+      if (
+        key?.name === 'paste-end' ||
+        key?.sequence === '\x1b[201~' ||
+        str === '\x1b[201~' ||
+        (str && str.includes('\x1b[201~'))
+      ) {
         isPasting = false;
+        if (str && str.includes('\x1b[201~')) {
+          // eslint-disable-next-line no-control-regex
+          pastingBuffer += str.replace(/\x1b\[20[01]~/g, '');
+        }
         if (pastingBuffer.length > 0) {
           insertPastedText(pastingBuffer);
           pastingBuffer = '';

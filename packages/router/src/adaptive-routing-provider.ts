@@ -1,5 +1,5 @@
 import { PerformanceEngine } from '@taskforge/telemetry';
-import { RoutingProvider, RoutingInput, RoutingDecision } from './router-types.js';
+import { RoutingProvider, RoutingInput, RoutingDecision, RouterHealthReport } from './router-types.js';
 import { StaticRoutingProvider } from './static-routing-provider.js';
 
 export interface AdaptiveRoutingOptions {
@@ -14,6 +14,22 @@ export class AdaptiveRoutingProvider implements RoutingProvider {
     private fallbackProvider: RoutingProvider = new StaticRoutingProvider(),
     private options: AdaptiveRoutingOptions = {},
   ) {}
+
+  async healthCheck(): Promise<RouterHealthReport> {
+    const fallbackHealth = this.fallbackProvider.healthCheck
+      ? await this.fallbackProvider.healthCheck()
+      : { status: 'healthy' as const, provider: this.fallbackProvider.id, adaptive: false };
+    const hasEngine = Boolean(this.performanceEngine);
+    const isHealthy = hasEngine && fallbackHealth.status !== 'unhealthy';
+    return {
+      status: isHealthy ? 'healthy' : 'degraded',
+      provider: this.id,
+      adaptive: true,
+      details: hasEngine
+        ? `Adaptive engine active with fallback: ${this.fallbackProvider.id}`
+        : 'Performance engine not attached, falling back to static',
+    };
+  }
 
   async route(input: RoutingInput): Promise<RoutingDecision> {
     // 1. Obtain structural team baseline from fallback provider

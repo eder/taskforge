@@ -18,10 +18,24 @@ export interface IDatabaseSync {
   close(): void;
 }
 
+export interface DatabaseHealthReport {
+  status: 'healthy' | 'unhealthy';
+  path: string;
+  journalMode?: string;
+  integrityOk: boolean;
+  latencyMs: number;
+  tables: number;
+  totalRuns: number;
+  totalTasks: number;
+  error?: string;
+}
+
 export class TaskForgeDatabase {
   private db: IDatabaseSync;
+  public readonly dbPath: string;
 
   constructor(dbPath: string = ':memory:') {
+    this.dbPath = dbPath;
     if (dbPath !== ':memory:') {
       const dir = path.dirname(path.resolve(dbPath));
       if (!fs.existsSync(dir)) {
@@ -355,6 +369,62 @@ export class TaskForgeDatabase {
 
   public prepare(sql: string): StatementSync {
     return this.db.prepare(sql);
+  }
+
+  public healthCheck(): DatabaseHealthReport {
+    const start = performance.now();
+    try {
+      const integrityRow = this.db.prepare('PRAGMA integrity_check;').get() as
+        | Record<string, unknown>
+        | undefined;
+      const integrityValue = integrityRow ? Object.values(integrityRow)[0] : undefined;
+      const integrityOk = integrityValue === 'ok';
+
+      const jmRow = this.db.prepare('PRAGMA journal_mode;').get() as
+        | Record<string, unknown>
+        | undefined;
+      const journalMode = jmRow ? String(Object.values(jmRow)[0]).toUpperCase() : undefined;
+
+      const tablesRow = this.db
+        .prepare("SELECT count(*) as cnt FROM sqlite_master WHERE type='table';")
+        .get() as { cnt?: number } | undefined;
+      const tables = Number(tablesRow?.cnt ?? 0);
+
+      const runsRow = this.db.prepare('SELECT count(*) as cnt FROM runs;').get() as
+        | { cnt?: number }
+        | undefined;
+      const totalRuns = Number(runsRow?.cnt ?? 0);
+
+      const tasksRow = this.db.prepare('SELECT count(*) as cnt FROM tasks;').get() as
+        | { cnt?: number }
+        | undefined;
+      const totalTasks = Number(tasksRow?.cnt ?? 0);
+
+      const latencyMs = Math.round((performance.now() - start) * 100) / 100;
+
+      return {
+        status: integrityOk ? 'healthy' : 'unhealthy',
+        path: this.dbPath,
+        journalMode,
+        integrityOk,
+        latencyMs,
+        tables,
+        totalRuns,
+        totalTasks,
+      };
+    } catch (err) {
+      const latencyMs = Math.round((performance.now() - start) * 100) / 100;
+      return {
+        status: 'unhealthy',
+        path: this.dbPath,
+        integrityOk: false,
+        latencyMs,
+        tables: 0,
+        totalRuns: 0,
+        totalTasks: 0,
+        error: (err as Error).message,
+      };
+    }
   }
 
   public close(): void {

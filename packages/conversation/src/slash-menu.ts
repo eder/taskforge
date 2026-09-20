@@ -9,6 +9,7 @@ export interface SlashCommandItem {
 export const SLASH_COMMANDS: SlashCommandItem[] = [
   { cmd: '/exit', desc: 'Exit interactive session' },
   { cmd: '/help', desc: 'Display command reference and guide' },
+  { cmd: '/health', desc: 'Inspect health and status of Router, agents, and local database' },
   { cmd: '/plan', desc: 'Inspect current proposed or active plan' },
   { cmd: '/runs', desc: 'List past execution runs and their integration branches' },
   { cmd: '/apply', desc: 'Apply a completed run to its target branch' },

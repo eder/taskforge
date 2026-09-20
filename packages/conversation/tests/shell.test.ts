@@ -144,4 +144,54 @@ describe('InteractiveShell (REPL)', () => {
     const diffReply = await shell.handleInput('/diff');
     expect(diffReply.length).toBeGreaterThan(0);
   });
+
+  it('Requirement 1: revises an active plan end-to-end via natural language feedback in InteractiveShell', async () => {
+    const shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    shellsToClean.push(shell);
+
+    // 1. Submit initial goal
+    const planProposal = await shell.handleInput('create customer billing service and webhook integration');
+    expect(planProposal).toContain('✦ Plan Proposal');
+    expect(planProposal).toContain('structured tasks:');
+
+    const initialGraph = (shell as any).currentGraph;
+    expect(initialGraph).toBeDefined();
+    const initialCount = initialGraph.getAllTasks().length;
+    expect(initialCount).toBeGreaterThan(0);
+
+    // 2. Submit natural language plan revision: add constraint
+    const constraintReply = await shell.handleInput('do not modify stripe-secrets.json');
+    expect(constraintReply).toContain('✦ Revised Plan');
+
+    const graphAfterConstraint = (shell as any).currentGraph;
+    expect(graphAfterConstraint).toBeDefined();
+    expect(graphAfterConstraint.metadata?.revised).toBe(true);
+    for (const t of graphAfterConstraint.getAllTasks()) {
+      expect(t.contract.forbiddenChanges).toContain('stripe-secrets.json');
+    }
+
+    // 3. Submit natural language plan revision: add another task
+    const addTaskReply = await shell.handleInput('add task Comprehensive Verification and Integration Tests');
+    expect(addTaskReply).toContain('✦ Revised Plan');
+
+    const graphAfterAdd = (shell as any).currentGraph;
+    expect(graphAfterAdd.getAllTasks().length).toBe(graphAfterConstraint.getAllTasks().length + 1);
+    const lastTask = graphAfterAdd.getAllTasks()[graphAfterAdd.getAllTasks().length - 1];
+    expect(lastTask.type).toBe('testing');
+    expect(lastTask.title).toContain('Comprehensive Verification');
+  });
+
+  it('executes /health command and displays Router, agents, and local database status', async () => {
+    const shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    shellsToClean.push(shell);
+
+    const reply = await shell.handleInput('/health');
+    expect(reply).toContain('TaskForge System Health');
+    expect(reply).toContain('Routing Provider:');
+    expect(reply).toContain('Agent Fleet:');
+    expect(reply).toContain('Local SQLite DB:');
+    expect(reply).toContain('test.db');
+    expect(reply).toContain('Status:');
+  });
 });
+

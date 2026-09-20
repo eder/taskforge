@@ -5,6 +5,7 @@ import {
   RoutingInput,
   RoutingDecision,
   RouterFallbackReason,
+  RouterHealthReport,
 } from './router-types.js';
 import { StaticRoutingProvider } from './static-routing-provider.js';
 import { RouterQualityGuard } from './quality-guard.js';
@@ -140,6 +141,19 @@ export class OpenAIRoutingProvider implements RoutingProvider {
     if (this.apiKey === undefined) {
       this.apiKey = process.env.OPENAI_API_KEY;
     }
+  }
+
+  async healthCheck(): Promise<RouterHealthReport> {
+    const hasKey = Boolean(this.apiKey && this.apiKey.trim().length > 0);
+    return {
+      status: hasKey ? 'healthy' : 'degraded',
+      provider: this.id,
+      model: this.model,
+      adaptive: false,
+      details: hasKey
+        ? `OpenAI routing active with model ${this.model}`
+        : `OpenAI routing missing API key; requests will fall back to static`,
+    };
   }
 
   private async makeFallback(

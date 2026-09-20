@@ -6,6 +6,9 @@ describe('OperatorAgent Intent Layer', () => {
 
   it('parses slash commands', () => {
     expect(operator.parseIntent('/agents').type).toBe('inspect_agents');
+    expect(operator.parseIntent('/health').type).toBe('inspect_health');
+    expect(operator.parseIntent('health').type).toBe('inspect_health');
+    expect(operator.parseIntent('system health check').type).toBe('inspect_health');
     expect(operator.parseIntent('/tasks').type).toBe('inspect_tasks');
     expect(operator.parseIntent('/plan').type).toBe('inspect_plan');
     expect(operator.parseIntent('/pause').type).toBe('pause_execution');
