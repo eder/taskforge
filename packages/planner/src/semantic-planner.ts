@@ -1,4 +1,4 @@
-import { RepositoryProfile, Constraint } from '@taskforge/shared';
+import { RepositoryProfile } from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
 import { HeuristicPlanner } from './planner.js';
 import { TaskGraphValidator, RawPlanOutput } from './task-graph-validator.js';
@@ -189,13 +189,12 @@ export class SemanticPlanner implements Planner {
     currentGraph: TaskGraph,
     goal: Goal,
     revision: PlanRevision,
-    profile?: RepositoryProfile,
+    _profile?: RepositoryProfile,
   ): Promise<TaskGraph> {
     const existingTasks = currentGraph.getAllTasks();
 
     // 1. add_constraint
     if (revision.revisionType === 'add_constraint') {
-      const constraintText = revision.feedback;
       const forbidden =
         (revision.details?.forbiddenScope as string) ??
         (revision.feedback.match(/(?:don't|do not)\s+(?:modify|touch|change)\s+(?:the\s+)?(.+)/i)?.[1] ||

@@ -1054,6 +1054,7 @@ export class InteractiveShell {
           return;
         }
         if (str) {
+          // eslint-disable-next-line no-control-regex
           const clean = str.replace(/\x1b\[20[01]~/g, '');
           buffer = buffer.slice(0, cursorIndex) + clean + buffer.slice(cursorIndex);
           cursorIndex += clean.length;

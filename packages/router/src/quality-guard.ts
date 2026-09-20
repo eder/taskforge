@@ -83,8 +83,8 @@ export class RouterQualityGuard {
       return proposal;
     }
 
-    let adjustedComplexity = 'high' as const;
-    let adjustedRisk = 'high' as const;
+    const adjustedComplexity = 'high' as const;
+    const adjustedRisk = 'high' as const;
 
     const changed =
       adjustedComplexity !== proposal.complexity || adjustedRisk !== proposal.risk;

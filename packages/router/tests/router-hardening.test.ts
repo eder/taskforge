@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest';
 import { Task } from '@taskforge/core';
 import {
   OpenAIRoutingProvider,
-  StaticRoutingProvider,
   RouterQualityGuard,
 } from '../src/index.js';
 

@@ -3,7 +3,6 @@ import {
   AgentAssignment,
   AgentResult,
   CompletionGateResult,
-  CompletionFailureReason,
   CompletionEvidence,
   ProviderExecutionOutcome,
 } from '@taskforge/shared';

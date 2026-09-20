@@ -6,10 +6,8 @@ import {
   AssignmentRepository,
   ExecutionRepository,
   EventRepository,
-  WorkspaceRepository,
   RunRepository,
   TaskRepository,
-  GoalRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import {
@@ -19,7 +17,7 @@ import {
   AntigravityAdapter,
   ClaudeCodeAdapter,
 } from '@taskforge/agents';
-import { TaskGraph, Task, Goal } from '@taskforge/core';
+import { TaskGraph, Task } from '@taskforge/core';
 import {
   TaskGraphValidator,
   SemanticPlanner,
@@ -28,20 +26,17 @@ import {
 import {
   RoutingQualityGuard,
   AdaptiveRoutingProvider,
-  StaticRoutingProvider,
 } from '@taskforge/router';
-import { OperatorIntentParser, OperatorAgent } from '@taskforge/operator';
-import { InteractiveShell, TerminalViewport } from '@taskforge/conversation';
+import { OperatorIntentParser } from '@taskforge/operator';
+import { TerminalViewport } from '@taskforge/conversation';
 import {
   getDefaultConfig,
   generateRunId,
-  TaskForgeConfig,
 } from '@taskforge/shared';
 import {
   CompletionGate,
   sanitizeTaskOutput,
 } from '../src/completion-gate.js';
-import { DeterministicScheduler } from '../src/deterministic-scheduler.js';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
 
 describe('Self-Hosting Readiness Hardening Suite (Requirements 20 & 24.A-O)', () => {

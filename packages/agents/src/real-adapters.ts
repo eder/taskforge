@@ -342,6 +342,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     const combined = [rawStdout, rawStderr].filter(Boolean).join('\n');
     const nonJsonLines = combined
       .split('\n')
+      // eslint-disable-next-line no-control-regex
       .map((l) => l.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim())
       .filter((l) => l.length > 0 && !l.startsWith('{') && !l.startsWith('['));
 
