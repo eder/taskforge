@@ -1,4 +1,11 @@
-import { InteractionScope } from '@taskforge/shared';
+import { InteractionScope, PlanRevision, ConversationState } from '@taskforge/shared';
+
+export interface IntentParsingContext {
+  conversationState?: ConversationState;
+  hasActivePlan?: boolean;
+  hasPendingInteractions?: boolean;
+  hasDeliverable?: boolean;
+}
 
 export type OperatorIntent =
   | { type: 'inspect_tasks'; taskId?: string }
@@ -19,6 +26,7 @@ export type OperatorIntent =
   | { type: 'add_constraint'; constraint: string; readOnlyScope?: string }
   | { type: 'approve_plan' }
   | { type: 'reject_plan'; feedback?: string }
+  | { type: 'revise_plan'; revision: PlanRevision }
   | { type: 'approve_interaction';
       requestId?: string;
       scope?: InteractionScope;
@@ -36,9 +44,50 @@ export type OperatorIntent =
   | { type: 'general_query'; query: string };
 
 export class OperatorIntentParser {
-  public static parse(input: string): OperatorIntent {
+  public static parse(input: string, context?: IntentParsingContext): OperatorIntent {
     const text = input.trim();
     const lower = text.toLowerCase();
+    const isMultiline = text.includes('\n');
+
+    // Multiline prompt protection: multiline input should not accidentally trigger
+    // single-line slash commands or natural language shortcuts.
+    if (isMultiline) {
+      if (text.startsWith('/reject')) {
+        return { type: 'reject_plan', feedback: text.replace('/reject', '').trim() };
+      }
+      if (context?.conversationState === 'AWAITING_PLAN_APPROVAL' || context?.hasActivePlan) {
+        let revisionType: PlanRevision['type'] = 'general_feedback';
+        if (lower.includes('split')) {
+          revisionType = 'split_task';
+        } else if (
+          lower.includes("don't") ||
+          lower.includes('do not') ||
+          lower.includes('constraint') ||
+          lower.includes('must not')
+        ) {
+          revisionType = 'add_constraint';
+        } else if (
+          lower.includes('add task') ||
+          lower.includes('new task') ||
+          lower.includes('create task') ||
+          lower.includes('include task')
+        ) {
+          revisionType = 'add_task';
+        } else if (lower.includes('depend') || lower.includes('after') || lower.includes('before')) {
+          revisionType = 'modify_dependency';
+        }
+        const taskMatch = text.match(/TASK-\d+/i);
+        return {
+          type: 'revise_plan',
+          revision: {
+            type: revisionType,
+            taskId: taskMatch ? taskMatch[0].toUpperCase() : undefined,
+            details: text,
+          },
+        };
+      }
+      return { type: 'submit_goal', goal: text };
+    }
 
     // 1. Slash commands shortcuts
     if (text.startsWith('/stream')) {
@@ -193,8 +242,7 @@ export class OperatorIntentParser {
       return { type: 'resume_execution' };
     }
 
-    // Delivery gate natural language equivalents (discard/negation checked first,
-    // since "don't apply this" would otherwise also match the apply_run patterns below)
+    // Delivery gate natural language equivalents (discard/negation checked first)
     if (
       lower.includes("don't apply") ||
       lower.includes('do not apply') ||
@@ -245,6 +293,7 @@ export class OperatorIntentParser {
       return { type: 'create_pr' };
     }
 
+    // Approval / Rejection
     if (
       lower === 'yes' ||
       lower === 'y' ||
@@ -271,6 +320,39 @@ export class OperatorIntentParser {
       lower.startsWith('reject ')
     ) {
       return { type: 'reject_plan', feedback: text };
+    }
+
+    // Context-aware plan revision: when awaiting plan approval and user sends modification feedback
+    if (context?.conversationState === 'AWAITING_PLAN_APPROVAL' || context?.hasActivePlan) {
+      let revisionType: PlanRevision['type'] = 'general_feedback';
+      if (lower.includes('split')) {
+        revisionType = 'split_task';
+      } else if (
+        lower.includes("don't") ||
+        lower.includes('do not') ||
+        lower.includes('constraint') ||
+        lower.includes('must not')
+      ) {
+        revisionType = 'add_constraint';
+      } else if (
+        lower.includes('add task') ||
+        lower.includes('new task') ||
+        lower.includes('create task') ||
+        lower.includes('include task')
+      ) {
+        revisionType = 'add_task';
+      } else if (lower.includes('depend') || lower.includes('after') || lower.includes('before')) {
+        revisionType = 'modify_dependency';
+      }
+      const taskMatch = text.match(/TASK-\d+/i);
+      return {
+        type: 'revise_plan',
+        revision: {
+          type: revisionType,
+          taskId: taskMatch ? taskMatch[0].toUpperCase() : undefined,
+          details: text,
+        },
+      };
     }
 
     // Cancel and reassign
@@ -375,8 +457,8 @@ export class OperatorIntentParser {
 }
 
 export class OperatorAgent {
-  public parseIntent(input: string): OperatorIntent {
-    return OperatorIntentParser.parse(input);
+  public parseIntent(input: string, context?: IntentParsingContext): OperatorIntent {
+    return OperatorIntentParser.parse(input, context);
   }
 
   public formatResponse(
@@ -384,6 +466,8 @@ export class OperatorAgent {
     state: Record<string, unknown>,
   ): string {
     switch (intent.type) {
+      case 'revise_plan':
+        return `Revising plan based on feedback: ${intent.revision.details}`;
       case 'inspect_tasks': {
         const tasks =
           (state.tasks as Array<{ id: string; title: string; status: string; agent?: string }>) ||

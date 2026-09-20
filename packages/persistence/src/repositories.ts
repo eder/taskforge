@@ -8,6 +8,7 @@ import {
   AgentAssignment,
   VerificationResult,
   EventType,
+  CompletionFailureReason,
 } from '@taskforge/shared';
 import { TaskForgeDatabase } from './database.js';
 
@@ -56,6 +57,7 @@ export interface AssignmentRecord {
   status: AssignmentStatus;
   branchName?: string;
   worktreePath?: string;
+  completionReason?: CompletionFailureReason;
   createdAt: string;
   updatedAt: string;
 }
@@ -430,8 +432,8 @@ export class AssignmentRepository {
       .prepare(
         `INSERT INTO assignments (
           id, task_id, run_id, agent_id, role, objective, status,
-          branch_name, worktree_path, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          branch_name, worktree_path, completion_reason, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         assignment.id,
@@ -443,6 +445,7 @@ export class AssignmentRepository {
         assignment.status,
         assignment.branchName ?? null,
         assignment.worktreePath ?? null,
+        assignment.completionReason ?? null,
         now,
         now,
       );
@@ -457,6 +460,7 @@ export class AssignmentRepository {
       status: assignment.status,
       branchName: assignment.branchName,
       worktreePath: assignment.worktreePath,
+      completionReason: assignment.completionReason,
       createdAt: now,
       updatedAt: now,
     };
@@ -467,6 +471,7 @@ export class AssignmentRepository {
     status: AssignmentStatus,
     branchName?: string,
     worktreePath?: string,
+    completionReason?: CompletionFailureReason,
   ): void {
     const now = new Date().toISOString();
     this.db
@@ -475,10 +480,11 @@ export class AssignmentRepository {
           status = ?,
           branch_name = COALESCE(?, branch_name),
           worktree_path = COALESCE(?, worktree_path),
+          completion_reason = COALESCE(?, completion_reason),
           updated_at = ?
          WHERE id = ?`,
       )
-      .run(status, branchName ?? null, worktreePath ?? null, now, id);
+      .run(status, branchName ?? null, worktreePath ?? null, completionReason ?? null, now, id);
   }
 
   listByTask(taskId: string): AssignmentRecord[] {
@@ -494,6 +500,7 @@ export class AssignmentRepository {
       status: string;
       branch_name: string | null;
       worktree_path: string | null;
+      completion_reason: string | null;
       created_at: string;
       updated_at: string;
     }>;
@@ -508,6 +515,41 @@ export class AssignmentRepository {
       status: r.status as AssignmentStatus,
       branchName: r.branch_name ?? undefined,
       worktreePath: r.worktree_path ?? undefined,
+      completionReason: (r.completion_reason as CompletionFailureReason) ?? undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  listByRun(runId: string): AssignmentRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM assignments WHERE run_id = ?')
+      .all(runId) as Array<{
+      id: string;
+      task_id: string;
+      run_id: string;
+      agent_id: string;
+      role: string;
+      objective: string;
+      status: string;
+      branch_name: string | null;
+      worktree_path: string | null;
+      completion_reason: string | null;
+      created_at: string;
+      updated_at: string;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      taskId: r.task_id,
+      runId: r.run_id,
+      agentId: r.agent_id,
+      role: r.role,
+      objective: r.objective,
+      status: r.status as AssignmentStatus,
+      branchName: r.branch_name ?? undefined,
+      worktreePath: r.worktree_path ?? undefined,
+      completionReason: (r.completion_reason as CompletionFailureReason) ?? undefined,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
@@ -527,6 +569,7 @@ export class AssignmentRepository {
           status: string;
           branch_name: string | null;
           worktree_path: string | null;
+          completion_reason: string | null;
           created_at: string;
           updated_at: string;
         }
@@ -544,6 +587,7 @@ export class AssignmentRepository {
       status: row.status as AssignmentStatus,
       branchName: row.branch_name ?? undefined,
       worktreePath: row.worktree_path ?? undefined,
+      completionReason: (row.completion_reason as CompletionFailureReason) ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -607,6 +651,40 @@ export class ExecutionRepository {
     const rows = this.db
       .prepare('SELECT * FROM executions WHERE task_id = ?')
       .all(taskId) as Array<{
+      id: string;
+      run_id: string;
+      task_id: string;
+      assignment_id: string;
+      agent_id: string;
+      pid: number | null;
+      started_at: string;
+      finished_at: string | null;
+      exit_code: number | null;
+      status: string;
+      log_path: string | null;
+      error_message: string | null;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      runId: r.run_id,
+      taskId: r.task_id,
+      assignmentId: r.assignment_id,
+      agentId: r.agent_id,
+      pid: r.pid ?? undefined,
+      startedAt: r.started_at,
+      finishedAt: r.finished_at ?? undefined,
+      exitCode: r.exit_code ?? undefined,
+      status: r.status as ExecutionStatus,
+      logPath: r.log_path ?? undefined,
+      errorMessage: r.error_message ?? undefined,
+    }));
+  }
+
+  listByRun(runId: string): ExecutionRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM executions WHERE run_id = ?')
+      .all(runId) as Array<{
       id: string;
       run_id: string;
       task_id: string;

@@ -115,6 +115,7 @@ export class TaskForgeDatabase {
         status TEXT NOT NULL,
         branch_name TEXT,
         worktree_path TEXT,
+        completion_reason TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
@@ -339,6 +340,12 @@ export class TaskForgeDatabase {
       }
     } catch {
       // Ignore migration errors on transient databases
+    }
+
+    try {
+      this.db.exec('ALTER TABLE assignments ADD COLUMN completion_reason TEXT;');
+    } catch {
+      // Column may already exist
     }
   }
 

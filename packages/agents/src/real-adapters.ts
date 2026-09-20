@@ -55,6 +55,9 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       canExecute: true,
       languages: ['TypeScript', 'JavaScript', 'Python', 'Go', 'Rust'],
       tools: ['bash', 'file_editor', 'git'],
+      stdinMode: 'interactive',
+      permissionProtocol: 'structured',
+      questionProtocol: 'structured',
     };
   }
 
@@ -171,43 +174,183 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     }
   }
 
-  protected extractOutput(rawStdout: string, rawStderr: string): string {
-    const raw = rawStdout || rawStderr;
-    if (!raw) return '';
+  public normalizeOutcome(
+    rawStdout: string,
+    rawStderr: string,
+    exitCode: number,
+    logPath?: string,
+  ): import('@taskforge/shared').ProviderExecutionOutcome {
+    const combined = [rawStdout, rawStderr].filter(Boolean).join('\n');
+    const lines = combined.split('\n');
 
-    const lines = raw.split('\n');
-    let finalResult: string | undefined;
+    let providerStatus: string | undefined;
+    let candidateResponse = '';
     const assistantTexts: string[] = [];
+    const deniedActions: import('@taskforge/shared').DeniedAction[] = [];
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const artifacts: Array<{ path: string; description?: string; type?: string }> = [];
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
-      try {
-        const obj = JSON.parse(trimmed);
-        if (obj.type === 'result' && typeof obj.result === 'string') {
-          finalResult = obj.result;
-        } else if (obj.event === 'result' && typeof obj.result === 'string') {
-          finalResult = obj.result;
-        } else if (obj.type === 'assistant' && obj.message?.content) {
-          for (const item of obj.message.content) {
-            if (item.type === 'text' && item.text) {
-              assistantTexts.push(item.text);
+      if (!trimmed) continue;
+
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+          const obj = JSON.parse(trimmed);
+
+          // 1. Antigravity & structured provider status
+          if (typeof obj.status === 'string') {
+            providerStatus = obj.status;
+          }
+
+          // 2. Denied actions (Antigravity & Claude)
+          // Antigravity: denied_actions: ["RunCommand"] or [{ action: "RunCommand" }]
+          const rawDenied = obj.denied_actions ?? obj.deniedActions;
+          if (Array.isArray(rawDenied)) {
+            for (const d of rawDenied) {
+              if (typeof d === 'string') {
+                deniedActions.push({ action: d });
+              } else if (d && typeof d === 'object') {
+                deniedActions.push({
+                  action: d.action || d.name || 'UnknownAction',
+                  reason: d.reason,
+                  command: d.command,
+                });
+              }
             }
           }
+          if (
+            obj.type === 'action_denied' ||
+            obj.event === 'action_denied' ||
+            obj.type === 'permission_denied' ||
+            obj.action === 'denied'
+          ) {
+            deniedActions.push({
+              action: obj.action || obj.operation || obj.command || 'UnknownAction',
+              reason: obj.reason,
+              command: obj.command,
+            });
+          }
+
+          // 3. Responses and results
+          if (typeof obj.response === 'string' && obj.response.trim().length > 0) {
+            candidateResponse = obj.response;
+          } else if (typeof obj.result === 'string' && obj.result.trim().length > 0) {
+            candidateResponse = obj.result;
+          } else if (obj.type === 'result' && obj.result && typeof obj.result.response === 'string') {
+            candidateResponse = obj.result.response;
+          }
+
+          // 4. Assistant text content
+          if (obj.type === 'assistant' && obj.message?.content) {
+            for (const item of obj.message.content) {
+              if (item.type === 'text' && typeof item.text === 'string' && item.text.trim()) {
+                assistantTexts.push(item.text);
+              }
+            }
+          }
+
+          // 5. Artifact tracking
+          if (obj.type === 'assistant' && obj.message?.content) {
+            for (const item of obj.message.content) {
+              if (item.type === 'tool_use' && (item.name === 'Edit' || item.name === 'Write')) {
+                if (item.input?.file_path) {
+                  artifacts.push({ path: item.input.file_path, type: 'modified_file' });
+                }
+              }
+            }
+          }
+
+          // 6. Errors & warnings
+          if (obj.error) {
+            errors.push(typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error));
+          }
+          if (obj.warning) {
+            warnings.push(typeof obj.warning === 'string' ? obj.warning : JSON.stringify(obj.warning));
+          }
+        } catch {
+          // ignore parse errors
         }
-      } catch {
-        // ignore
+      } else {
+        const denialMatch = trimmed.match(
+          /(?:permission(?: was)? denied|action denied|denied action)[:\s]+(?:for action\s+)?([A-Za-z0-9_]+)(?:\(([^)]+)\))?/i,
+        );
+        if (denialMatch) {
+          deniedActions.push({
+            action: denialMatch[1],
+            command: denialMatch[2],
+            reason: trimmed,
+          });
+        }
       }
     }
 
-    if (finalResult && finalResult.trim().length > 0) {
-      return finalResult;
+    let finalResponse = candidateResponse;
+    if (!finalResponse && assistantTexts.length > 0) {
+      finalResponse = assistantTexts.join('\n\n');
     }
-    if (assistantTexts.length > 0) {
-      return assistantTexts.join('\n\n');
+    if (!finalResponse && rawStdout) {
+      const nonJsonLines = rawStdout
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith('{'));
+      if (nonJsonLines.length > 0) {
+        finalResponse = nonJsonLines.join('\n');
+      }
     }
 
-    return raw;
+    if (!providerStatus) {
+      providerStatus = exitCode === 0 && deniedActions.length === 0 ? 'SUCCESS' : 'FAILED';
+    }
+
+    // Capture non-JSON stderr lines if exit was non-zero and no errors recorded
+    if (exitCode !== 0 && errors.length === 0 && rawStderr) {
+      const nonJsonStderr = rawStderr
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith('{'));
+      if (nonJsonStderr.length > 0) {
+        errors.push(nonJsonStderr.slice(-3).join('\n'));
+      }
+    }
+
+    return {
+      processExitCode: exitCode,
+      providerStatus,
+      finalResponse: (finalResponse ?? '').trim(),
+      deniedActions,
+      unresolvedInteractions: [],
+      errors,
+      warnings,
+      artifacts,
+      runtimeLogRef: logPath,
+    };
+  }
+
+  protected extractOutput(
+    rawStdout: string,
+    rawStderr: string,
+    outcome?: import('@taskforge/shared').ProviderExecutionOutcome,
+  ): string {
+    const effectiveOutcome = outcome ?? this.normalizeOutcome(rawStdout, rawStderr, 0);
+    if (effectiveOutcome && effectiveOutcome.finalResponse) {
+      return effectiveOutcome.finalResponse;
+    }
+
+    // Extract non-JSON text lines if any, NEVER raw JSON
+    const combined = [rawStdout, rawStderr].filter(Boolean).join('\n');
+    const nonJsonLines = combined
+      .split('\n')
+      // eslint-disable-next-line no-control-regex
+      .map((l) => l.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim())
+      .filter((l) => l.length > 0 && !l.startsWith('{') && !l.startsWith('['));
+
+    if (nonJsonLines.length > 0) {
+      return nonJsonLines.join('\n');
+    }
+
+    return '';
   }
 
   protected activeSessions: Map<string, RealCliAgentSession> = new Map();
@@ -268,11 +411,14 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     const args = this.formatArgs(prompt);
     const timeoutMs = this.options.timeoutMs ?? 300000; // 5 minutes default
 
+    const caps = await this.capabilities();
+    const closeStdinOnSpawn = caps.stdinMode === 'close_after_spawn';
+
     const result = await ProcessRunner.run({
       command: this.commandBinary,
       args,
       cwd: context.worktreePath,
-      closeStdinOnSpawn: this.id === 'codex',
+      closeStdinOnSpawn,
       env: {
         ...context.environment,
         ...this.options.env,
@@ -342,23 +488,41 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       // ignore git error if any
     }
 
-    const rawOutput = result.stdout || result.stderr;
-    const output = this.extractOutput(result.stdout, result.stderr);
-    if (result.exitCode === 0) {
+    const outcome = this.normalizeOutcome(result.stdout, result.stderr, result.exitCode, context.logPath);
+    const output = this.extractOutput(result.stdout, result.stderr, outcome);
+
+    // If required actions were denied, the execution cannot be marked successful
+    const hasDeniedRequiredActions = outcome.deniedActions.length > 0;
+    const isExecutionSuccessful = result.exitCode === 0 && !hasDeniedRequiredActions;
+
+    if (isExecutionSuccessful) {
       AgentQuotaTracker.getInstance().recordSuccess(this.id);
     } else {
-      AgentQuotaTracker.getInstance().recordFailure(this.id, rawOutput);
+      AgentQuotaTracker.getInstance().recordFailure(this.id, result.stderr || result.stdout);
+    }
+
+    let message: string;
+    let completionReason: import('@taskforge/shared').CompletionFailureReason | undefined;
+
+    if (hasDeniedRequiredActions) {
+      const deniedList = outcome.deniedActions.map((a) => a.action).join(', ');
+      message = `${this.name} required action denied: ${deniedList}`;
+      completionReason = 'REQUIRED_ACTION_DENIED';
+    } else if (result.exitCode === 0) {
+      message = `${this.name} completed successfully`;
+    } else {
+      message = `${this.name} exited with code ${result.exitCode}`;
+      completionReason = 'HARNESS_FAILED';
     }
 
     return {
-      success: result.exitCode === 0,
+      success: isExecutionSuccessful,
       commitHash,
-      message:
-        result.exitCode === 0
-          ? `${this.name} completed successfully`
-          : `${this.name} exited with code ${result.exitCode}`,
+      message,
       output,
       durationMs: Date.now() - startTime,
+      normalizedOutcome: outcome,
+      completionReason,
     };
   }
 }
@@ -367,6 +531,8 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
   readonly id = 'claude';
   readonly name = 'Claude Code';
   readonly binaryName = 'claude';
+  readonly stdinMode = 'interactive';
+  readonly permissionProtocol = 'structured';
 
   constructor(options: CliAdapterOptions = {}) {
     super({
@@ -378,12 +544,24 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
       ...options,
     });
   }
+
+  async capabilities(): Promise<AgentCapabilities> {
+    const base = await super.capabilities();
+    return {
+      ...base,
+      stdinMode: 'interactive',
+      permissionProtocol: 'structured',
+      questionProtocol: 'structured',
+    };
+  }
 }
 
 export class CodexAdapter extends BaseCliAdapter {
   readonly id = 'codex';
   readonly name = 'Codex CLI';
   readonly binaryName = 'codex';
+  readonly stdinMode = 'close_after_spawn';
+  readonly permissionProtocol = 'provider_native';
 
   constructor(options: CliAdapterOptions = {}) {
     super({
@@ -394,12 +572,24 @@ export class CodexAdapter extends BaseCliAdapter {
       ...options,
     });
   }
+
+  async capabilities(): Promise<AgentCapabilities> {
+    const base = await super.capabilities();
+    return {
+      ...base,
+      stdinMode: 'close_after_spawn',
+      permissionProtocol: 'provider_native',
+      questionProtocol: 'unsupported',
+    };
+  }
 }
 
 export class AntigravityAdapter extends BaseCliAdapter {
   readonly id = 'agy';
   readonly name = 'Google Antigravity';
   readonly binaryName = 'agy';
+  readonly stdinMode = 'interactive';
+  readonly permissionProtocol = 'structured';
 
   constructor(options: CliAdapterOptions = {}) {
     super({
@@ -410,5 +600,15 @@ export class AntigravityAdapter extends BaseCliAdapter {
       ],
       ...options,
     });
+  }
+
+  async capabilities(): Promise<AgentCapabilities> {
+    const base = await super.capabilities();
+    return {
+      ...base,
+      stdinMode: 'interactive',
+      permissionProtocol: 'structured',
+      questionProtocol: 'structured',
+    };
   }
 }

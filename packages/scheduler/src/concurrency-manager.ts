@@ -106,7 +106,10 @@ export class ConcurrencyManager {
       const agentConfig = this.config.agents[agentId];
       const maxAgentParallel = agentConfig?.maxParallel ?? 1;
       const currentAgentActive = this.agentActiveCounts.get(agentId) ?? 0;
-      if (currentAgentActive + needed > maxAgentParallel) {
+      const heldByThisTask = members.some((m) => this.activeTasks.get(m.taskId) === agentId) ? 1 : 0;
+      const activeByOthers = Math.max(0, currentAgentActive - heldByThisTask);
+      const effectiveNeeded = Math.min(needed, Math.max(0, maxAgentParallel - heldByThisTask));
+      if (activeByOthers + heldByThisTask + effectiveNeeded > maxAgentParallel) {
         return false;
       }
     }

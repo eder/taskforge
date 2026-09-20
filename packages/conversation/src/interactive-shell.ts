@@ -1,11 +1,11 @@
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
-import { TaskForgeConfig, loadConfig, DeliveryError } from '@taskforge/shared';
+import { TaskForgeConfig, loadConfig, DeliveryError, ConversationState, generateRunId } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, AgentActivityTracker } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
-import { HeuristicPlanner } from '@taskforge/planner';
+import { HeuristicPlanner, SemanticPlanner } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
 import {
   StaticRoutingProvider,
@@ -15,7 +15,7 @@ import {
   AgentSelector,
 } from '@taskforge/router';
 import { TaskGraph } from '@taskforge/core';
-import { RunOrchestrator, OrchestrationResult } from '@taskforge/scheduler';
+import { RunOrchestrator, OrchestrationResult, sanitizeTaskOutput } from '@taskforge/scheduler';
 import { TaskForgeDatabase, InteractionRepository, RunRepository, GoalRepository } from '@taskforge/persistence';
 import { TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
@@ -61,7 +61,7 @@ export class InteractiveShell {
   private operator: OperatorAgent;
   private agentRegistry: AgentRegistry;
   private gitService: GitService;
-  private planner: HeuristicPlanner;
+  private planner: SemanticPlanner | HeuristicPlanner;
   private negotiator: NegotiationManager;
   private router: RoutingProvider;
   private agentSelector: AgentSelector;
@@ -73,6 +73,7 @@ export class InteractiveShell {
   private lastGoalDescription?: string;
   private isPaused = false;
   private activeRunId?: string;
+  private conversationState: ConversationState = 'IDLE';
   private outStream: Writable;
   public viewport: TerminalViewport;
   public slashMenu: SlashMenu;
@@ -95,7 +96,10 @@ export class InteractiveShell {
     this.operator = new OperatorAgent();
     this.agentRegistry = new AgentRegistry();
     this.gitService = new GitService(this.repoRoot);
-    this.planner = new HeuristicPlanner();
+    this.planner = new SemanticPlanner({
+      apiKey: process.env.OPENAI_API_KEY,
+      model: process.env.PLANNER_MODEL || 'gpt-5.6-luna',
+    });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);
     if (this.config.router.adaptive) {
@@ -177,7 +181,8 @@ export class InteractiveShell {
       .filter(([, text]) => text && text.trim().length > 0)
       .map(([taskId, text]) => {
         const header = `Explanation & Analysis [${taskId}]`;
-        const highlighted = theme.renderMarkdown(text.trim());
+        const sanitized = sanitizeTaskOutput(text.trim());
+        const highlighted = theme.renderMarkdown(sanitized);
         const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
         return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
       })
@@ -305,7 +310,12 @@ export class InteractiveShell {
       return `Cleaned up orphaned worktrees and ${deletedBranches} temporary branch(es).`;
     }
 
-    const intent = this.operator.parseIntent(text);
+    const intent = this.operator.parseIntent(text, {
+      conversationState: this.conversationState,
+      hasActivePlan: Boolean(this.currentGraph),
+      hasPendingInteractions: this.interactionGateway.getPendingRequests().length > 0,
+      hasDeliverable: Boolean(this.activeRunId && this.deliveryService.getDelivery(this.activeRunId)),
+    });
 
     switch (intent.type) {
       case 'inspect_agents': {
@@ -529,7 +539,8 @@ export class InteractiveShell {
       }
 
       case 'submit_goal': {
-        this.activeRunId = `run-${Date.now()}`;
+        this.activeRunId = generateRunId();
+        this.conversationState = 'PLANNING';
         this.lastGoalDescription = intent.goal;
         const goal = {
           id: `goal-${Date.now()}`,
@@ -577,8 +588,31 @@ export class InteractiveShell {
           return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
         });
 
+        const plannerMeta = this.currentGraph.metadata?.planner as
+          | { source?: string; model?: string; reason?: string }
+          | undefined;
+        const plannerSource =
+          plannerMeta?.source === 'semantic'
+            ? `Semantic / ${plannerMeta.model || 'gpt-5.6-luna'}`
+            : `Fallback / heuristic${plannerMeta?.reason ? ` (${plannerMeta.reason})` : ''}`;
+
+        const routerSource =
+          (routing as any).source === 'openai'
+            ? `OpenAI / ${this.config.router.model || 'gpt-5.6-luna'}`
+            : (routing as any).source === 'adaptive'
+              ? 'Adaptive (historical performance)'
+              : `Static fallback${(routing as any).fallbackReason ? ` (Reason: ${(routing as any).fallbackReason})` : ''}`;
+
+        const policyBadge = (routing as any).policyAdjustment
+          ? `\n  ${colors.yellow}▲ Policy adjustment: ${(routing as any).policyAdjustment}${colors.reset}`
+          : '';
+
+        this.conversationState = 'AWAITING_PLAN_APPROVAL';
+
         return [
           `${colors.brand}✦ Plan Proposal${colors.reset}`,
+          `  ${colors.dim}Planner:${colors.reset}  ${plannerSource}`,
+          `  ${colors.dim}Router:${colors.reset}   ${routerSource}${policyBadge}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
           `Estimated tokens: ~${tokensFormatted} tokens.`,
@@ -586,6 +620,76 @@ export class InteractiveShell {
           ...taskFormattedList,
           '',
           `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
+        ].join('\n');
+      }
+
+      case 'revise_plan': {
+        if (!this.currentGraph) {
+          return 'No active plan to revise. Describe a goal first.';
+        }
+        this.conversationState = 'PLANNING';
+        const goal = {
+          id: `goal-${Date.now()}`,
+          description: this.lastGoalDescription ?? 'Revised goal',
+          repository: this.repoRoot,
+          constraints: [],
+          acceptanceCriteria: [],
+          createdAt: new Date(),
+        };
+
+        let revisedGraph: TaskGraph;
+        if ('revise' in this.planner && typeof (this.planner as any).revise === 'function') {
+          revisedGraph = await (this.planner as any).revise(this.currentGraph, intent.revision);
+        } else {
+          revisedGraph = await this.planner.plan(goal);
+        }
+
+        this.currentGraph = await this.negotiator.negotiateGraph(revisedGraph, this.activeRunId!);
+        this.conversationState = 'AWAITING_PLAN_APPROVAL';
+
+        const tasks = this.currentGraph.getAllTasks();
+        const primaryTask = tasks[0];
+
+        const routing = await this.router.route({
+          task: primaryTask,
+          availableAgents: this.agentRegistry.list().map((a) => a.id),
+        });
+
+        const selected = await this.agentSelector.selectAgents(routing.roles);
+
+        const strategyUpper = routing.strategy.toUpperCase();
+        const strategyColor = strategyUpper === 'PARALLEL' ? colors.cyan : colors.green;
+        const teamFormatted = selected
+          .map(
+            (s) =>
+              `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`,
+          )
+          .join(', ');
+
+        const totalEstimatedTokens = tasks.reduce(
+          (sum, t) => sum + TaskTokenEstimator.estimateTask(t).totalEstimatedTokens,
+          0,
+        );
+        const tokensFormatted = totalEstimatedTokens.toLocaleString();
+
+        const taskFormattedList = tasks.map((t, idx) => {
+          const icon = theme.taskTypeIcon(t.type);
+          const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
+          const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
+          const est = TaskTokenEstimator.estimateTask(t);
+          const tokenTag = `${colors.dim}(~${est.totalEstimatedTokens.toLocaleString()} tokens)${colors.reset}`;
+          return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
+        });
+
+        return [
+          `${colors.brand}✦ Revised Plan${colors.reset} ${colors.dim}(Revision: ${intent.revision.details})${colors.reset}`,
+          `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
+          `Suggested team: ${teamFormatted}.`,
+          `Estimated tokens: ~${tokensFormatted} tokens.`,
+          `Total of ${tasks.length} structured tasks:`,
+          ...taskFormattedList,
+          '',
+          `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute the revised plan?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
         ].join('\n');
       }
 
@@ -675,16 +779,19 @@ export class InteractiveShell {
           this.options.asyncExecution ??
           (this.viewport.isInteractive || text.includes('--bg') || text.includes('--async'));
 
+        const runId = this.activeRunId ?? generateRunId();
+        this.activeRunId = runId;
+        this.conversationState = 'EXECUTING';
+
         if (isBackground) {
-          const runId = `run-${Date.now()}`;
           const graphToRun = this.currentGraph;
           const goalDesc = this.lastGoalDescription ?? 'Approved execution';
-          this.activeRunId = runId;
           this.currentGraph = undefined;
           this.activeExecutionController = new AbortController();
 
           orchestrator
             .run(goalDesc, {
+              runId,
               preplannedGraph: graphToRun,
               fakeFallback: isFakeRequested,
               abortSignal: this.activeExecutionController.signal,
@@ -695,6 +802,12 @@ export class InteractiveShell {
             })
             .then((result) => {
               this.activeExecutionController = undefined;
+              this.conversationState =
+                result.status === 'completed' &&
+                this.deliveryService.getDelivery(result.runId)?.status === 'ready_to_apply'
+                  ? 'DELIVERY_READY'
+                  : 'IDLE';
+
               this.telemetry.recordRunMetrics({
                 runId: result.runId,
                 durationMs: result.durationMs,
@@ -711,6 +824,7 @@ export class InteractiveShell {
             })
             .catch((err) => {
               this.activeExecutionController = undefined;
+              this.conversationState = 'IDLE';
               if (abortSignal?.aborted || err.message?.includes('database is not open')) {
                 return;
               }
@@ -731,6 +845,7 @@ export class InteractiveShell {
           const result = await orchestrator.run(
             this.lastGoalDescription ?? 'Approved execution',
             {
+              runId,
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
               abortSignal,
@@ -742,6 +857,11 @@ export class InteractiveShell {
           );
           this.activeRunId = result.runId;
           this.currentGraph = undefined;
+          this.conversationState =
+            result.status === 'completed' &&
+            this.deliveryService.getDelivery(result.runId)?.status === 'ready_to_apply'
+              ? 'DELIVERY_READY'
+              : 'IDLE';
 
           this.telemetry.recordRunMetrics({
             runId: result.runId,
@@ -755,6 +875,7 @@ export class InteractiveShell {
 
           return this.formatRunSummary(result);
         } catch (err) {
+          this.conversationState = 'IDLE';
           return `${colors.red}✕ Error during plan execution: ${(err as Error).message}${colors.reset}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
         }
       }
@@ -869,6 +990,7 @@ export class InteractiveShell {
     let activeAbortController: AbortController | undefined;
     let closed = false;
     let pendingResolve: ((line: string | null) => void) | null = null;
+    let isPasting = false;
 
     const readNextLine = (): Promise<string | null> => {
       return new Promise((resolve) => {
@@ -914,6 +1036,40 @@ export class InteractiveShell {
 
     const onKeypress = (str: string | undefined, key: readline.Key | undefined) => {
       if (closed) return;
+
+      // Bracketed paste detection
+      if (key?.name === 'paste-start' || str === '\x1b[200~') {
+        isPasting = true;
+        return;
+      }
+      if (key?.name === 'paste-end' || str === '\x1b[201~') {
+        isPasting = false;
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        return;
+      }
+      if (isPasting) {
+        if (key?.name === 'return' || key?.name === 'enter' || str === '\n' || str === '\r') {
+          buffer = buffer.slice(0, cursorIndex) + '\n' + buffer.slice(cursorIndex);
+          cursorIndex++;
+          return;
+        }
+        if (str) {
+          // eslint-disable-next-line no-control-regex
+          const clean = str.replace(/\x1b\[20[01]~/g, '');
+          buffer = buffer.slice(0, cursorIndex) + clean + buffer.slice(cursorIndex);
+          cursorIndex += clean.length;
+        }
+        return;
+      }
+
+      // If a multiline chunk is typed or pasted without bracketed paste flags
+      if (str && (str.includes('\n') || str.includes('\r')) && !key?.ctrl && !key?.meta) {
+        const clean = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        buffer = buffer.slice(0, cursorIndex) + clean + buffer.slice(cursorIndex);
+        cursorIndex += clean.length;
+        this.viewport.renderInputLine(buffer, cursorIndex, '');
+        return;
+      }
 
       // Tab shortcut: auto-fill /stream if prompt is empty and agents are actively working
       if (!this.slashMenu.isOpen && key?.name === 'tab' && buffer.trim().length === 0) {
@@ -1022,7 +1178,15 @@ export class InteractiveShell {
         }
 
         // Echo user prompt into the upper scrolling history
-        this.viewport.writeUpper(`${colors.bold}${colors.green}>${colors.reset} ${submitted}`);
+        if (submitted.includes('\n')) {
+          const lines = submitted.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const prefix = i === 0 ? `${colors.bold}${colors.green}>${colors.reset} ` : '  ';
+            this.viewport.writeUpper(`${prefix}${lines[i]}`);
+          }
+        } else {
+          this.viewport.writeUpper(`${colors.bold}${colors.green}>${colors.reset} ${submitted}`);
+        }
 
         const res = pendingResolve;
         pendingResolve = null;

@@ -19,6 +19,20 @@ export class AdaptiveRoutingProvider implements RoutingProvider {
     // 1. Obtain structural team baseline from fallback provider
     const baseDecision = await this.fallbackProvider.route(input);
 
+    if (!this.performanceEngine) {
+      return {
+        ...baseDecision,
+        source: 'adaptive',
+        fallbackReason: 'unknown',
+        provenance: {
+          source: 'adaptive',
+          fallbackReason: 'unknown',
+          policyAdjustment: baseDecision.policyAdjustment ?? baseDecision.provenance?.policyAdjustment,
+          routerProposal: baseDecision.routerProposal ?? baseDecision.provenance?.routerProposal,
+        },
+      };
+    }
+
     const minConfidence = this.options.minConfidence ?? 'medium';
     const candidateAgentIds = input.availableAgents;
 
@@ -72,8 +86,15 @@ export class AdaptiveRoutingProvider implements RoutingProvider {
 
     return {
       ...baseDecision,
+      source: 'adaptive',
       roles: adaptiveRoles,
       reason: `${baseDecision.reason}\nAdaptive Signals:\n${explanations.join('\n')}`,
+      provenance: {
+        source: 'adaptive',
+        fallbackReason: baseDecision.fallbackReason,
+        routerProposal: baseDecision.routerProposal,
+        policyAdjustment: baseDecision.policyAdjustment,
+      },
     };
   }
 }

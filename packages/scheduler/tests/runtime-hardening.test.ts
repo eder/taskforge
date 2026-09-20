@@ -843,7 +843,8 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
       name: 'Primary Worker',
       detect: async () => true,
       capabilities: async () => ({ canRead: true, canWrite: true, canExecute: true, languages: [], tools: [] }),
-      execute: async () => {
+      execute: async (_asgn, execCtx) => {
+        fs.writeFileSync(path.join(execCtx.worktreePath, 'feature.txt'), 'done\n', 'utf8');
         return {
           success: true,
           message: 'Initial work done, need helper',

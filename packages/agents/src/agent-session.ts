@@ -14,6 +14,7 @@ export class FakeAgentSession implements AgentSession {
   private eventQueue: AgentRuntimeEvent[] = [];
   private eventWaiters: Array<() => void> = [];
   private responseResolvers: Map<string, (resp: InteractionResponse) => void> = new Map();
+  private bufferedResponses: Map<string, InteractionResponse> = new Map();
   public messages: (AgentMessage | string)[] = [];
   public isCancelled = false;
 
@@ -49,10 +50,17 @@ export class FakeAgentSession implements AgentSession {
     if (resolver) {
       this.responseResolvers.delete(response.requestId);
       resolver(response);
+    } else {
+      this.bufferedResponses.set(response.requestId, response);
     }
   }
 
   public waitForResponse(requestId: string): Promise<InteractionResponse> {
+    if (this.bufferedResponses.has(requestId)) {
+      const resp = this.bufferedResponses.get(requestId)!;
+      this.bufferedResponses.delete(requestId);
+      return Promise.resolve(resp);
+    }
     return new Promise((resolve) => {
       this.responseResolvers.set(requestId, resolve);
     });
@@ -64,6 +72,17 @@ export class FakeAgentSession implements AgentSession {
       waiter();
     }
     this.eventWaiters = [];
+    for (const [reqId, resolver] of this.responseResolvers.entries()) {
+      resolver({
+        id: `resp-cancel-${Date.now()}`,
+        requestId: reqId,
+        decision: 'cancel',
+        source: 'policy',
+        scope: 'once',
+        createdAt: new Date().toISOString(),
+      });
+    }
+    this.responseResolvers.clear();
   }
 
   public async close(): Promise<void> {
@@ -72,6 +91,17 @@ export class FakeAgentSession implements AgentSession {
       waiter();
     }
     this.eventWaiters = [];
+    for (const [reqId, resolver] of this.responseResolvers.entries()) {
+      resolver({
+        id: `resp-cancel-${Date.now()}`,
+        requestId: reqId,
+        decision: 'cancel',
+        source: 'policy',
+        scope: 'once',
+        createdAt: new Date().toISOString(),
+      });
+    }
+    this.responseResolvers.clear();
   }
 }
 
@@ -89,6 +119,7 @@ export class RealCliAgentSession implements AgentSession {
   private eventQueue: AgentRuntimeEvent[] = [];
   private eventWaiters: Array<() => void> = [];
   private responseResolvers: Map<string, (resp: InteractionResponse) => void> = new Map();
+  private bufferedResponses: Map<string, InteractionResponse> = new Map();
   public messages: (AgentMessage | string)[] = [];
   public isCancelled = false;
   private options?: RealCliSessionOptions;
@@ -136,6 +167,8 @@ export class RealCliAgentSession implements AgentSession {
     if (resolver) {
       this.responseResolvers.delete(response.requestId);
       resolver(response);
+    } else {
+      this.bufferedResponses.set(response.requestId, response);
     }
     if (this.pendingRequestId === response.requestId) {
       this.pendingRequestId = undefined;
@@ -154,6 +187,11 @@ export class RealCliAgentSession implements AgentSession {
   }
 
   public waitForResponse(requestId: string): Promise<InteractionResponse> {
+    if (this.bufferedResponses.has(requestId)) {
+      const resp = this.bufferedResponses.get(requestId)!;
+      this.bufferedResponses.delete(requestId);
+      return Promise.resolve(resp);
+    }
     return new Promise((resolve) => {
       this.responseResolvers.set(requestId, resolve);
     });

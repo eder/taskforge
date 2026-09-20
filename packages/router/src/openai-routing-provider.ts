@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { PerformanceEngine } from '@taskforge/telemetry';
-import { RoutingProvider, RoutingInput, RoutingDecision } from './router-types.js';
+import {
+  RoutingProvider,
+  RoutingInput,
+  RoutingDecision,
+  RouterFallbackReason,
+} from './router-types.js';
 import { StaticRoutingProvider } from './static-routing-provider.js';
+import { RouterQualityGuard } from './quality-guard.js';
 import { AgentQuotaTracker } from '@taskforge/agents';
 
 export const RoleRequestSchema = z.object({
@@ -131,15 +137,30 @@ export class OpenAIRoutingProvider implements RoutingProvider {
     options: { performanceEngine?: PerformanceEngine } = {},
   ) {
     this.performanceEngine = options.performanceEngine;
-    if (!this.apiKey) {
+    if (this.apiKey === undefined) {
       this.apiKey = process.env.OPENAI_API_KEY;
     }
   }
 
+  private async makeFallback(
+    input: RoutingInput,
+    reason: RouterFallbackReason,
+  ): Promise<RoutingDecision> {
+    const base = await this.fallbackProvider.route(input);
+    const decision: RoutingDecision = {
+      ...base,
+      source: 'fallback',
+      provider: 'openai',
+      model: this.model,
+      fallbackReason: reason,
+      reason: `[Fallback from OpenAI/${this.model} (${reason})]: ${base.reason}`,
+    };
+    return RouterQualityGuard.evaluate(decision, input);
+  }
+
   async route(input: RoutingInput): Promise<RoutingDecision> {
-    if (!this.apiKey) {
-      // Fallback immediately if no key configured
-      return this.fallbackProvider.route(input);
+    if (!this.apiKey || !this.apiKey.trim()) {
+      return this.makeFallback(input, 'provider_unavailable');
     }
 
     const controller = new AbortController();
@@ -221,7 +242,8 @@ export class OpenAIRoutingProvider implements RoutingProvider {
       });
 
       if (!response.ok) {
-        return this.fallbackProvider.route(input);
+        const reason: RouterFallbackReason = response.status === 429 ? 'quota' : 'http_error';
+        return this.makeFallback(input, reason);
       }
 
       const json = (await response.json()) as {
@@ -229,17 +251,38 @@ export class OpenAIRoutingProvider implements RoutingProvider {
       };
       const content = json.choices?.[0]?.message?.content;
       if (!content) {
-        return this.fallbackProvider.route(input);
+        return this.makeFallback(input, 'empty_response');
       }
 
-      const parsed = JSON.parse(content);
-      return RoutingDecisionSchema.parse(parsed) as RoutingDecision;
-    } catch {
-      // Fallback cleanly on error, Zod validation failure, or timeout
-      return this.fallbackProvider.route(input);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        return this.makeFallback(input, 'invalid_schema');
+      }
+
+      const parseResult = RoutingDecisionSchema.safeParse(parsed);
+      if (!parseResult.success) {
+        return this.makeFallback(input, 'invalid_schema');
+      }
+
+      const decision: RoutingDecision = {
+        ...parseResult.data,
+        source: 'openai',
+        provider: 'openai',
+        model: this.model,
+        promptVersion: 'v1.0',
+      };
+
+      return RouterQualityGuard.evaluate(decision, input);
+    } catch (err) {
+      const isTimeout =
+        controller.signal.aborted ||
+        (err instanceof Error && err.name === 'AbortError') ||
+        (err instanceof Error && err.message.toLowerCase().includes('timeout'));
+      return this.makeFallback(input, isTimeout ? 'timeout' : 'unknown');
     } finally {
       clearTimeout(timeout);
     }
   }
 }
-

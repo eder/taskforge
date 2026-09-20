@@ -8,7 +8,7 @@ import { Goal, Task } from './models.js';
 import { TaskGraph } from './task-graph.js';
 
 export interface Planner {
-  plan(goal: Goal, profile: RepositoryProfile): Promise<TaskGraph>;
+  plan(goal: Goal, profile?: RepositoryProfile): Promise<TaskGraph>;
 }
 
 export interface RoutingRoleRequest {

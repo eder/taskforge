@@ -5,6 +5,7 @@ import {
   AgentRole,
   CollaborationMode,
   CollaborationProposal,
+  generateRunId,
 } from '@taskforge/shared';
 import {
   TaskForgeDatabase,
@@ -50,7 +51,7 @@ export interface OrchestratorOptions {
   config?: TaskForgeConfig;
   agentRegistry?: AgentRegistry;
   database?: TaskForgeDatabase;
-  planner?: HeuristicPlanner;
+  planner?: import('@taskforge/core').Planner;
   negotiator?: NegotiationManager;
   router?: RoutingProvider;
   agentSelector?: AgentSelector;
@@ -68,6 +69,7 @@ export interface OrchestratorOptions {
 }
 
 export interface RunOptions {
+  runId?: string;
   baseCommit?: string;
   preplannedGraph?: TaskGraph;
   fakeFallback?: boolean;
@@ -119,7 +121,7 @@ export class RunOrchestrator {
   private config: TaskForgeConfig;
   private db: TaskForgeDatabase;
   private agentRegistry: AgentRegistry;
-  private planner: HeuristicPlanner;
+  private planner: import('@taskforge/core').Planner;
   private negotiator: NegotiationManager;
   private router: RoutingProvider;
   private agentSelector: AgentSelector;
@@ -222,7 +224,7 @@ export class RunOrchestrator {
 
   async run(goalDescription: string, options: RunOptions = {}): Promise<OrchestrationResult> {
     const startTime = Date.now();
-    const runId = `run-${Date.now()}`;
+    const runId = options.runId ?? generateRunId();
     options.onProgress?.(`Starting TaskForge orchestrator run: ${runId}`);
 
     const baseCommit = options.baseCommit ?? (await this.gitService.getHeadCommit());
@@ -318,6 +320,11 @@ export class RunOrchestrator {
         .find((a) => a instanceof FakeAgent || a.id.includes('fake') || a.id.includes('test'));
 
     for (const task of graph.getAllTasks()) {
+      if (options.fakeFallback && fallbackAgent) {
+        preferredAgentMapping[task.id] = fallbackAgent.id;
+        continue;
+      }
+
       try {
         const collabReq = task.contract.metadata?.collaboration as CollaborationProposal | undefined;
         let routing: RoutingDecision;
@@ -325,6 +332,7 @@ export class RunOrchestrator {
         if (task.contract.metadata?.recommendCollaboration && collabReq?.requestedRoles?.length) {
           routing = {
             strategy: collaborationModeFor(collabReq.requestedRoles),
+            source: 'static',
             complexity: 'high',
             risk: 'high',
             uncertainty: 'medium',
@@ -341,9 +349,6 @@ export class RunOrchestrator {
             },
             reason: `Preflight recommended collaboration: ${collabReq.reason}`,
           };
-        } else if (options.fakeFallback && fallbackAgent) {
-          preferredAgentMapping[task.id] = fallbackAgent.id;
-          continue;
         } else {
           routing = await this.router.route({
             task,
@@ -398,8 +403,10 @@ export class RunOrchestrator {
         if (selected.length > 0) {
           preferredAgentMapping[task.id] = selected[0].agent.id;
 
+          const distinctSelectedAgents = new Set(selected.map((s) => s.agent.id));
           if (
             selected.length > 1 &&
+            distinctSelectedAgents.size > 1 &&
             (routing.strategy === 'pair' ||
               routing.strategy === 'review' ||
               routing.strategy === 'collaborative' ||
