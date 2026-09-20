@@ -35,6 +35,7 @@ export interface ShellOptions {
   database?: TaskForgeDatabase;
   activityTracker?: AgentActivityTracker;
   asyncExecution?: boolean;
+  interactive?: boolean;
 }
 
 export function findWordLeft(text: string, pos: number): number {
@@ -87,6 +88,7 @@ export class InteractiveShell {
     this.outStream = options.output ?? process.stdout;
     this.viewport = new TerminalViewport(this.outStream, {
       repoName: path.basename(this.repoRoot),
+      interactive: options.interactive,
     });
     this.slashMenu = new SlashMenu(this.outStream);
     this.activityTracker = options.activityTracker ?? new AgentActivityTracker();
@@ -297,7 +299,7 @@ export class InteractiveShell {
     const text = input.trim();
     if (!text) return '';
 
-    if (text === '/exit' || text === '/quit') {
+    if (text === '/exit' || text === '/quit' || text === 'exit' || text === 'quit') {
       return 'Session closed.';
     }
 
@@ -946,7 +948,7 @@ export class InteractiveShell {
 
       for await (const line of rl) {
         const trimmed = line.trim();
-        if (trimmed === '/exit' || trimmed === '/quit') break;
+        if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'exit' || trimmed === 'quit') break;
         if (!trimmed) continue;
         const reply = await this.handleInput(trimmed);
         if (reply) {
@@ -991,6 +993,40 @@ export class InteractiveShell {
     let closed = false;
     let pendingResolve: ((line: string | null) => void) | null = null;
     let isPasting = false;
+    let pastingBuffer = '';
+    const pasteStore = new Map<string, string>();
+    let pasteIdCounter = 0;
+
+    const insertPastedText = (rawText: string) => {
+      const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const lines = normalized.split('\n');
+      const lineCount = lines.length;
+      const charCount = normalized.length;
+
+      // Collapse large paste (>= 3 lines or >= 120 chars) into token
+      if (lineCount >= 3 || (lineCount >= 2 && charCount >= 60) || charCount >= 150) {
+        pasteIdCounter++;
+        const placeholder =
+          lineCount > 1
+            ? `[Pasted text #${pasteIdCounter} +${lineCount} lines]`
+            : `[Pasted text #${pasteIdCounter} +${charCount} chars]`;
+
+        pasteStore.set(placeholder, normalized);
+        buffer = buffer.slice(0, cursorIndex) + placeholder + buffer.slice(cursorIndex);
+        cursorIndex += placeholder.length;
+      } else {
+        buffer = buffer.slice(0, cursorIndex) + normalized + buffer.slice(cursorIndex);
+        cursorIndex += normalized.length;
+      }
+    };
+
+    const expandPasteTokens = (text: string): string => {
+      let result = text;
+      for (const [placeholder, content] of pasteStore.entries()) {
+        result = result.split(placeholder).join(content);
+      }
+      return result;
+    };
 
     const readNextLine = (): Promise<string | null> => {
       return new Promise((resolve) => {
@@ -1040,33 +1076,92 @@ export class InteractiveShell {
       // Bracketed paste detection
       if (key?.name === 'paste-start' || str === '\x1b[200~') {
         isPasting = true;
+        pastingBuffer = '';
         return;
       }
       if (key?.name === 'paste-end' || str === '\x1b[201~') {
         isPasting = false;
+        if (pastingBuffer.length > 0) {
+          insertPastedText(pastingBuffer);
+          pastingBuffer = '';
+        }
         this.viewport.renderInputLine(buffer, cursorIndex, '');
         return;
       }
       if (isPasting) {
         if (key?.name === 'return' || key?.name === 'enter' || str === '\n' || str === '\r') {
-          buffer = buffer.slice(0, cursorIndex) + '\n' + buffer.slice(cursorIndex);
-          cursorIndex++;
+          pastingBuffer += '\n';
           return;
         }
         if (str) {
           // eslint-disable-next-line no-control-regex
           const clean = str.replace(/\x1b\[20[01]~/g, '');
-          buffer = buffer.slice(0, cursorIndex) + clean + buffer.slice(cursorIndex);
-          cursorIndex += clean.length;
+          pastingBuffer += clean;
         }
         return;
       }
 
-      // If a multiline chunk is typed or pasted without bracketed paste flags
-      if (str && (str.includes('\n') || str.includes('\r')) && !key?.ctrl && !key?.meta) {
-        const clean = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-        buffer = buffer.slice(0, cursorIndex) + clean + buffer.slice(cursorIndex);
-        cursorIndex += clean.length;
+      // Return / Enter: submit line OR insert newline on Shift/Meta/Ctrl+J
+      if (
+        key?.name === 'return' ||
+        key?.name === 'enter' ||
+        str === '\r' ||
+        str === '\n' ||
+        (key?.ctrl && key?.name === 'j')
+      ) {
+        // Shift+Enter / Alt+Enter / Meta+Enter: insert newline in prompt
+        if (key?.shift || key?.meta) {
+          buffer = buffer.slice(0, cursorIndex) + '\n' + buffer.slice(cursorIndex);
+          cursorIndex++;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          return;
+        }
+
+        if (this.slashMenu.isOpen) {
+          const selected = this.slashMenu.getSelected();
+          if (selected && (buffer === '/' || !buffer.includes(' '))) {
+            buffer = selected.cmd;
+          }
+          this.slashMenu.close();
+        }
+
+        const rawSubmitted = buffer;
+        const submitted = expandPasteTokens(rawSubmitted);
+        buffer = '';
+        cursorIndex = 0;
+        historyIndex = -1;
+        savedInput = '';
+
+        if (rawSubmitted.trim()) {
+          history.push(rawSubmitted);
+        }
+
+        // Echo user prompt into the upper scrolling history
+        if (rawSubmitted.includes('\n')) {
+          const lines = rawSubmitted.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const prefix = i === 0 ? `${colors.bold}${colors.green}>${colors.reset} ` : '  ';
+            this.viewport.writeUpper(`${prefix}${lines[i]}`);
+          }
+        } else {
+          this.viewport.writeUpper(`${colors.bold}${colors.green}>${colors.reset} ${rawSubmitted}`);
+        }
+
+        const res = pendingResolve;
+        pendingResolve = null;
+        res?.(submitted);
+        return;
+      }
+
+      // Fallback: If a multiline chunk is pasted without bracketed paste flags
+      if (
+        str &&
+        str.length > 1 &&
+        (str.includes('\n') || str.includes('\r')) &&
+        !key?.ctrl &&
+        !key?.meta
+      ) {
+        insertPastedText(str);
         this.viewport.renderInputLine(buffer, cursorIndex, '');
         return;
       }
@@ -1157,43 +1252,6 @@ export class InteractiveShell {
         return;
       }
 
-      // Return / Enter: submit line
-      if (key?.name === 'return' || key?.name === 'enter') {
-        if (this.slashMenu.isOpen) {
-          const selected = this.slashMenu.getSelected();
-          if (selected && (buffer === '/' || !buffer.includes(' '))) {
-            buffer = selected.cmd;
-          }
-          this.slashMenu.close();
-        }
-
-        const submitted = buffer;
-        buffer = '';
-        cursorIndex = 0;
-        historyIndex = -1;
-        savedInput = '';
-
-        if (submitted.trim()) {
-          history.push(submitted);
-        }
-
-        // Echo user prompt into the upper scrolling history
-        if (submitted.includes('\n')) {
-          const lines = submitted.split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            const prefix = i === 0 ? `${colors.bold}${colors.green}>${colors.reset} ` : '  ';
-            this.viewport.writeUpper(`${prefix}${lines[i]}`);
-          }
-        } else {
-          this.viewport.writeUpper(`${colors.bold}${colors.green}>${colors.reset} ${submitted}`);
-        }
-
-        const res = pendingResolve;
-        pendingResolve = null;
-        res?.(submitted);
-        return;
-      }
-
       // Slash menu navigation with Up / Down / Tab / Esc
       if (this.slashMenu.isOpen && key) {
         if (key.name === 'up') {
@@ -1223,8 +1281,17 @@ export class InteractiveShell {
       // Backspace
       if (key?.name === 'backspace') {
         if (cursorIndex > 0) {
-          buffer = buffer.slice(0, cursorIndex - 1) + buffer.slice(cursorIndex);
-          cursorIndex--;
+          const beforeCursor = buffer.slice(0, cursorIndex);
+          const pasteMatch = beforeCursor.match(/\[Pasted text #\d+ \+\d+ (?:lines|chars)\]$/);
+          if (pasteMatch) {
+            const token = pasteMatch[0];
+            buffer = buffer.slice(0, cursorIndex - token.length) + buffer.slice(cursorIndex);
+            cursorIndex -= token.length;
+            pasteStore.delete(token);
+          } else {
+            buffer = buffer.slice(0, cursorIndex - 1) + buffer.slice(cursorIndex);
+            cursorIndex--;
+          }
           this.viewport.renderInputLine(buffer, cursorIndex, '');
           if (buffer.startsWith('/')) {
             this.slashMenu.update(buffer, true);
@@ -1238,7 +1305,15 @@ export class InteractiveShell {
       // Delete key
       if (key?.name === 'delete') {
         if (cursorIndex < buffer.length) {
-          buffer = buffer.slice(0, cursorIndex) + buffer.slice(cursorIndex + 1);
+          const afterCursor = buffer.slice(cursorIndex);
+          const pasteMatch = afterCursor.match(/^\[Pasted text #\d+ \+\d+ (?:lines|chars)\]/);
+          if (pasteMatch) {
+            const token = pasteMatch[0];
+            buffer = buffer.slice(0, cursorIndex) + buffer.slice(cursorIndex + token.length);
+            pasteStore.delete(token);
+          } else {
+            buffer = buffer.slice(0, cursorIndex) + buffer.slice(cursorIndex + 1);
+          }
           this.viewport.renderInputLine(buffer, cursorIndex, '');
           if (buffer.startsWith('/')) {
             this.slashMenu.update(buffer, false);
@@ -1350,12 +1425,7 @@ export class InteractiveShell {
         cursorIndex += str.length;
 
         if (buffer.startsWith('/')) {
-          const updateRes = this.slashMenu.update(buffer, false);
-          if (updateRes.autoCompleted) {
-            buffer = updateRes.autoCompleted;
-            cursorIndex = buffer.length;
-            this.slashMenu.update(buffer, false);
-          }
+          this.slashMenu.update(buffer, false);
         } else {
           this.slashMenu.close();
         }
@@ -1375,7 +1445,7 @@ export class InteractiveShell {
       if (line === null) break;
 
       const trimmed = line.trim();
-      if (trimmed === '/exit' || trimmed === '/quit') {
+      if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'exit' || trimmed === 'quit') {
         const exitMsg = `\n${colors.brand}✦${colors.reset} Goodbye!\n`;
         this.viewport.writeUpper(exitMsg);
         cleanup();
