@@ -26,6 +26,7 @@ export interface Task {
   contract: TaskContract;
   acceptanceCriteria: string[];
   reworkCount: number;
+  priority?: number;
   createdAt: Date;
   updatedAt: Date;
 }

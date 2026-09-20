@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AgentAssignment, AgentResult, CollaborationProposal, TaskForgeConfig } from '@taskforge/shared';
-import { Task } from '@taskforge/core';
+import { Task, TaskGraph, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter, AgentActivityTracker } from '@taskforge/agents';
 import { WorktreeManager } from '@taskforge/workspace';
 import {
@@ -36,6 +36,8 @@ export interface GovernedAssignmentContext {
   interactionGateway?: InteractionGateway;
   activityTracker?: AgentActivityTracker;
   concurrency?: ConcurrencyManager;
+  graph?: TaskGraph;
+  priority?: number;
   communicationBus?: CommunicationBus;
   sessionRegistry?: SessionRegistry;
   abortSignal?: AbortSignal;
@@ -133,7 +135,9 @@ export async function executeGovernedAssignment(
     : task.contract;
 
   if (ctx.concurrency) {
-    await ctx.concurrency.waitForSlot(agent.id, task.id, abortSignal, assignment.id);
+    const priority =
+      ctx.priority ?? (ctx.graph ? computeTaskPriority(task, ctx.graph) : (task.priority ?? 0));
+    await ctx.concurrency.waitForSlot(agent.id, task.id, abortSignal, assignment.id, priority);
     ctx.concurrency.acquire(assignment.id, agent.id, task.id);
   }
 

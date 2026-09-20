@@ -174,4 +174,35 @@ export class TaskGraph {
     }
     return false;
   }
+
+  /**
+   * Returns all tasks in the graph that directly list taskId in their dependencies.
+   */
+  getDirectDependents(taskId: string): Task[] {
+    const dependents: Task[] = [];
+    for (const task of this.tasks.values()) {
+      if (task.dependencies.includes(taskId)) {
+        dependents.push(task);
+      }
+    }
+    return dependents;
+  }
+
+  /**
+   * Returns all tasks in the graph that directly or transitively depend on taskId.
+   */
+  getTransitiveDependents(taskId: string): Task[] {
+    const result = new Set<string>();
+    const queue = [taskId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const task of this.tasks.values()) {
+        if (task.dependencies.includes(current) && !result.has(task.id)) {
+          result.add(task.id);
+          queue.push(task.id);
+        }
+      }
+    }
+    return Array.from(result).map((id) => this.tasks.get(id)!);
+  }
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AgentAssignment, VerificationResult, ReviewFinding } from '@taskforge/shared';
-import { Task } from '@taskforge/core';
+import { Task, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter } from '@taskforge/agents';
 import { AssignmentGraph, SynthesisCoordinator } from '@taskforge/collaboration';
 import { RoutingDecision, SelectedAgentAssignment } from '@taskforge/router';
@@ -274,7 +274,8 @@ async function runReviewTeam(
       assignmentId: r.assignment.id,
       agentId: r.selection.agent.id,
     }));
-    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal);
+    const priority = computeTaskPriority(task, ctx.graph);
+    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal, priority, task.id);
   }
 
   // 3. Run all reviewers independently on the implementer's commit in detached worktrees
@@ -440,7 +441,8 @@ async function runConcurrentTeam(
       assignmentId: a.id,
       agentId: a.agentId,
     }));
-    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal);
+    const priority = computeTaskPriority(task, ctx.graph);
+    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal, priority, task.id);
   }
 
   await Promise.all(
@@ -578,7 +580,8 @@ async function runCompetitiveTeam(
       assignmentId: c.assignment.id,
       agentId: c.selection.agent.id,
     }));
-    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal);
+    const priority = computeTaskPriority(task, ctx.graph);
+    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal, priority, task.id);
   }
 
   const attempts = await Promise.all(
@@ -738,6 +741,8 @@ function buildGovernedCtx(
     interactionGateway: ctx.interactionGateway,
     activityTracker: ctx.activityTracker,
     concurrency: ctx.concurrency,
+    graph: ctx.graph,
+    priority: computeTaskPriority(task, ctx.graph),
     communicationBus: ctx.communicationBus,
     sessionRegistry: ctx.sessionRegistry,
     abortSignal: ctx.abortSignal,

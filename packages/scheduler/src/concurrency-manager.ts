@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { TaskForgeConfig } from '@taskforge/shared';
 
 export interface ActiveAssignmentInfo {
@@ -11,11 +12,20 @@ export interface TeamMemberReservation {
   agentId: string;
 }
 
+export interface ConcurrencyWaiter {
+  id: string;
+  priority: number;
+  sequence: number;
+  taskId?: string;
+  check: () => boolean;
+}
+
 export class ConcurrencyManager {
   private activeTasks: Map<string, string> = new Map(); // taskId -> agentId
   private activeAssignments: Map<string, ActiveAssignmentInfo> = new Map();
   private agentActiveCounts: Map<string, number> = new Map();
-  private waiters: Array<() => boolean> = [];
+  private waiters: ConcurrencyWaiter[] = [];
+  private waiterSequence = 0;
 
   constructor(private config: TaskForgeConfig) {}
 
@@ -36,6 +46,9 @@ export class ConcurrencyManager {
     const allTaskIds = new Set<string>();
     for (const taskId of this.activeTasks.keys()) {
       allTaskIds.add(taskId);
+    }
+    for (const info of this.activeAssignments.values()) {
+      allTaskIds.add(info.taskId);
     }
     for (const m of members) {
       allTaskIds.add(m.taskId);
@@ -116,6 +129,8 @@ export class ConcurrencyManager {
   async waitForTeamSlots(
     members: TeamMemberReservation[],
     abortSignal?: AbortSignal,
+    priority: number = 0,
+    taskId?: string,
   ): Promise<void> {
     if (this.canScheduleTeam(members)) {
       this.reserveTeam(members);
@@ -124,15 +139,16 @@ export class ConcurrencyManager {
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      const waiterId = randomUUID();
 
       const onAbort = () => {
         if (settled) return;
         settled = true;
-        this.removeWaiter(waiter);
+        this.removeWaiter(waiterId);
         reject(new Error('Aborted while waiting for team concurrency slots'));
       };
 
-      const waiter = () => {
+      const check = () => {
         if (settled) return true;
         if (this.canScheduleTeam(members)) {
           settled = true;
@@ -152,7 +168,14 @@ export class ConcurrencyManager {
         abortSignal.addEventListener('abort', onAbort, { once: true });
       }
 
-      this.waiters.push(waiter);
+      this.waiterSequence++;
+      this.waiters.push({
+        id: waiterId,
+        priority,
+        sequence: this.waiterSequence,
+        taskId: taskId ?? members[0]?.taskId,
+        check,
+      });
     });
   }
 
@@ -163,6 +186,9 @@ export class ConcurrencyManager {
 
     // If id is a task (or taskId equals id)
     if (!taskId || id === taskId) {
+      if (this.activeTasks.has(id)) {
+        return;
+      }
       this.activeTasks.set(id, agentId);
       const count = this.agentActiveCounts.get(agentId) ?? 0;
       this.agentActiveCounts.set(agentId, count + 1);
@@ -224,6 +250,7 @@ export class ConcurrencyManager {
     taskId?: string,
     abortSignal?: AbortSignal,
     assignmentId?: string,
+    priority: number = 0,
   ): Promise<void> {
     if (assignmentId && this.activeAssignments.has(assignmentId)) {
       return;
@@ -239,23 +266,32 @@ export class ConcurrencyManager {
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      const waiterId = randomUUID();
 
       const onAbort = () => {
         if (settled) return;
         settled = true;
-        this.removeWaiter(waiter);
+        this.removeWaiter(waiterId);
         reject(new Error('Aborted while waiting for concurrency slot'));
       };
 
-      const waiter = () => {
+      const check = () => {
         if (settled) return true;
         if (
           (assignmentId && this.activeAssignments.has(assignmentId)) ||
-          (taskId && this.activeTasks.get(taskId) === agentId) ||
-          this.canSchedule(agentId)
+          (taskId && this.activeTasks.get(taskId) === agentId)
         ) {
           settled = true;
           abortSignal?.removeEventListener('abort', onAbort);
+          resolve();
+          return true;
+        }
+        if (this.canSchedule(agentId)) {
+          settled = true;
+          abortSignal?.removeEventListener('abort', onAbort);
+          if (assignmentId || taskId) {
+            this.acquire(assignmentId ?? taskId!, agentId, taskId);
+          }
           resolve();
           return true;
         }
@@ -270,25 +306,53 @@ export class ConcurrencyManager {
         abortSignal.addEventListener('abort', onAbort, { once: true });
       }
 
-      this.waiters.push(waiter);
+      this.waiterSequence++;
+      this.waiters.push({
+        id: waiterId,
+        priority,
+        sequence: this.waiterSequence,
+        taskId,
+        check,
+      });
     });
   }
 
-  private removeWaiter(waiter: () => boolean): void {
-    const idx = this.waiters.indexOf(waiter);
+  private removeWaiter(waiterId: string): void {
+    const idx = this.waiters.findIndex((w) => w.id === waiterId);
     if (idx !== -1) {
       this.waiters.splice(idx, 1);
     }
   }
 
   private notifyWaiters(): void {
+    // Sort waiters in descending order of priority; tie-break by sequence (FIFO)
+    this.waiters.sort((a, b) => {
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      return a.sequence - b.sequence;
+    });
+
     for (let i = 0; i < this.waiters.length; i++) {
       const waiter = this.waiters[i];
-      if (waiter()) {
+      if (waiter.check()) {
         this.waiters.splice(i, 1);
         i--;
       }
     }
+  }
+
+  getWaitingCount(): number {
+    return this.waiters.length;
+  }
+
+  getWaiters(): Array<{ id: string; priority: number; sequence: number; taskId?: string }> {
+    return this.waiters.map((w) => ({
+      id: w.id,
+      priority: w.priority,
+      sequence: w.sequence,
+      taskId: w.taskId,
+    }));
   }
 
   getActiveCount(): number {

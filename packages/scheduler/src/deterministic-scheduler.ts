@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AgentAssignment, AgentUnavailableError, TaskForgeConfig } from '@taskforge/shared';
-import { TaskGraph, Task } from '@taskforge/core';
+import { TaskGraph, Task, computeTaskPriority } from '@taskforge/core';
 import { AgentRegistry, AgentActivityTracker } from '@taskforge/agents';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import {
@@ -136,6 +136,13 @@ export class DeterministicScheduler {
         // No candidates and nothing running, but not all completed -> deadlock or blocked
         break;
       }
+
+      // Prioritize candidate tasks: higher-criticality or dependency-blocking tasks acquire slots first
+      candidates.sort((a, b) => {
+        const prioA = computeTaskPriority(a, graph);
+        const prioB = computeTaskPriority(b, graph);
+        return prioB - prioA;
+      });
 
       for (const task of candidates) {
         const agentId = this.resolveAgentId(task);
@@ -431,6 +438,8 @@ export class DeterministicScheduler {
         interactionGateway: this.ctx.interactionGateway,
         activityTracker: this.ctx.activityTracker,
         concurrency: this.concurrency,
+        graph,
+        priority: computeTaskPriority(task, graph),
         communicationBus: this.ctx.communicationBus,
         sessionRegistry: this.ctx.sessionRegistry,
         abortSignal,
