@@ -352,6 +352,135 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
     db.close();
   });
 
+  it('runs all N agents under a "review" strategy instead of dropping everyone past the first two', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const assignmentRepo = new AssignmentRepository(db);
+    const registry = new AgentRegistry(false);
+
+    const implementer = new FakeAgent('impl-agent', 'Implementer Agent', [
+      {
+        writeFile: { path: 'feature.ts', content: 'export const feature = true;\n' },
+        gitCommitMessage: 'feat: implement feature',
+      },
+    ]);
+    const reviewerA = new FakeAgent('reviewer-a', 'Reviewer A', [
+      {
+        writeFile: { path: 'review-a.txt', content: 'Reviewed by A.\n' },
+        gitCommitMessage: 'docs: review A',
+      },
+    ]);
+    const reviewerB = new FakeAgent('reviewer-b', 'Reviewer B', [
+      {
+        writeFile: { path: 'review-b.txt', content: 'Reviewed by B.\n' },
+        gitCommitMessage: 'docs: review B',
+      },
+    ]);
+    const reviewerC = new FakeAgent('reviewer-c', 'Reviewer C', [
+      {
+        writeFile: { path: 'review-c.txt', content: 'Reviewed by C.\n' },
+        gitCommitMessage: 'docs: review C',
+      },
+    ]);
+
+    registry.register(implementer);
+    registry.register(reviewerA);
+    registry.register(reviewerB);
+    registry.register(reviewerC);
+
+    const reviewRouter: RoutingProvider = {
+      id: 'mock-review-router',
+      route: async () => ({
+        strategy: 'review',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'medium',
+        teamSize: 4,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement the feature',
+            preferredAgent: 'impl-agent',
+          },
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Review from angle A',
+            preferredAgent: 'reviewer-a',
+          },
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Review from angle B',
+            preferredAgent: 'reviewer-b',
+          },
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Review from angle C',
+            preferredAgent: 'reviewer-c',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'High-risk change needs implementer plus three independent reviewers',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: reviewRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-REVIEW-N',
+      title: 'Ship a high-risk change with multi-reviewer sign-off',
+      description: 'Implement then get three independent reviews',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-REVIEW-N',
+        objective: 'Ship the high-risk change',
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Implemented', 'Reviewed by three independent reviewers'],
+      },
+    };
+    graph.addTask(task);
+
+    const result = await orchestrator.run('Ship high-risk change', { preplannedGraph: graph });
+
+    expect(result.status).toBe('completed');
+
+    // All 4 agents must have actually run — the old bug hard-coded [lead, partner]
+    // and silently dropped reviewer-b and reviewer-c.
+    expect(implementer.executedAssignments.length).toBe(1);
+    expect(reviewerA.executedAssignments.length).toBe(1);
+    expect(reviewerB.executedAssignments.length).toBe(1);
+    expect(reviewerC.executedAssignments.length).toBe(1);
+
+    const assignments = assignmentRepo.listByTask('TASK-REVIEW-N');
+    expect(assignments.length).toBe(4);
+    expect(assignments.every((a) => a.status === 'completed')).toBe(true);
+
+    db.close();
+  });
+
   it('aborts before synthesis when an investigator fails under the default all_required policy', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const assignmentRepo = new AssignmentRepository(db);

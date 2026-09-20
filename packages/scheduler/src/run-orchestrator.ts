@@ -2,6 +2,7 @@ import {
   TaskForgeConfig,
   loadConfig,
   AgentRole,
+  CollaborationMode,
   CollaborationProposal,
 } from '@taskforge/shared';
 import {
@@ -82,6 +83,30 @@ export interface OrchestrationResult {
   graph: TaskGraph;
   error?: string;
   schedulerResult: SchedulerResult;
+}
+
+const REVIEWER_ROLES: ReadonlySet<AgentRole> = new Set([
+  'reviewer',
+  'architecture_reviewer',
+  'critic',
+  'security_reviewer',
+  'tester',
+]);
+
+/**
+ * Preflight can recommend any number of roles; forcing 'pair' regardless of
+ * count silently dropped every agent beyond the first two in
+ * executeExecutionTeam. Pick the strategy that actually matches the shape
+ * of what was requested.
+ */
+function collaborationModeFor(requestedRoles: AgentRole[]): CollaborationMode {
+  if (requestedRoles.length <= 2) return 'pair';
+  const implementerCount = requestedRoles.filter((r) => r === 'implementer').length;
+  const allReviewOrImplement = requestedRoles.every(
+    (r) => r === 'implementer' || REVIEWER_ROLES.has(r),
+  );
+  if (implementerCount === 1 && allReviewOrImplement) return 'review';
+  return 'collaborative';
 }
 
 export class RunOrchestrator {
@@ -273,7 +298,7 @@ export class RunOrchestrator {
 
         if (task.contract.metadata?.recommendCollaboration && collabReq?.requestedRoles?.length) {
           routing = {
-            strategy: 'pair',
+            strategy: collaborationModeFor(collabReq.requestedRoles),
             complexity: 'high',
             risk: 'high',
             uncertainty: 'medium',
@@ -322,8 +347,10 @@ export class RunOrchestrator {
           if (
             selected.length > 1 &&
             (routing.strategy === 'pair' ||
+              routing.strategy === 'review' ||
               routing.strategy === 'collaborative' ||
               routing.strategy === 'parallel' ||
+              routing.strategy === 'competitive' ||
               routing.teamSize > 1)
           ) {
             collaborativeExecutors.set(task.id, async (execTask, ctx) => {

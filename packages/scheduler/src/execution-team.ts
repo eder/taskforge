@@ -32,7 +32,7 @@ export async function executeExecutionTeam(
     case 'pair':
     case 'review':
     case 'collaborative':
-      return runSequentialTeam(task, ctx, selected);
+      return runSequentialTeam(task, ctx, orderForStrategy(routing.strategy, selected));
     case 'parallel':
     case 'competitive':
       return runConcurrentTeam(task, ctx, routing, selected);
@@ -42,6 +42,22 @@ export async function executeExecutionTeam(
       );
       return runSequentialTeam(task, ctx, selected);
   }
+}
+
+/**
+ * 'review' means implementer + N reviewers, so the implementer must run
+ * first regardless of the order roles were requested in; 'pair' and
+ * 'collaborative' keep the selection order the router/selector produced.
+ */
+function orderForStrategy(
+  strategy: RoutingDecision['strategy'],
+  selected: SelectedAgentAssignment[],
+): SelectedAgentAssignment[] {
+  if (strategy !== 'review') return selected;
+  const implementers = selected.filter((s) => s.roleRequest.role === 'implementer');
+  if (implementers.length === 0) return selected;
+  const rest = selected.filter((s) => s.roleRequest.role !== 'implementer');
+  return [...implementers, ...rest];
 }
 
 function reportDegradedStaffing(
@@ -71,72 +87,84 @@ function reportDegradedStaffing(
   });
 }
 
+/**
+ * Chains all N selected agents through the same worktree/branch, one after
+ * another (a real handoff, not a fresh copy each time). Used for 'pair'
+ * (always exactly 2), 'review' (implementer + N reviewers, implementer
+ * ordered first by orderForStrategy) and 'collaborative' (N coordinated
+ * assignments) — previously only the first two of `selected` ever ran and
+ * every agent beyond that was silently dropped.
+ */
 async function runSequentialTeam(
   task: Task,
   ctx: SchedulerContext,
   selected: SelectedAgentAssignment[],
 ): Promise<TeamExecutionResult> {
   const headCommit = ctx.baseCommit ?? (await ctx.gitService.getHeadCommit());
-  const [lead, partner] = selected;
+  const [lead, ...rest] = selected;
 
-  const leadAsgn = buildAssignment(task, lead, task.contract.objective);
-  ctx.assignmentRepo.create(leadAsgn, ctx.runId);
+  const chain = [
+    { selection: lead, assignment: buildAssignment(task, lead, task.contract.objective) },
+    ...rest.map((selection) => ({
+      selection,
+      assignment: buildAssignment(
+        task,
+        selection,
+        selection.roleRequest.objective || `Review and assist with ${task.contract.objective}`,
+        'pending' as const,
+      ),
+    })),
+  ];
 
-  if (!partner) {
-    const res = await executeGovernedAssignment(
-      buildGovernedCtx(task, ctx, leadAsgn, lead.agent, headCommit),
+  for (const step of chain) {
+    ctx.assignmentRepo.create(step.assignment, ctx.runId);
+  }
+
+  if (rest.length > 0) {
+    ctx.onProgress?.(
+      `[${task.id}] Sequential handoff: ${chain
+        .map((s) => `${s.selection.agent.name} (${s.selection.roleRequest.role})`)
+        .join(' → ')}`,
     );
-    return {
-      success: res.success,
-      commitHash: res.commitHash,
-      output: res.output,
-      worktreePath: res.worktreePath,
-    };
   }
 
-  const partnerAsgn = buildAssignment(
-    task,
-    partner,
-    partner.roleRequest.objective || `Review and assist with ${task.contract.objective}`,
-    'pending',
-  );
-  ctx.assignmentRepo.create(partnerAsgn, ctx.runId);
+  const outputs: string[] = [];
+  let lastRes: Awaited<ReturnType<typeof executeGovernedAssignment>> | undefined;
+  let worktree: { path: string; branchName?: string } | undefined;
 
-  ctx.onProgress?.(
-    `[${task.id}] Sequential handoff: ${lead.agent.name} (${lead.roleRequest.role}) → ${partner.agent.name} (${partner.roleRequest.role})`,
-  );
+  for (let i = 0; i < chain.length; i++) {
+    const { selection, assignment } = chain[i];
+    const label = i === 0 ? 'Lead' : 'Partner';
 
-  const leadRes = await executeGovernedAssignment(
-    buildGovernedCtx(task, ctx, leadAsgn, lead.agent, headCommit),
-  );
+    const res = await executeGovernedAssignment(
+      buildGovernedCtx(task, ctx, assignment, selection.agent, headCommit, {
+        objectiveOverride: i === 0 ? undefined : assignment.objective,
+        existingWorktree: worktree,
+      }),
+    );
 
-  if (!leadRes.success) {
-    ctx.assignmentRepo.updateStatus(partnerAsgn.id, 'cancelled');
-    return { success: false, output: leadRes.output, worktreePath: leadRes.worktreePath };
+    outputs.push(
+      `[${label} - ${selection.agent.name} (${selection.roleRequest.role})]:\n${
+        res.output ?? (i === 0 ? 'Implemented' : 'Reviewed and verified')
+      }`,
+    );
+    lastRes = res;
+
+    if (!res.success) {
+      for (const remaining of chain.slice(i + 1)) {
+        ctx.assignmentRepo.updateStatus(remaining.assignment.id, 'cancelled');
+      }
+      return { success: false, output: outputs.join('\n\n'), worktreePath: res.worktreePath };
+    }
+
+    worktree = { path: res.worktreePath, branchName: assignment.branchName };
   }
-
-  // Partner continues in the lead's own worktree/branch (a real handoff, not a fresh copy).
-  const partnerRes = await executeGovernedAssignment(
-    buildGovernedCtx(task, ctx, partnerAsgn, partner.agent, headCommit, {
-      objectiveOverride: partnerAsgn.objective,
-      existingWorktree: { path: leadRes.worktreePath, branchName: leadAsgn.branchName },
-    }),
-  );
-
-  if (!partnerRes.success) {
-    return { success: false, output: partnerRes.output, worktreePath: partnerRes.worktreePath };
-  }
-
-  const combinedOutput = [
-    `[Lead - ${lead.agent.name} (${lead.roleRequest.role})]:\n${leadRes.output ?? 'Implemented'}`,
-    `[Partner - ${partner.agent.name} (${partner.roleRequest.role})]:\n${partnerRes.output ?? 'Reviewed and verified'}`,
-  ].join('\n\n');
 
   return {
     success: true,
-    commitHash: partnerRes.commitHash ?? leadRes.commitHash,
-    worktreePath: partnerRes.worktreePath,
-    output: combinedOutput,
+    commitHash: lastRes?.commitHash,
+    worktreePath: lastRes?.worktreePath,
+    output: outputs.join('\n\n'),
   };
 }
 
