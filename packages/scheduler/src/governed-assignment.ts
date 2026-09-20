@@ -301,6 +301,21 @@ export async function executeGovernedAssignment(
     }
   }
 
+  const resolvedFindings =
+    agentResult.findings && agentResult.findings.length > 0
+      ? agentResult.findings
+      : parseStructuredFindings(agentResult.output) ??
+        parseStructuredFindings(agentResult.message);
+
+  if (resolvedFindings && resolvedFindings.length > 0 && ctx.activityTracker) {
+    const criticals = resolvedFindings.filter(
+      (f) => f.severity === 'critical' || f.severity === 'major',
+    );
+    if (criticals.length > 0) {
+      ctx.activityTracker.setCriticalFindings(task.id, criticals);
+    }
+  }
+
   return {
     success: agentResult.success,
     commitHash: agentResult.commitHash,
@@ -309,6 +324,89 @@ export async function executeGovernedAssignment(
     worktreePath: wt.path,
     durationMs: agentResult.durationMs,
     collaborationProposal: agentResult.collaborationProposal,
-    findings: agentResult.findings,
+    findings: resolvedFindings,
   };
+}
+
+export function parseStructuredFindings(
+  text?: string,
+): import('@taskforge/shared').ReviewFinding[] | undefined {
+  if (!text) return undefined;
+
+  const validSeverities = new Set(['critical', 'major', 'minor', 'suggestion']);
+
+  function extract(obj: any): import('@taskforge/shared').ReviewFinding[] | undefined {
+    if (!obj || typeof obj !== 'object') return undefined;
+    const list = Array.isArray(obj) ? obj : Array.isArray(obj.findings) ? obj.findings : undefined;
+    if (!list || !Array.isArray(list)) return undefined;
+
+    const res: import('@taskforge/shared').ReviewFinding[] = [];
+    for (const item of list) {
+      if (typeof item === 'object' && item !== null && typeof item.description === 'string') {
+        const rawSev = typeof item.severity === 'string' ? item.severity.toLowerCase() : 'minor';
+        const sev = validSeverities.has(rawSev) ? rawSev : 'minor';
+        const file =
+          typeof item.file === 'string'
+            ? item.file
+            : typeof item.path === 'string'
+              ? item.path
+              : undefined;
+        let line: number | undefined;
+        if (typeof item.line === 'number') {
+          line = item.line;
+        } else if (typeof item.line === 'string') {
+          const parsed = parseInt(item.line, 10);
+          if (!isNaN(parsed)) line = parsed;
+        }
+        res.push({
+          severity: sev as any,
+          description: item.description,
+          file,
+          line,
+        });
+      }
+    }
+    return res.length > 0 ? res : undefined;
+  }
+
+  // 1. Check for markdown code blocks
+  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
+  let match;
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      const res = extract(parsed);
+      if (res) return res;
+    } catch {
+      // continue
+    }
+  }
+
+  // 2. Check for raw JSON object { ... }
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+      const res = extract(parsed);
+      if (res) return res;
+    } catch {
+      // continue
+    }
+  }
+
+  // 3. Check for raw JSON array [ ... ]
+  const firstBracket = text.indexOf('[');
+  const lastBracket = text.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    try {
+      const parsed = JSON.parse(text.slice(firstBracket, lastBracket + 1));
+      const res = extract(parsed);
+      if (res) return res;
+    } catch {
+      // continue
+    }
+  }
+
+  return undefined;
 }

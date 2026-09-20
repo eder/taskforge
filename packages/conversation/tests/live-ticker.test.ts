@@ -89,4 +89,32 @@ describe('LiveTicker', () => {
     expect(joined).not.toContain('task-4');
     expect(joined).toContain('... and 2 more agent(s) working concurrently');
   });
+
+  it('highlights critical review findings inline with file and line references', () => {
+    const active: ActiveAgentState[] = [
+      {
+        taskId: 'TASK-SEC-1',
+        agentId: 'claude',
+        agentName: 'Claude Code',
+        status: 'Reviewing security vulnerabilities',
+        startedAt: new Date(),
+        lastActiveAt: new Date(),
+        criticalFindings: [
+          {
+            severity: 'critical',
+            description: 'SQL Injection vulnerability in query builder',
+            file: 'src/db/query.ts',
+            line: 42,
+          },
+        ],
+      },
+    ];
+
+    const lines = LiveTicker.render({ activeAgents: active });
+    const joined = lines.join('\n');
+    expect(joined).toContain('✖ [CRITICAL]');
+    expect(joined).toContain('TASK-SEC-1');
+    expect(joined).toContain('src/db/query.ts:42');
+    expect(joined).toContain('SQL Injection vulnerability');
+  });
 });

@@ -50,6 +50,25 @@ export class LiveTicker {
       );
     }
 
+    // Check if any active agent has critical review findings to highlight inline
+    for (const a of activeAgents) {
+      if (a.criticalFindings && a.criticalFindings.length > 0) {
+        for (const finding of a.criticalFindings.slice(0, 2)) {
+          const loc = finding.file
+            ? `${colors.yellow}${colors.bold}${finding.file}${finding.line !== undefined ? `:${finding.line}` : ''}${colors.reset}`
+            : '';
+          const locPrefix = loc ? ` ${loc} •` : '';
+          const descSnippet =
+            finding.description.length > 50
+              ? `${finding.description.slice(0, 47)}...`
+              : finding.description;
+          lines.push(
+            `  ${colors.red}${colors.bold}✖ [${finding.severity.toUpperCase()}]${colors.reset} ${colors.bold}${a.taskId}${colors.reset}:${locPrefix} ${descSnippet}`,
+          );
+        }
+      }
+    }
+
     // Active agent status lines (limit to 3 if many)
     const displayedAgents = activeAgents.slice(0, 3);
     for (const a of displayedAgents) {

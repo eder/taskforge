@@ -1,4 +1,4 @@
-import { ActiveAgentState } from '@taskforge/shared';
+import { ActiveAgentState, ReviewFinding } from '@taskforge/shared';
 
 export type ActivityListener = (active: ActiveAgentState[]) => void;
 
@@ -40,6 +40,24 @@ export class AgentActivityTracker {
     const existing = this.activeMap.get(taskId);
     if (existing) {
       existing.attentionRequired = undefined;
+      existing.lastActiveAt = new Date();
+      this.notify();
+    }
+  }
+
+  public setCriticalFindings(taskId: string, findings: ReviewFinding[]): void {
+    const existing = this.activeMap.get(taskId);
+    if (existing) {
+      existing.criticalFindings = findings;
+      existing.lastActiveAt = new Date();
+      this.notify();
+    }
+  }
+
+  public clearCriticalFindings(taskId: string): void {
+    const existing = this.activeMap.get(taskId);
+    if (existing) {
+      existing.criticalFindings = undefined;
       existing.lastActiveAt = new Date();
       this.notify();
     }

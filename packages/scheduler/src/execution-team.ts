@@ -344,13 +344,22 @@ async function runReviewTeam(
   );
 
   if (anyReviewerFailed || criticalOrMajor.length > 0) {
+    if (criticalOrMajor.length > 0 && ctx.activityTracker) {
+      ctx.activityTracker.setCriticalFindings(task.id, criticalOrMajor);
+    }
+
     const findingSummary = criticalOrMajor.length > 0
-      ? `\nCritical/Major findings:\n${criticalOrMajor.map((f) => `- [${f.severity.toUpperCase()}] ${f.file ? `${f.file}:${f.line ?? ''} ` : ''}${f.description}`).join('\n')}`
+      ? `\nCritical/Major findings:\n${criticalOrMajor.map((f) => `- [${f.severity.toUpperCase()}] ${f.file ? `${f.file}${f.line !== undefined ? `:${f.line}` : ''} ` : ''}${f.description}`).join('\n')}`
       : '';
 
     ctx.onProgress?.(
       `[${task.id}] ✗ Review rejected: ${criticalOrMajor.length} blocking finding(s), reviewer failure: ${anyReviewerFailed}`,
     );
+
+    for (const f of criticalOrMajor) {
+      const loc = f.file ? ` at ${f.file}${f.line !== undefined ? `:${f.line}` : ''}` : '';
+      ctx.onProgress?.(`[${task.id}] ✖ [${f.severity.toUpperCase()}]${loc}: ${f.description}`);
+    }
 
     return {
       success: false,

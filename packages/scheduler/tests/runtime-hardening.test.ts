@@ -989,4 +989,112 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
 
     db.close();
   });
+
+  it('14. Structured JSON output from reviewer model is automatically parsed into findings with file:line references', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const registry = new AgentRegistry(false);
+
+    const impl = new FakeAgent('impl-agent-json', 'Implementer Agent', [
+      { writeFile: { path: 'auth.ts', content: 'export const token = "abc";\n' }, gitCommitMessage: 'feat: token' },
+    ]);
+
+    // Reviewer returns markdown containing structured JSON findings block
+    const reviewerWithJsonOutput: AgentAdapter = {
+      id: 'rev-agent-json',
+      name: 'Structured Reviewer Agent',
+      detect: async () => true,
+      capabilities: async () => ({ canRead: true, canWrite: false, canExecute: true, languages: [], tools: [] }),
+      execute: async () => {
+        return {
+          success: true,
+          message: 'Review completed',
+          durationMs: 50,
+          output: `Here is the security review report:
+
+\`\`\`json
+{
+  "findings": [
+    {
+      "severity": "critical",
+      "file": "src/auth/token.ts",
+      "line": 88,
+      "description": "Hardcoded token secret enables token forgery"
+    }
+  ]
+}
+\`\`\`
+`,
+        };
+      },
+    };
+
+    registry.register(impl);
+    registry.register(reviewerWithJsonOutput);
+
+    const reviewRouter: RoutingProvider = {
+      id: 'mock-review-json-router',
+      route: async () => ({
+        strategy: 'review',
+        complexity: 'medium',
+        risk: 'high',
+        uncertainty: 'low',
+        teamSize: 2,
+        roles: [
+          { role: 'implementer', requiredCapabilities: ['canWrite'], objective: 'Implement', preferredAgent: 'impl-agent-json' },
+          { role: 'reviewer', requiredCapabilities: ['canRead'], objective: 'Review', preferredAgent: 'rev-agent-json' },
+        ],
+        communication: { required: true, initialAlignment: false, synthesisBeforeImplementation: false },
+        reason: 'Security review with JSON output',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const progressLogs: string[] = [];
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: reviewRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-REV-JSON',
+      title: 'Token task',
+      description: 'Task reviewed with structured JSON findings',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-REV-JSON',
+        objective: 'Implement token',
+        allowedScope: ['*'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Valid criteria'],
+      },
+    };
+    graph.addTask(task);
+
+    const result = await orchestrator.run('Token task', {
+      preplannedGraph: graph,
+      onProgress: (m) => progressLogs.push(m),
+    });
+
+    expect(result.status).toBe('failed');
+
+    // Verify file and line reference was logged in progress
+    const criticalLog = progressLogs.find((l) => l.includes('src/auth/token.ts:88'));
+    expect(criticalLog).toBeDefined();
+    expect(criticalLog).toContain('Hardcoded token secret enables token forgery');
+
+    db.close();
+  });
 });
