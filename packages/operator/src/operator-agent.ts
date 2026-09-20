@@ -27,6 +27,10 @@ export type OperatorIntent =
   | { type: 'deny_interaction'; requestId?: string; reason?: string }
   | { type: 'inspect_pending_interactions' }
   | { type: 'inspect_runs' }
+  | { type: 'apply_run'; runId?: string }
+  | { type: 'diff_run'; runId?: string }
+  | { type: 'create_pr'; runId?: string }
+  | { type: 'discard_run'; runId?: string }
   | { type: 'stream_logs'; taskId?: string }
   | { type: 'submit_goal'; goal: string }
   | { type: 'general_query'; query: string };
@@ -61,6 +65,23 @@ export class OperatorIntentParser {
     if (text.startsWith('/pause')) return { type: 'pause_execution' };
     if (text.startsWith('/resume')) return { type: 'resume_execution' };
     if (text.startsWith('/pending')) return { type: 'inspect_pending_interactions' };
+
+    if (text.startsWith('/apply')) {
+      const parts = text.split(/\s+/);
+      return { type: 'apply_run', runId: parts[1] };
+    }
+    if (text.startsWith('/diff')) {
+      const parts = text.split(/\s+/);
+      return { type: 'diff_run', runId: parts[1] };
+    }
+    if (text.startsWith('/pr')) {
+      const parts = text.split(/\s+/);
+      return { type: 'create_pr', runId: parts[1] };
+    }
+    if (text.startsWith('/discard')) {
+      const parts = text.split(/\s+/);
+      return { type: 'discard_run', runId: parts[1] };
+    }
 
     if (text.startsWith('/approve')) {
       const parts = text.split(/\s+/);
@@ -170,6 +191,58 @@ export class OperatorIntentParser {
       lower === 'resume'
     ) {
       return { type: 'resume_execution' };
+    }
+
+    // Delivery gate natural language equivalents (discard/negation checked first,
+    // since "don't apply this" would otherwise also match the apply_run patterns below)
+    if (
+      lower.includes("don't apply") ||
+      lower.includes('do not apply') ||
+      lower.includes('discard this') ||
+      lower.includes('discard run') ||
+      lower.includes('descarta') ||
+      lower.includes('descartar')
+    ) {
+      return { type: 'discard_run' };
+    }
+
+    if (
+      lower === 'aplica' ||
+      lower.includes('aplica isso') ||
+      lower.includes('aplica as mudanças') ||
+      lower.includes('aplica as mudancas') ||
+      lower.includes('apply this') ||
+      lower.includes('apply changes') ||
+      lower.includes('apply the changes') ||
+      lower.includes('merge this') ||
+      lower.includes('put this on main') ||
+      lower.includes('put it on main')
+    ) {
+      return { type: 'apply_run' };
+    }
+
+    if (
+      lower.includes('show me what changed') ||
+      lower.includes('what changed') ||
+      lower.includes('ver mudanças') ||
+      lower.includes('ver mudancas') ||
+      lower.includes('mostra as mudanças') ||
+      lower.includes('mostra as mudancas') ||
+      lower === 'diff' ||
+      lower.startsWith('diff ')
+    ) {
+      return { type: 'diff_run' };
+    }
+
+    if (
+      lower.includes('create a pr') ||
+      lower.includes('create pull request') ||
+      lower.includes('open a pr') ||
+      lower.includes('abre um pr') ||
+      lower.includes('cria um pr') ||
+      lower.includes('criar um pr')
+    ) {
+      return { type: 'create_pr' };
     }
 
     if (

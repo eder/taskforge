@@ -130,6 +130,18 @@ describe('InteractiveShell (REPL)', () => {
     const runsReply = await shell.handleInput('/runs');
     expect(runsReply).toContain('TaskForge Runs History');
     expect(runsReply).toContain('taskforge/run-');
-    expect(runsReply).toContain('git merge taskforge/run-');
+    expect(runsReply).toContain('READY TO APPLY');
+    expect(runsReply).toContain('/apply');
+
+    // Check /apply command refuses to touch the target branch while the
+    // working tree has uncommitted changes (the test's own sqlite db file
+    // lives inside the repo root and keeps changing as the shell runs)
+    const applyReply = await shell.handleInput('/apply');
+    expect(applyReply).toContain('Could not apply');
+    expect(applyReply).toContain('not clean');
+
+    // Check /diff shows the pending changes for the ready run
+    const diffReply = await shell.handleInput('/diff');
+    expect(diffReply.length).toBeGreaterThan(0);
   });
 });

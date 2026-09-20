@@ -21,6 +21,12 @@ export interface RoutingDecision {
     synthesisBeforeImplementation: boolean;
   };
   reason: string;
+  /**
+   * How a concurrent (parallel/competitive) team handles investigator failures.
+   * Defaults to 'all_required' when omitted: any failed investigator aborts
+   * the team before synthesis/implementation runs.
+   */
+  investigationPolicy?: 'all_required' | 'quorum' | 'best_effort';
 }
 
 export interface RoutingInput {

@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
-import { TaskForgeConfig, loadConfig } from '@taskforge/shared';
+import { TaskForgeConfig, loadConfig, DeliveryError } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, AgentActivityTracker } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
@@ -15,10 +15,11 @@ import {
   AgentSelector,
 } from '@taskforge/router';
 import { TaskGraph } from '@taskforge/core';
-import { RunOrchestrator } from '@taskforge/scheduler';
+import { RunOrchestrator, OrchestrationResult } from '@taskforge/scheduler';
 import { TaskForgeDatabase, InteractionRepository, RunRepository, GoalRepository } from '@taskforge/persistence';
 import { TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
+import { DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
 import { TuiDashboard } from './tui-dashboard.js';
 import { theme, colors } from './theme.js';
 import { TerminalViewport } from './terminal-viewport.js';
@@ -66,6 +67,8 @@ export class InteractiveShell {
   private agentSelector: AgentSelector;
   private interactionRepo: InteractionRepository;
   private interactionGateway: InteractionGateway;
+  private deliveryService: DeliveryService;
+  private githubWorkflowService: GitHubWorkflowService;
   private currentGraph?: TaskGraph;
   private lastGoalDescription?: string;
   private isPaused = false;
@@ -113,6 +116,12 @@ export class InteractiveShell {
       config: this.config,
       interactionRepo: this.interactionRepo,
     });
+    this.deliveryService = new DeliveryService(
+      this.repoRoot,
+      this.gitService,
+      new RunRepository(this.db),
+    );
+    this.githubWorkflowService = new GitHubWorkflowService(this.db, this.repoRoot);
     this.setupActivitySubscription();
   }
 
@@ -149,6 +158,82 @@ export class InteractiveShell {
       terminalCols: this.viewport.cols,
     });
     this.viewport.drawFooter('', lines);
+  }
+
+  private resolveDeliveryRunId(explicit?: string): string | undefined {
+    if (explicit) return explicit;
+    return this.deliveryService.findLatestReady()?.runId;
+  }
+
+  private formatRunSummary(result: OrchestrationResult): string {
+    const statusColor =
+      result.status === 'completed'
+        ? colors.green
+        : result.status === 'cancelled'
+          ? colors.yellow
+          : colors.red;
+
+    const outputs = Object.entries(result.taskOutputs ?? {})
+      .filter(([, text]) => text && text.trim().length > 0)
+      .map(([taskId, text]) => {
+        const header = `Explanation & Analysis [${taskId}]`;
+        const highlighted = theme.renderMarkdown(text.trim());
+        const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
+        return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
+      })
+      .join('\n\n');
+
+    const outputPrefix = outputs ? `${outputs}\n` : '';
+
+    const isSuccess = result.status === 'completed';
+    const isCancelled = result.status === 'cancelled';
+    const title = isSuccess
+      ? 'Plan executed successfully!'
+      : isCancelled
+        ? 'Plan execution cancelled by user'
+        : 'Plan execution encountered issues';
+    const titleIcon = isSuccess
+      ? `${colors.green}✔${colors.reset}`
+      : isCancelled
+        ? `${colors.yellow}⊘${colors.reset}`
+        : `${colors.red}✖${colors.reset}`;
+
+    const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
+
+    const delivery = isSuccess ? this.deliveryService.getDelivery(result.runId) : undefined;
+    let deliveryBlock = '';
+    if (delivery?.status === 'ready_to_apply') {
+      deliveryBlock = [
+        `    ${colors.dim}Branch:${colors.reset}             ${colors.cyan}${delivery.branch}${colors.reset}`,
+        `    ${colors.dim}Delivery:${colors.reset}           ${colors.yellow}● READY TO APPLY${colors.reset}`,
+        '',
+        `    ${colors.dim}/apply${colors.reset}    apply to ${delivery.targetBranch}`,
+        `    ${colors.dim}/diff${colors.reset}     inspect changes`,
+        `    ${colors.dim}/pr${colors.reset}       create pull request`,
+      ].join('\n');
+    } else if (delivery?.status === 'applied') {
+      deliveryBlock = `    ${colors.dim}Delivery:${colors.reset}           ${colors.green}✔ applied to ${delivery.targetBranch}${colors.reset}${delivery.appliedCommit ? ` (${delivery.appliedCommit.slice(0, 7)})` : ''}`;
+    } else if (delivery?.status === 'pr_created') {
+      deliveryBlock = `    ${colors.dim}Delivery:${colors.reset}           ${colors.cyan}PR opened${colors.reset}${delivery.prUrl ? ` ${delivery.prUrl}` : ''}`;
+    }
+
+    return [
+      outputPrefix,
+      `  ${colors.brand}✦ ${colors.bold}Run Summary${colors.reset}`,
+      `  ${divider}`,
+      `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
+      '',
+      `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
+      `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
+      deliveryBlock,
+      result.error
+        ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
+        : '',
+      `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
+      `  ${divider}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
 
   async renderBanner(): Promise<string> {
@@ -272,11 +357,113 @@ export class InteractiveShell {
         const runLines = runs.slice(0, 10).map((r) => {
           const goal = r.goalId ? goalRepo.get(r.goalId) : undefined;
           const statusBadge = theme.statusBadge(r.status);
-          const branch = `taskforge/run-${r.id}`;
           const goalDesc = goal ? `\n    ${colors.dim}Goal:${colors.reset}   ${goal.description}` : '';
-          return `  ● ${colors.bold}${r.id}${colors.reset} [${r.status.toUpperCase()}] ${statusBadge} ${colors.dim}(${r.createdAt.slice(0, 19).replace('T', ' ')})${colors.reset}${goalDesc}\n    ${colors.dim}Branch:${colors.reset} ${colors.cyan}${branch}${colors.reset}\n    ${colors.dim}Merge:${colors.reset}  ${colors.green}git merge ${branch}${colors.reset}`;
+          const delivery = this.deliveryService.getDelivery(r.id);
+          let deliveryBlock = '';
+          if (delivery) {
+            const badge =
+              delivery.status === 'applied'
+                ? `${colors.green}✔ APPLIED${colors.reset} to ${delivery.targetBranch}${delivery.appliedCommit ? ` (${delivery.appliedCommit.slice(0, 7)})` : ''}`
+                : delivery.status === 'pr_created'
+                  ? `${colors.cyan}PR opened${colors.reset}${delivery.prUrl ? ` ${delivery.prUrl}` : ''}`
+                  : delivery.status === 'discarded'
+                    ? `${colors.dim}discarded${colors.reset}`
+                    : `${colors.yellow}● READY TO APPLY${colors.reset}`;
+            const hint =
+              delivery.status === 'ready_to_apply'
+                ? `\n    ${colors.dim}/apply ${r.id}    /diff ${r.id}    /pr ${r.id}${colors.reset}`
+                : '';
+            deliveryBlock = `\n    ${colors.dim}Branch:${colors.reset}   ${colors.cyan}${delivery.branch}${colors.reset}\n    ${colors.dim}Delivery:${colors.reset} ${badge}${hint}`;
+          }
+          return `  ● ${colors.bold}${r.id}${colors.reset} [${r.status.toUpperCase()}] ${statusBadge} ${colors.dim}(${r.createdAt.slice(0, 19).replace('T', ' ')})${colors.reset}${goalDesc}${deliveryBlock}`;
         });
         return [header, ...runLines, `  ${divider}`].join('\n');
+      }
+
+      case 'apply_run': {
+        const targetRunId = this.resolveDeliveryRunId(intent.runId);
+        if (!targetRunId) {
+          return 'No run is ready to apply. Use /runs to see the delivery status of past runs.';
+        }
+        const delivery = this.deliveryService.getDelivery(targetRunId);
+        if (!delivery) {
+          return `Run ${targetRunId} has no delivery information.`;
+        }
+        const before = await this.gitService.getStatus().catch(() => undefined);
+        try {
+          const result = await this.deliveryService.apply(targetRunId);
+          if (result.alreadyApplied) {
+            return `${colors.green}✔${colors.reset} ${targetRunId} was already applied to ${delivery.targetBranch}${delivery.appliedCommit ? ` (${delivery.appliedCommit.slice(0, 7)})` : ''}.`;
+          }
+          const beforeShort = before?.headCommit ? before.headCommit.slice(0, 7) : '?';
+          return [
+            `${colors.brand}✦ ${colors.bold}Applying ${targetRunId}${colors.reset}`,
+            '',
+            `  ${colors.dim}Target branch..........${colors.reset} ${delivery.targetBranch}`,
+            `  ${colors.dim}Integration branch.....${colors.reset} ${delivery.branch}`,
+            '',
+            `${colors.green}✔ Changes applied successfully.${colors.reset}`,
+            '',
+            `  ${delivery.targetBranch}  ${beforeShort} → ${result.commit.slice(0, 7)}`,
+          ].join('\n');
+        } catch (err) {
+          const conflictingFiles =
+            err instanceof DeliveryError
+              ? (err.context?.conflictingFiles as string[] | undefined)
+              : undefined;
+          if (conflictingFiles?.length) {
+            return [
+              `${colors.brand}✦ ${colors.bold}Integration conflict detected${colors.reset}`,
+              '',
+              `${delivery.targetBranch} has changes that conflict with ${delivery.branch}.`,
+              '',
+              'Conflicting files:',
+              ...conflictingFiles.map((f) => `  ${f}`),
+              '',
+              `I won't touch ${delivery.targetBranch}. Inspect with /diff ${targetRunId}, resolve manually, then retry /apply ${targetRunId}.`,
+            ].join('\n');
+          }
+          return `${colors.red}✖ Could not apply ${targetRunId}:${colors.reset} ${(err as Error).message}`;
+        }
+      }
+
+      case 'diff_run': {
+        const targetRunId = this.resolveDeliveryRunId(intent.runId);
+        if (!targetRunId) {
+          return 'No run is ready to inspect. Use /runs to see past runs.';
+        }
+        try {
+          const stat = await this.deliveryService.diff(targetRunId);
+          return stat.trim().length > 0 ? stat : 'No changes to show.';
+        } catch (err) {
+          return `${colors.red}✖ ${(err as Error).message}${colors.reset}`;
+        }
+      }
+
+      case 'create_pr': {
+        const targetRunId = this.resolveDeliveryRunId(intent.runId);
+        if (!targetRunId) {
+          return 'No run is ready for a pull request. Use /runs to see past runs.';
+        }
+        const delivery = this.deliveryService.getDelivery(targetRunId);
+        const result = await this.githubWorkflowService.createPullRequest({
+          runId: targetRunId,
+          targetBranch: delivery?.targetBranch,
+          repoRoot: this.repoRoot,
+        });
+        if (result.success && result.prUrl) {
+          this.deliveryService.markPrCreated(targetRunId, result.prUrl);
+        }
+        return result.message;
+      }
+
+      case 'discard_run': {
+        const targetRunId = this.resolveDeliveryRunId(intent.runId);
+        if (!targetRunId) {
+          return 'No run is ready to discard. Use /runs to see past runs.';
+        }
+        this.deliveryService.discard(targetRunId);
+        return `Run ${targetRunId} marked as discarded. The integration branch was kept, nothing was merged.`;
       }
 
       case 'inspect_cost': {
@@ -518,60 +705,7 @@ export class InteractiveShell {
                 escalationsCount: 0,
               });
 
-              const statusColor =
-                result.status === 'completed'
-                  ? colors.green
-                  : result.status === 'cancelled'
-                    ? colors.yellow
-                    : colors.red;
-
-              const outputs = Object.entries(result.taskOutputs ?? {})
-                .filter(([, text]) => text && text.trim().length > 0)
-                .map(([taskId, text]) => {
-                  const header = `Explanation & Analysis [${taskId}]`;
-                  const highlighted = theme.renderMarkdown(text.trim());
-                  const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
-                  return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
-                })
-                .join('\n\n');
-
-              const outputPrefix = outputs ? `${outputs}\n` : '';
-
-              const isSuccess = result.status === 'completed';
-              const isCancelled = result.status === 'cancelled';
-              const title = isSuccess
-                ? 'Plan executed successfully!'
-                : isCancelled
-                  ? 'Plan execution cancelled by user'
-                  : 'Plan execution encountered issues';
-              const titleIcon = isSuccess
-                ? `${colors.green}✔${colors.reset}`
-                : isCancelled
-                  ? `${colors.yellow}⊘${colors.reset}`
-                  : `${colors.red}✖${colors.reset}`;
-
-              const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
-
-              const summary = [
-                outputPrefix,
-                `  ${colors.brand}✦ ${colors.bold}Run Summary${colors.reset}`,
-                `  ${divider}`,
-                `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
-                '',
-                `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
-                `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
-                result.integrationBranch
-                  ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}\n    ${colors.dim}To merge:${colors.reset}           ${colors.green}git merge ${result.integrationBranch}${colors.reset}`
-                  : '',
-                result.error
-                  ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
-                  : '',
-                `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
-                `  ${divider}`,
-              ]
-                .filter(Boolean)
-                .join('\n');
-
+              const summary = this.formatRunSummary(result);
               this.viewport.writeUpper(`\n${summary}\n`);
               this.viewport.drawFooter('');
             })
@@ -619,59 +753,7 @@ export class InteractiveShell {
             escalationsCount: 0,
           });
 
-          const statusColor =
-            result.status === 'completed'
-              ? colors.green
-              : result.status === 'cancelled'
-                ? colors.yellow
-                : colors.red;
-
-          const outputs = Object.entries(result.taskOutputs ?? {})
-            .filter(([, text]) => text && text.trim().length > 0)
-            .map(([taskId, text]) => {
-              const header = `Explanation & Analysis [${taskId}]`;
-              const highlighted = theme.renderMarkdown(text.trim());
-              const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
-              return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
-            })
-            .join('\n\n');
-
-          const outputPrefix = outputs ? `${outputs}\n` : '';
-
-          const isSuccess = result.status === 'completed';
-          const isCancelled = result.status === 'cancelled';
-          const title = isSuccess
-            ? 'Plan executed successfully!'
-            : isCancelled
-              ? 'Plan execution cancelled by user'
-              : 'Plan execution encountered issues';
-          const titleIcon = isSuccess
-            ? `${colors.green}✔${colors.reset}`
-            : isCancelled
-              ? `${colors.yellow}⊘${colors.reset}`
-              : `${colors.red}✖${colors.reset}`;
-
-          const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
-
-          return [
-            outputPrefix,
-            `  ${colors.brand}✦ ${colors.bold}Run Summary${colors.reset}`,
-            `  ${divider}`,
-            `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
-            '',
-            `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
-            `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
-            result.integrationBranch
-              ? `    ${colors.dim}Integration branch:${colors.reset} ${colors.cyan}${result.integrationBranch}${colors.reset}\n    ${colors.dim}To merge:${colors.reset}           ${colors.green}git merge ${result.integrationBranch}${colors.reset}`
-              : '',
-            result.error
-              ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
-              : '',
-            `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
-            `  ${divider}`,
-          ]
-            .filter(Boolean)
-            .join('\n');
+          return this.formatRunSummary(result);
         } catch (err) {
           return `${colors.red}✕ Error during plan execution: ${(err as Error).message}${colors.reset}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
         }

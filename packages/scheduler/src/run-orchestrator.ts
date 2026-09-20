@@ -1,7 +1,6 @@
 import {
   TaskForgeConfig,
   loadConfig,
-  AgentAssignment,
   AgentRole,
   CollaborationProposal,
 } from '@taskforge/shared';
@@ -27,17 +26,21 @@ import {
   AgentSelector,
   RoutingProvider,
   RoutingDecision,
-  SelectedAgentAssignment,
 } from '@taskforge/router';
-import { AssignmentGraph, SynthesisCoordinator } from '@taskforge/collaboration';
 import { VerificationRunner } from '@taskforge/verification';
-import { IntegrationService } from '@taskforge/integration';
+import { IntegrationService, DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
+import {
+  createGitWorkflowStrategy,
+  detectWorkflowSuggestion,
+  RepositoryContext,
+} from '@taskforge/git-workflow';
 import { InteractionGateway } from '@taskforge/execution';
 import {
   DeterministicScheduler,
   SchedulerResult,
   SchedulerContext,
 } from './deterministic-scheduler.js';
+import { executeExecutionTeam } from './execution-team.js';
 
 export interface OrchestratorOptions {
   repoRoot: string;
@@ -52,6 +55,8 @@ export interface OrchestratorOptions {
   worktreeManager?: WorktreeManager;
   verificationRunner?: VerificationRunner;
   integrationService?: IntegrationService;
+  deliveryService?: DeliveryService;
+  githubWorkflowService?: GitHubWorkflowService;
   interactionGateway?: InteractionGateway;
   activityTracker?: AgentActivityTracker;
 }
@@ -92,6 +97,8 @@ export class RunOrchestrator {
   private worktreeManager: WorktreeManager;
   private verificationRunner: VerificationRunner;
   private integrationService: IntegrationService;
+  private deliveryService: DeliveryService;
+  private githubWorkflowService: GitHubWorkflowService;
 
   private runRepo: RunRepository;
   private goalRepo: GoalRepository;
@@ -104,6 +111,7 @@ export class RunOrchestrator {
   private interactionRepo: InteractionRepository;
   private interactionGateway: InteractionGateway;
   private activityTracker?: AgentActivityTracker;
+  private workflowSuggestionShown = false;
 
   constructor(options: OrchestratorOptions) {
     this.repoRoot = options.repoRoot;
@@ -150,6 +158,11 @@ export class RunOrchestrator {
         this.verificationRunner,
         this.eventRepo,
       );
+    this.deliveryService =
+      options.deliveryService ??
+      new DeliveryService(this.repoRoot, this.gitService, this.runRepo, this.eventRepo);
+    this.githubWorkflowService =
+      options.githubWorkflowService ?? new GitHubWorkflowService(this.db, this.repoRoot);
   }
 
   public getInteractionGateway(): InteractionGateway {
@@ -162,6 +175,10 @@ export class RunOrchestrator {
     options.onProgress?.(`Starting TaskForge orchestrator run: ${runId}`);
 
     const baseCommit = options.baseCommit ?? (await this.gitService.getHeadCommit());
+    const baseBranch = await this.gitService
+      .getStatus(this.repoRoot)
+      .then((s) => s.currentBranch)
+      .catch(() => 'main');
 
     // 1. Create Goal
     const goalRecord = this.goalRepo.create({
@@ -310,7 +327,7 @@ export class RunOrchestrator {
               routing.teamSize > 1)
           ) {
             collaborativeExecutors.set(task.id, async (execTask, ctx) => {
-              return this.executeTeamTask(execTask, ctx, routing, selected);
+              return executeExecutionTeam(execTask, ctx, routing, selected);
             });
           }
         } else if (fallbackAgent) {
@@ -355,6 +372,64 @@ export class RunOrchestrator {
     // 7. Cleanup transient worktrees
     await this.worktreeManager.prune().catch(() => {});
 
+    // 8. Delivery gate: mark the run ready to apply, and honor the configured delivery mode
+    if (schedulerResult.status === 'completed' && schedulerResult.integrationBranch) {
+      if (!this.workflowSuggestionShown) {
+        this.workflowSuggestionShown = true;
+        if (this.config.git.workflow === 'trunk') {
+          const suggestion = await detectWorkflowSuggestion(this.gitService, this.repoRoot).catch(
+            () => undefined,
+          );
+          if (suggestion) {
+            options.onProgress?.(
+              `TaskForge detected ${suggestion.reason} — this looks like GitFlow. Set git.workflow: ${suggestion.suggested} in .taskforge/config.yaml to enable it.`,
+            );
+          }
+        }
+      }
+
+      const repoContext: RepositoryContext = {
+        currentBranch: baseBranch,
+        localBranches: await this.gitService.listLocalBranches(this.repoRoot).catch(() => []),
+      };
+      const workflowStrategy = createGitWorkflowStrategy(this.config.git);
+      const targetBranch =
+        this.config.delivery.targetBranch ??
+        workflowStrategy.resolveTargetBranch(repoContext, goalDescription);
+      this.deliveryService.markReady(
+        runId,
+        schedulerResult.integrationBranch,
+        targetBranch,
+        baseCommit,
+      );
+
+      if (
+        this.config.delivery.mode === 'auto_apply' &&
+        this.config.permissions.git.merge_main === 'allow'
+      ) {
+        try {
+          const applied = await this.deliveryService.apply(runId);
+          options.onProgress?.(`Delivery: applied to ${targetBranch} (${applied.commit.slice(0, 7)})`);
+        } catch (err) {
+          options.onProgress?.(`Delivery: auto-apply failed: ${(err as Error).message}`);
+        }
+      } else if (this.config.delivery.mode === 'pull_request') {
+        try {
+          const pr = await this.githubWorkflowService.createPullRequest({
+            runId,
+            targetBranch,
+            repoRoot: this.repoRoot,
+          });
+          if (pr.success && pr.prUrl) {
+            this.deliveryService.markPrCreated(runId, pr.prUrl);
+          }
+          options.onProgress?.(`Delivery: ${pr.message}`);
+        } catch (err) {
+          options.onProgress?.(`Delivery: pull request creation failed: ${(err as Error).message}`);
+        }
+      }
+    }
+
     const durationMs = Date.now() - startTime;
     options.onProgress?.(`Run finished with status ${schedulerResult.status} in ${durationMs}ms`);
 
@@ -371,210 +446,5 @@ export class RunOrchestrator {
       error: schedulerResult.error,
       schedulerResult,
     };
-  }
-
-  private async executeTeamTask(
-    task: Task,
-    ctx: SchedulerContext,
-    routing: RoutingDecision,
-    selected: SelectedAgentAssignment[],
-  ): Promise<{ success: boolean; commitHash?: string; output?: string; worktreePath?: string }> {
-    const headCommit = ctx.baseCommit ?? (await ctx.gitService.getHeadCommit());
-    const strategy = routing.strategy;
-
-    if (strategy === 'pair' || selected.length === 2) {
-      const lead = selected[0];
-      const partner = selected[1];
-
-      const leadAsgn: AgentAssignment = {
-        id: `asgn-${task.id}-${lead.agent.id}-${lead.roleRequest.role}`,
-        taskId: task.id,
-        agentId: lead.agent.id,
-        role: lead.roleRequest.role,
-        objective: lead.roleRequest.objective || task.contract.objective,
-        status: 'running',
-      };
-      const partnerAsgn: AgentAssignment = {
-        id: `asgn-${task.id}-${partner.agent.id}-${partner.roleRequest.role}`,
-        taskId: task.id,
-        agentId: partner.agent.id,
-        role: partner.roleRequest.role,
-        objective:
-          partner.roleRequest.objective || `Review and assist with ${task.contract.objective}`,
-        status: 'pending',
-      };
-
-      ctx.assignmentRepo.create(leadAsgn, ctx.runId);
-      ctx.assignmentRepo.create(partnerAsgn, ctx.runId);
-
-      ctx.activityTracker?.register({
-        taskId: task.id,
-        assignmentId: leadAsgn.id,
-        taskTitle: task.title,
-        agentId: lead.agent.id,
-        agentName: lead.agent.name,
-        role: lead.roleRequest.role,
-        status: `Pair lead starting ${lead.roleRequest.role}...`,
-        startedAt: new Date(),
-        lastActiveAt: new Date(),
-      });
-
-      // 1. Lead creates worktree and implements
-      const wt = await ctx.worktreeManager.createWorktree(task.id, leadAsgn.id, headCommit);
-      const leadRes = await lead.agent.execute(leadAsgn, {
-        worktreePath: wt.path,
-        task: task.contract,
-        assignment: leadAsgn,
-        onProgress: ctx.onProgress,
-        abortSignal: ctx.abortSignal,
-      });
-
-      if (!leadRes.success) {
-        ctx.assignmentRepo.updateStatus(leadAsgn.id, 'failed');
-        ctx.assignmentRepo.updateStatus(partnerAsgn.id, 'cancelled');
-        return { success: false, output: leadRes.output, worktreePath: wt.path };
-      }
-
-      ctx.assignmentRepo.updateStatus(leadAsgn.id, 'completed');
-
-      // 2. Partner reviews/refines in the same worktree
-      ctx.assignmentRepo.updateStatus(partnerAsgn.id, 'running');
-      ctx.activityTracker?.register({
-        taskId: task.id,
-        assignmentId: partnerAsgn.id,
-        taskTitle: task.title,
-        agentId: partner.agent.id,
-        agentName: partner.agent.name,
-        role: partner.roleRequest.role,
-        status: `Pair partner reviewing (${partner.roleRequest.role})...`,
-        startedAt: new Date(),
-        lastActiveAt: new Date(),
-      });
-
-      const partnerRes = await partner.agent.execute(partnerAsgn, {
-        worktreePath: wt.path,
-        task: {
-          ...task.contract,
-          objective: partner.roleRequest.objective,
-        },
-        assignment: partnerAsgn,
-        onProgress: ctx.onProgress,
-        abortSignal: ctx.abortSignal,
-      });
-
-      if (!partnerRes.success) {
-        ctx.assignmentRepo.updateStatus(partnerAsgn.id, 'failed');
-        return { success: false, output: partnerRes.output, worktreePath: wt.path };
-      }
-
-      ctx.assignmentRepo.updateStatus(partnerAsgn.id, 'completed');
-
-      const combinedOutput = [
-        `[Lead - ${lead.agent.name} (${lead.roleRequest.role})]:\n${leadRes.output ?? 'Implemented'}`,
-        `[Partner - ${partner.agent.name} (${partner.roleRequest.role})]:\n${partnerRes.output ?? 'Reviewed and verified'}`,
-      ].join('\n\n');
-
-      return {
-        success: true,
-        commitHash: partnerRes.commitHash ?? leadRes.commitHash,
-        worktreePath: wt.path,
-        output: combinedOutput,
-      };
-    } else {
-      // Parallel / Multi-Worker Team (> 2 agents)
-      const implementer =
-        selected.find((s) => s.roleRequest.role === 'implementer') ?? selected[0];
-      const investigators = selected.filter((s) => s !== implementer);
-
-      const asgnGraph = AssignmentGraph.buildParallelInvestigationGraph(
-        task.id,
-        investigators.map((inv) => ({
-          id: inv.agent.id,
-          role: inv.roleRequest.role,
-          objective: inv.roleRequest.objective,
-        })),
-        {
-          id: implementer.agent.id,
-          role: implementer.roleRequest.role,
-          objective: implementer.roleRequest.objective || task.contract.objective,
-        },
-      );
-
-      for (const node of asgnGraph.getAllNodes()) {
-        ctx.assignmentRepo.create(node.assignment, ctx.runId);
-      }
-
-      const completed = new Set<string>();
-      const outputs: Array<{ role: string; agentId: string; output: string }> = [];
-
-      const runnable = asgnGraph.getRunnableAssignments(completed);
-      await Promise.all(
-        runnable.map(async (asgn) => {
-          ctx.activityTracker?.register({
-            taskId: task.id,
-            assignmentId: asgn.id,
-            taskTitle: task.title,
-            agentId: asgn.agentId,
-            agentName: asgn.agentId,
-            role: asgn.role,
-            status: `Investigating (${asgn.role})...`,
-            startedAt: new Date(),
-            lastActiveAt: new Date(),
-          });
-          const wt = await ctx.worktreeManager.createWorktree(task.id, asgn.id, headCommit);
-          const ag = ctx.agentRegistry.get(asgn.agentId)!;
-          const res = await ag.execute(asgn, {
-            worktreePath: wt.path,
-            task: task.contract,
-            assignment: asgn,
-            onProgress: ctx.onProgress,
-            abortSignal: ctx.abortSignal,
-          });
-          ctx.assignmentRepo.updateStatus(asgn.id, res.success ? 'completed' : 'failed');
-          outputs.push({ role: asgn.role, agentId: asgn.agentId, output: res.output ?? 'Done' });
-          completed.add(asgn.id);
-        }),
-      );
-
-      const synthesisNodes = asgnGraph.getRunnableAssignments(completed);
-      let synthesizedObjective = task.contract.objective;
-      if (synthesisNodes.length > 0) {
-        const synthesisNode = synthesisNodes[0];
-        const synthesized = SynthesisCoordinator.synthesize({
-          taskId: task.id,
-          investigationOutputs: outputs,
-        });
-        synthesizedObjective = `${task.contract.objective}\n\nSynthesized Guidance: ${synthesized.recommendedFix}`;
-        ctx.assignmentRepo.updateStatus(synthesisNode.id, 'completed');
-        completed.add(synthesisNode.id);
-      }
-
-      const implNodes = asgnGraph.getRunnableAssignments(completed);
-      if (implNodes.length === 0) {
-        return { success: false, output: 'No implementation assignment available after synthesis' };
-      }
-      const implNode = implNodes[0];
-      const implWt = await ctx.worktreeManager.createWorktree(task.id, implNode.id, headCommit);
-      const implAgent = ctx.agentRegistry.get(implNode.agentId)!;
-      const implRes = await implAgent.execute(implNode, {
-        worktreePath: implWt.path,
-        task: {
-          ...task.contract,
-          objective: synthesizedObjective,
-        },
-        assignment: implNode,
-        onProgress: ctx.onProgress,
-        abortSignal: ctx.abortSignal,
-      });
-
-      ctx.assignmentRepo.updateStatus(implNode.id, implRes.success ? 'completed' : 'failed');
-
-      return {
-        success: implRes.success,
-        commitHash: implRes.commitHash,
-        worktreePath: implWt.path,
-        output: implRes.output,
-      };
-    }
   }
 }

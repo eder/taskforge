@@ -17,7 +17,12 @@ import { GitService, WorktreeManager, RepositoryAnalyzer } from '@taskforge/work
 import { AgentRegistry, AgentDetector, FakeAgent } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { VerificationRunner } from '@taskforge/verification';
-import { IntegrationService, GitHubWorkflowService } from '@taskforge/integration';
+import {
+  IntegrationService,
+  GitHubWorkflowService,
+  DeliveryService,
+  integrationBranchName,
+} from '@taskforge/integration';
 import { DeterministicScheduler, RunOrchestrator } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
@@ -69,7 +74,7 @@ export function createCli(): Command {
       console.log(`  ${colors.darkGray}${'─'.repeat(64)}${colors.reset}`);
       for (const r of runs.slice(0, 10)) {
         const goal = r.goalId ? goalRepo.get(r.goalId) : undefined;
-        const branch = `taskforge/run-${r.id}`;
+        const branch = integrationBranchName(r.id);
         const statusColor =
           r.status === 'completed'
             ? colors.green
@@ -460,6 +465,40 @@ export function createCli(): Command {
         console.log(result.summary);
       }
       db.close();
+    });
+
+  // tf apply [run-id]
+  program
+    .command('apply [run-id]')
+    .description('Apply a completed run\'s changes to its target branch')
+    .action(async (runId?: string) => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+      const gitService = new GitService(repoRoot);
+      const deliveryService = new DeliveryService(repoRoot, gitService, runRepo);
+
+      const targetRunId = runId ?? deliveryService.findLatestReady()?.runId;
+      if (!targetRunId) {
+        console.error('Error: No run is ready to apply. Specify a run-id: tf apply <run-id>');
+        db.close();
+        process.exit(1);
+      }
+
+      try {
+        const result = await deliveryService.apply(targetRunId);
+        if (result.alreadyApplied) {
+          console.log(`\n✔ ${targetRunId} was already applied (commit ${result.commit.slice(0, 7)}).\n`);
+        } else {
+          console.log(`\n✔ Applied ${targetRunId} successfully (commit ${result.commit.slice(0, 7)}).\n`);
+        }
+      } catch (err) {
+        console.error(`\n✖ Could not apply ${targetRunId}: ${(err as Error).message}\n`);
+        process.exit(1);
+      } finally {
+        db.close();
+      }
     });
 
   // tf issue <number>

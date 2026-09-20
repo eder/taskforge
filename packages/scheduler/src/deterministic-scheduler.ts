@@ -1,4 +1,3 @@
-import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AgentAssignment, AgentUnavailableError, TaskForgeConfig } from '@taskforge/shared';
 import { TaskGraph, Task } from '@taskforge/core';
@@ -18,6 +17,7 @@ import { NegotiationManager } from '@taskforge/negotiation';
 import { CommunicationBus, EscalationHandler } from '@taskforge/collaboration';
 import { InteractionGateway } from '@taskforge/execution';
 import { ConcurrencyManager } from './concurrency-manager.js';
+import { executeGovernedAssignment } from './governed-assignment.js';
 
 export interface SchedulerContext {
   runId: string;
@@ -375,49 +375,14 @@ export class DeterministicScheduler {
     assignmentRepo.create(assignment, runId);
     this.ctx.onProgress?.(`[${task.id}] Assigned to ${agent.name}: "${task.title}"`);
 
-    this.ctx.activityTracker?.register({
-      taskId: task.id,
-      assignmentId,
-      taskTitle: task.title,
-      agentId,
-      agentName: agent.name,
-      role: assignment.role,
-      status: 'Provisioning isolated workspace...',
-      startedAt: new Date(),
-      lastActiveAt: new Date(),
-    });
-
     try {
-      eventRepo.append({
-        id: `evt-${randomUUID()}`,
-        runId,
-        taskId: task.id,
-        type: 'ASSIGNMENT_CREATED',
-        payload: { assignmentId, agentId },
-        timestamp: new Date(),
-      });
-
       // 2. Create isolated worktree for this assignment
       const isInvestigation = task.type === 'investigation';
-      const wt = await worktreeManager.createWorktree(task.id, assignmentId, baseCommit, {
-        detached: isInvestigation,
-      });
-      assignment.worktreePath = wt.path;
-      assignment.branchName = wt.branchName;
       if (isInvestigation) {
         this.ctx.onProgress?.(`[${task.id}] Created isolated read-only workspace`);
       } else {
-        this.ctx.onProgress?.(`[${task.id}] Created isolated worktree (${wt.branchName})`);
+        this.ctx.onProgress?.(`[${task.id}] Created isolated worktree`);
       }
-
-      workspaceRepo.register({
-        id: `ws-${task.id}-${randomUUID().slice(0, 8)}`,
-        runId,
-        taskId: task.id,
-        assignmentId,
-        path: wt.path,
-        branch: wt.branchName,
-      });
 
       graph.updateTaskStatus(task.id, 'running');
       taskRepo.updateStatus(task.id, 'running');
@@ -434,135 +399,47 @@ export class DeterministicScheduler {
         runId,
         taskId: task.id,
         type: 'TASK_STARTED',
-        payload: { taskId: task.id, assignmentId, worktreePath: wt.path },
+        payload: { taskId: task.id, assignmentId },
         timestamp: new Date(),
       });
 
-      // 3. Execute with agent
-      const logPath = path.resolve(
-        this.ctx.repoRoot,
-        config.execution.runsDir,
+      // 3. Execute with agent through the governed assignment pipeline
+      const govResult = await executeGovernedAssignment({
         runId,
-        `${task.id}-${assignmentId}.log`,
-      );
-
-      const activeState = this.ctx.activityTracker?.getByTaskId(task.id);
-      if (activeState) {
-        activeState.logPath = logPath;
-        activeState.status = 'Agent executing in worktree...';
-      }
-
-      const execRecord = executionRepo.create({
-        id: `exec-${task.id}-${randomUUID().slice(0, 8)}`,
-        runId,
-        taskId: task.id,
-        assignmentId,
-        agentId,
-        logPath,
-      });
-
-      let session: import('@taskforge/shared').AgentSession | undefined;
-      if (agent.createSession) {
-        session = await agent.createSession(assignment, {
-          worktreePath: wt.path,
-          task: task.contract,
-          assignment,
-          abortSignal,
-        });
-
-        if (this.ctx.interactionGateway && session) {
-          (async () => {
-            try {
-              for await (const event of session.events()) {
-                if (event.type === 'permission_request') {
-                  assignmentRepo.updateStatus(assignmentId, 'waiting_permission');
-                  taskRepo.updateStatus(task.id, 'waiting_permission');
-                  graph.updateTaskStatus(task.id, 'waiting_permission');
-                  this.ctx.activityTracker?.setAttention(task.id, {
-                    type: 'permission',
-                    prompt: (event as any).prompt || 'Permission approval required',
-                    resource: (event as any).resource,
-                  });
-                } else if (event.type === 'question') {
-                  assignmentRepo.updateStatus(assignmentId, 'waiting_input');
-                  taskRepo.updateStatus(task.id, 'waiting_input');
-                  graph.updateTaskStatus(task.id, 'waiting_input');
-                  this.ctx.activityTracker?.setAttention(task.id, {
-                    type: 'question',
-                    prompt: (event as any).prompt || 'Question answer required',
-                  });
-                } else if (event.type === 'authentication_required') {
-                  assignmentRepo.updateStatus(assignmentId, 'waiting_auth');
-                  taskRepo.updateStatus(task.id, 'waiting_auth');
-                  graph.updateTaskStatus(task.id, 'waiting_auth');
-                  this.ctx.activityTracker?.setAttention(task.id, {
-                    type: 'auth',
-                    prompt: (event as any).prompt || 'Authentication required',
-                  });
-                }
-
-                await this.ctx.interactionGateway!.handleEvent(event, session, {
-                  runId,
-                  taskId: task.id,
-                  assignmentId,
-                  agentId,
-                });
-
-                this.ctx.activityTracker?.clearAttention(task.id);
-                this.ctx.activityTracker?.updateStatus(task.id, 'Resumed work after approval');
-                assignmentRepo.updateStatus(assignmentId, 'running');
-                taskRepo.updateStatus(task.id, 'running');
-                graph.updateTaskStatus(task.id, 'running');
-              }
-            } catch {
-              // session closed
-            }
-          })();
-        }
-      }
-
-      const agentResult = await agent.execute(assignment, {
-        worktreePath: wt.path,
-        task: task.contract,
+        baseCommit,
+        repoRoot: this.ctx.repoRoot,
+        config,
+        task,
         assignment,
+        agent,
+        detached: isInvestigation,
+        worktreeManager,
+        workspaceRepo,
+        assignmentRepo,
+        executionRepo,
+        eventRepo,
+        interactionGateway: this.ctx.interactionGateway,
+        activityTracker: this.ctx.activityTracker,
         abortSignal,
-        logPath,
-        onActivity: (activity: string) => {
-          this.ctx.activityTracker?.updateStatus(task.id, activity);
+        onAttention: (kind) => {
+          taskRepo.updateStatus(task.id, kind);
+          graph.updateTaskStatus(task.id, kind);
         },
-        onEvent: async (event) => {
-          if (this.ctx.interactionGateway && session) {
-            if (event.type === 'permission_request') {
-              assignmentRepo.updateStatus(assignmentId, 'waiting_permission');
-              taskRepo.updateStatus(task.id, 'waiting_permission');
-              graph.updateTaskStatus(task.id, 'waiting_permission');
-              this.ctx.activityTracker?.setAttention(task.id, {
-                type: 'permission',
-                prompt: (event as any).prompt || 'Permission approval required',
-                resource: (event as any).resource,
-              });
-            }
-            await this.ctx.interactionGateway.handleEvent(event, session, {
-              runId,
-              taskId: task.id,
-              assignmentId,
-              agentId,
-            });
-            this.ctx.activityTracker?.clearAttention(task.id);
-            this.ctx.activityTracker?.updateStatus(task.id, 'Resumed work after approval');
-            assignmentRepo.updateStatus(assignmentId, 'running');
-            taskRepo.updateStatus(task.id, 'running');
-            graph.updateTaskStatus(task.id, 'running');
-          }
+        onResumed: () => {
+          taskRepo.updateStatus(task.id, 'running');
+          graph.updateTaskStatus(task.id, 'running');
         },
       });
 
-    executionRepo.complete(
-      execRecord.id,
-      agentResult.success ? 'success' : 'failed',
-      agentResult.success ? 0 : 1,
-      agentResult.message,
-    );
+      const wt = { path: govResult.worktreePath };
+      const agentResult = {
+        success: govResult.success,
+        commitHash: govResult.commitHash,
+        output: govResult.output,
+        message: govResult.message,
+        durationMs: govResult.durationMs,
+        collaborationProposal: govResult.collaborationProposal,
+      };
 
     if (agentResult.collaborationProposal && this.ctx.escalationHandler) {
       this.ctx.escalationHandler.handleEscalation({
@@ -571,7 +448,6 @@ export class DeterministicScheduler {
         workerAgentId: agentId,
         proposal: agentResult.collaborationProposal,
       });
-      assignmentRepo.updateStatus(assignmentId, 'failed');
       graph.updateTaskStatus(task.id, 'blocked');
       taskRepo.updateStatus(task.id, 'blocked');
       this.ctx.onProgress?.(
@@ -581,7 +457,6 @@ export class DeterministicScheduler {
     }
 
     if (!agentResult.success) {
-      assignmentRepo.updateStatus(assignmentId, 'failed');
       const rework = taskRepo.incrementRework(task.id);
 
       const errorSnippet = agentResult.output
@@ -622,7 +497,6 @@ export class DeterministicScheduler {
       return;
     }
 
-    assignmentRepo.updateStatus(assignmentId, 'completed');
     graph.updateTaskStatus(task.id, 'completed');
     taskRepo.updateStatus(task.id, 'completed');
 

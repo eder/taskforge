@@ -105,6 +105,18 @@ export class RunRepository {
       .run(status, status, now, id);
   }
 
+  /** Shallow-merges `patch` into the run's existing metadata_json. */
+  mergeMetadata(id: string, patch: Record<string, unknown>): void {
+    const row = this.db.prepare('SELECT metadata_json FROM runs WHERE id = ?').get(id) as
+      | { metadata_json: string | null }
+      | undefined;
+    const existing = row?.metadata_json ? JSON.parse(row.metadata_json) : {};
+    const merged = { ...existing, ...patch };
+    this.db
+      .prepare('UPDATE runs SET metadata_json = ? WHERE id = ?')
+      .run(JSON.stringify(merged), id);
+  }
+
   get(id: string): RunRecord | undefined {
     const row = this.db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as
       | {

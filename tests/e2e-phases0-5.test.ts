@@ -17,7 +17,7 @@ import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { FakeAgent, AgentRegistry } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { VerificationRunner, RunVerificationOptions } from '@taskforge/verification';
-import { IntegrationService } from '@taskforge/integration';
+import { IntegrationService, integrationBranchName } from '@taskforge/integration';
 import { DeterministicScheduler } from '@taskforge/scheduler';
 import { getDefaultConfig, TaskForgeConfig } from '@taskforge/shared';
 
@@ -266,7 +266,7 @@ describe('TaskForge Phases 0-5 End-to-End Orchestration', () => {
     expect(graph.getTask('TASK-C')?.status).toBe('integrated');
 
     // 3. Integration branch was created and contains changes from all 3 tasks!
-    expect(result.integrationBranch).toBe(`taskforge/run-${runId}`);
+    expect(result.integrationBranch).toBe(integrationBranchName(runId));
     const branchExists = await gitService.branchExists(result.integrationBranch!);
     expect(branchExists).toBe(true);
 
@@ -413,7 +413,7 @@ describe('TaskForge Phases 0-5 End-to-End Orchestration', () => {
     expect(finalTask?.status).toBe('blocked');
 
     // Integration branch was not created or no bad commit integrated
-    const branchExists = await gitService.branchExists(`taskforge/run-${runId}`);
+    const branchExists = await gitService.branchExists(integrationBranchName(runId));
     expect(branchExists).toBe(false);
   });
 });

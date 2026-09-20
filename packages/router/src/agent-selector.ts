@@ -4,6 +4,8 @@ import { RoleRequest } from './router-types.js';
 export interface SelectedAgentAssignment {
   roleRequest: RoleRequest;
   agent: AgentAdapter;
+  /** True when this agent was already assigned to another role in the same selection call. */
+  degraded?: boolean;
 }
 
 export class AgentSelector {
@@ -53,9 +55,9 @@ export class AgentSelector {
         }
       }
 
-      // 3. Fallback to any ready agent with available quota
+      // 3. Fallback to any ready, unused agent with available quota
       if (!chosen) {
-        for (const candidate of availableAdapters) {
+        for (const candidate of availableAdapters.filter((a) => !usedAgentIds.has(a.id))) {
           if ((await candidate.detect()) && quotaTracker.isAvailable(candidate.id)) {
             chosen = candidate;
             break;
@@ -63,11 +65,26 @@ export class AgentSelector {
         }
       }
 
-      // 4. Last-ditch fallback to any detected agent
+      // 4. Last-ditch fallback to any detected, unused agent
+      if (!chosen) {
+        for (const candidate of availableAdapters.filter((a) => !usedAgentIds.has(a.id))) {
+          if (await candidate.detect()) {
+            chosen = candidate;
+            break;
+          }
+        }
+      }
+
+      let degraded = false;
+
+      // 5. Degraded fallback: only reached when no unused agent is available at all.
+      // Reusing an agent already staffed on another role is made explicit via
+      // `degraded: true` rather than silently duplicating it.
       if (!chosen) {
         for (const candidate of availableAdapters) {
           if (await candidate.detect()) {
             chosen = candidate;
+            degraded = true;
             break;
           }
         }
@@ -78,6 +95,7 @@ export class AgentSelector {
         results.push({
           roleRequest: req,
           agent: chosen,
+          degraded: degraded || undefined,
         });
       }
     }

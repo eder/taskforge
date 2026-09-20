@@ -49,8 +49,12 @@ export class GitService {
     }
   }
 
-  async getStatus(cwd: string = this.repoRoot): Promise<GitStatus> {
-    const porcelain = await this.exec(['status', '--porcelain'], cwd);
+  async getStatus(cwd: string = this.repoRoot, excludePathspecs: string[] = []): Promise<GitStatus> {
+    const args = ['status', '--porcelain'];
+    if (excludePathspecs.length > 0) {
+      args.push('--', '.', ...excludePathspecs.map((p) => `:(exclude)${p}`));
+    }
+    const porcelain = await this.exec(args, cwd);
     const uncommittedFiles = porcelain
       .split('\n')
       .map((line) => line.trim())
@@ -146,6 +150,14 @@ export class GitService {
     }
   }
 
+  async listLocalBranches(cwd: string = this.repoRoot): Promise<string[]> {
+    const out = await this.exec(['branch', '--format=%(refname:short)'], cwd).catch(() => '');
+    return out
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
   async stageAndCommit(message: string, cwd: string): Promise<string> {
     await this.exec(['add', '-A'], cwd);
     const status = await this.getStatus(cwd);
@@ -168,5 +180,39 @@ export class GitService {
 
   async checkout(ref: string, cwd: string = this.repoRoot): Promise<void> {
     await this.exec(['checkout', ref], cwd);
+  }
+
+  async merge(
+    branch: string,
+    options?: { noFf?: boolean; noCommit?: boolean; message?: string },
+    cwd: string = this.repoRoot,
+  ): Promise<string> {
+    const args = ['merge', branch];
+    if (options?.noFf) args.push('--no-ff');
+    if (options?.noCommit) args.push('--no-commit');
+    if (options?.message) args.push('-m', options.message);
+    await this.exec(args, cwd);
+    return this.getHeadCommit(cwd);
+  }
+
+  async mergeAbort(cwd: string = this.repoRoot): Promise<void> {
+    await this.exec(['merge', '--abort'], cwd).catch(() => {});
+  }
+
+  async isAncestor(
+    ancestorRef: string,
+    ref: string,
+    cwd: string = this.repoRoot,
+  ): Promise<boolean> {
+    try {
+      await this.exec(['merge-base', '--is-ancestor', ancestorRef, ref], cwd);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async diffStat(fromRef: string, toRef: string, cwd: string = this.repoRoot): Promise<string> {
+    return this.exec(['diff', '--stat', `${fromRef}...${toRef}`], cwd);
   }
 }
