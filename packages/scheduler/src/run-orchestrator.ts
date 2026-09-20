@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   TaskForgeConfig,
   loadConfig,
@@ -42,6 +43,7 @@ import {
   SchedulerContext,
 } from './deterministic-scheduler.js';
 import { executeExecutionTeam } from './execution-team.js';
+import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
 
 export interface OrchestratorOptions {
   repoRoot: string;
@@ -60,6 +62,9 @@ export interface OrchestratorOptions {
   githubWorkflowService?: GitHubWorkflowService;
   interactionGateway?: InteractionGateway;
   activityTracker?: AgentActivityTracker;
+  communicationBus?: CommunicationBus;
+  sessionRegistry?: SessionRegistry;
+  escalationHandler?: EscalationHandler;
 }
 
 export interface RunOptions {
@@ -135,6 +140,9 @@ export class RunOrchestrator {
   private workspaceRepo: WorkspaceRepository;
   private interactionRepo: InteractionRepository;
   private interactionGateway: InteractionGateway;
+  private communicationBus: CommunicationBus;
+  private sessionRegistry: SessionRegistry;
+  private escalationHandler: EscalationHandler;
   private activityTracker?: AgentActivityTracker;
   private workflowSuggestionShown = false;
 
@@ -161,7 +169,25 @@ export class RunOrchestrator {
         interactionRepo: this.interactionRepo,
       });
 
-    this.agentRegistry = options.agentRegistry ?? new AgentRegistry();
+    this.sessionRegistry = options.sessionRegistry ?? new SessionRegistry();
+    this.communicationBus =
+      options.communicationBus ??
+      new CommunicationBus(
+        this.db,
+        this.eventRepo,
+        {
+          maxMessagesPerRound: this.config.collaboration?.maxMessagesPerRound,
+          maxRounds: this.config.collaboration?.maxRounds,
+        },
+        this.sessionRegistry,
+      );
+    this.escalationHandler =
+      options.escalationHandler ??
+      new EscalationHandler(this.eventRepo);
+
+    this.agentRegistry =
+      options.agentRegistry ??
+      new AgentRegistry(true, this.config.agents);
     this.planner = options.planner ?? new HeuristicPlanner();
     this.negotiator =
       options.negotiator ?? new NegotiationManager(undefined, this.eventRepo, this.db);
@@ -325,8 +351,32 @@ export class RunOrchestrator {
           });
         }
 
-        let selected = await this.agentSelector.selectAgents(routing.roles);
+        const maxAgents = this.config.collaboration?.maxAgentsPerTask ?? 3;
+        if (routing.roles.length > maxAgents) {
+          const originalCount = routing.roles.length;
+          routing.roles = routing.roles.slice(0, maxAgents);
+          if (routing.teamSize > maxAgents) {
+            routing.teamSize = maxAgents;
+          }
+          this.eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId,
+            taskId: task.id,
+            type: 'STAFFING_CAPPED',
+            payload: {
+              taskId: task.id,
+              originalRolesCount: originalCount,
+              cappedTo: maxAgents,
+              reason: `collaboration.maxAgentsPerTask limit (${maxAgents}) enforced`,
+            },
+            timestamp: new Date(),
+          });
+          options.onProgress?.(
+            `[${task.id}] Staffing capped from ${originalCount} to ${maxAgents} agents (collaboration.maxAgentsPerTask limit)`,
+          );
+        }
 
+        let selected = await this.agentSelector.selectAgents(routing.roles);
 
         // In fakeFallback mode, if roles were requested, ensure fake agent fills them
         if (selected.length === 0 && fallbackAgent) {
@@ -339,6 +389,10 @@ export class RunOrchestrator {
             roleRequest: routing.roles[1],
             agent: fallbackAgent,
           });
+        }
+
+        if (selected.length > maxAgents) {
+          selected = selected.slice(0, maxAgents);
         }
 
         if (selected.length > 0) {
@@ -389,6 +443,9 @@ export class RunOrchestrator {
       eventRepo: this.eventRepo,
       workspaceRepo: this.workspaceRepo,
       interactionGateway: this.interactionGateway,
+      communicationBus: this.communicationBus,
+      sessionRegistry: this.sessionRegistry,
+      escalationHandler: this.escalationHandler,
       activityTracker: options.activityTracker ?? this.activityTracker,
       onProgress: options.onProgress,
       abortSignal: options.abortSignal,

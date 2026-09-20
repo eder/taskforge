@@ -17,6 +17,7 @@ export interface ProcessRunOptions {
   onStderr?: (chunk: string) => void;
   onSpawn?: (child: ChildProcess) => void;
   stdin?: import('node:stream').Readable | string;
+  closeStdinOnSpawn?: boolean;
 }
 
 export interface ProcessRunResult {
@@ -116,6 +117,12 @@ export class ProcessRunner {
           }
         } catch {
           // ignore stdin error
+        }
+      } else if (child?.stdin && options.closeStdinOnSpawn) {
+        try {
+          child.stdin.end();
+        } catch {
+          // ignore stdin close error
         }
       }
 

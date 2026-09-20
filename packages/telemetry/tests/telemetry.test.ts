@@ -75,6 +75,52 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(statsReport).toContain('Run Metrics - run-cost-test');
       expect(statsReport).toContain('2/2 completed');
     });
+
+    it('extracts and surfaces staffing bottleneck metrics', () => {
+      const collector = new TelemetryCollector(db);
+      const runId = 'run-staffing-metrics';
+
+      db.prepare(`INSERT INTO runs (id, status, created_at) VALUES (?, 'completed', ?)`).run(
+        runId,
+        new Date().toISOString(),
+      );
+
+      // Record STAFFING_CAPPED and COLLABORATION_REJECTED events
+      const now = new Date().toISOString();
+      db.prepare(
+        `INSERT INTO events (id, run_id, task_id, type, payload_json, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('evt-1', runId, 'TASK-1', 'STAFFING_CAPPED', JSON.stringify({ cappedTo: 2 }), now);
+      db.prepare(
+        `INSERT INTO events (id, run_id, task_id, type, payload_json, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('evt-2', runId, 'TASK-1', 'COLLABORATION_REJECTED', JSON.stringify({ reason: 'limit' }), now);
+      db.prepare(
+        `INSERT INTO events (id, run_id, task_id, type, payload_json, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('evt-3', runId, 'TASK-2', 'COLLABORATION_APPROVED', JSON.stringify({ helper: 'agentB' }), now);
+
+      const bottlenecks = collector.getStaffingMetrics(runId);
+      expect(bottlenecks.staffingCappedCount).toBe(1);
+      expect(bottlenecks.collaborationRejectedCount).toBe(1);
+      expect(bottlenecks.collaborationApprovedCount).toBe(1);
+      expect(bottlenecks.collaborationDelayedCount).toBe(0);
+
+      collector.recordRunMetrics({
+        runId,
+        durationMs: 3000,
+        tasksCount: 2,
+        tasksCompleted: 2,
+        tasksFailed: 0,
+        reworkCount: 0,
+        escalationsCount: 1,
+      });
+
+      const summary = collector.getRunSummary(runId);
+      expect(summary?.staffingBottlenecks?.staffingCappedCount).toBe(1);
+      expect(summary?.staffingBottlenecks?.collaborationRejectedCount).toBe(1);
+
+      const report = collector.formatStatsReport(runId);
+      expect(report).toContain('Staffing bottlenecks: 1 capped, 1 rejected');
+      expect(report).toContain('Collaboration approved: 1 emergent helper assignment(s)');
+    });
   });
 
   describe('PerformanceEngine', () => {

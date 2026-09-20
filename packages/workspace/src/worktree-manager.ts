@@ -118,7 +118,7 @@ export class WorktreeManager {
     const key = `${taskId}:${assignmentId}`;
     const info = this.activeWorktrees.get(key);
     const targetPath = this.getWorktreePath(taskId, assignmentId);
-    const branchName = info?.branchName;
+    const branchName = info?.branchName ?? `taskforge/${taskId}/${assignmentId}`;
 
     const removeResult = await ProcessRunner.run({
       command: 'git',
@@ -127,15 +127,14 @@ export class WorktreeManager {
       timeoutMs: 30000,
     });
 
-    if (removeResult.exitCode !== 0 && fs.existsSync(targetPath)) {
-      // Worktree might not be in git tracking or dirty; if force, manual delete and prune
-      if (force) {
+    if (fs.existsSync(targetPath)) {
+      if (force || removeResult.exitCode !== 0) {
         fs.rmSync(targetPath, { recursive: true, force: true });
         await ProcessRunner.run({
           command: 'git',
           args: ['worktree', 'prune'],
           cwd: this.repoRoot,
-        });
+        }).catch(() => {});
       }
     }
 

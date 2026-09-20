@@ -99,4 +99,28 @@ describe('Core - TaskGraph and State Machine', () => {
 
     expect(() => TaskStateMachine.transition(task, 'integrated')).toThrow(InvalidTaskGraphError);
   });
+
+  it('computes direct and transitive dependents accurately', () => {
+    const root = createMockTask('ROOT', []);
+    const mid1 = createMockTask('MID-1', ['ROOT']);
+    const mid2 = createMockTask('MID-2', ['ROOT']);
+    const leaf = createMockTask('LEAF', ['MID-1']);
+    const independent = createMockTask('INDEP', []);
+
+    const graph = new TaskGraph([root, mid1, mid2, leaf, independent]);
+
+    const directOfRoot = graph.getDirectDependents('ROOT').map((t) => t.id);
+    expect(directOfRoot).toHaveLength(2);
+    expect(directOfRoot).toContain('MID-1');
+    expect(directOfRoot).toContain('MID-2');
+
+    const transitiveOfRoot = graph.getTransitiveDependents('ROOT').map((t) => t.id);
+    expect(transitiveOfRoot).toHaveLength(3);
+    expect(transitiveOfRoot).toContain('MID-1');
+    expect(transitiveOfRoot).toContain('MID-2');
+    expect(transitiveOfRoot).toContain('LEAF');
+
+    expect(graph.getTransitiveDependents('LEAF')).toHaveLength(0);
+    expect(graph.getTransitiveDependents('INDEP')).toHaveLength(0);
+  });
 });

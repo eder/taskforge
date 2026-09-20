@@ -129,6 +129,7 @@ export interface ActiveAgentState {
     prompt: string;
     resource?: string;
   };
+  criticalFindings?: ReviewFinding[];
 }
 
 export interface AgentContext {

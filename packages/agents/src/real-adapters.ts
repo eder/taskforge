@@ -272,6 +272,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       command: this.commandBinary,
       args,
       cwd: context.worktreePath,
+      closeStdinOnSpawn: this.id === 'codex',
       env: {
         ...context.environment,
         ...this.options.env,

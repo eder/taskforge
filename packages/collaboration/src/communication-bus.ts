@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { AgentMessage, CollaborationLimitError } from '@taskforge/shared';
 import { TaskForgeDatabase, EventRepository } from '@taskforge/persistence';
 import { AgentAdapter } from '@taskforge/agents';
+import { SessionRegistry } from './session-registry.js';
 
 export interface BusOptions {
   maxMessagesPerRound?: number;
   maxRounds?: number;
+  sessionRegistry?: SessionRegistry;
 }
 
 export class CommunicationBus {
@@ -13,12 +15,24 @@ export class CommunicationBus {
   private currentRound = 1;
   private taskAgents: Map<string, Set<string>> = new Map();
   private agentAdapters: Map<string, AgentAdapter> = new Map();
+  private sessionRegistry?: SessionRegistry;
 
   constructor(
     private db?: TaskForgeDatabase,
     private eventRepo?: EventRepository,
     private options: BusOptions = {},
-  ) {}
+    sessionRegistry?: SessionRegistry,
+  ) {
+    this.sessionRegistry = sessionRegistry ?? options.sessionRegistry;
+  }
+
+  setSessionRegistry(registry: SessionRegistry): void {
+    this.sessionRegistry = registry;
+  }
+
+  getSessionRegistry(): SessionRegistry | undefined {
+    return this.sessionRegistry;
+  }
 
   registerAgent(assignmentId: string, adapter: AgentAdapter): void {
     this.agentAdapters.set(assignmentId, adapter);
@@ -124,9 +138,14 @@ export class CommunicationBus {
 
     // 3. Deliver to target agent if available
     if (fullMessage.toAssignmentId) {
-      const recipient = this.agentAdapters.get(fullMessage.toAssignmentId);
-      if (recipient && recipient.send) {
-        await recipient.send(fullMessage.toAssignmentId, fullMessage);
+      const sessionEntry = this.sessionRegistry?.getByAssignment(fullMessage.toAssignmentId);
+      if (sessionEntry && sessionEntry.adapter.send) {
+        await sessionEntry.adapter.send(sessionEntry.sessionId, fullMessage);
+      } else {
+        const recipient = this.agentAdapters.get(fullMessage.toAssignmentId);
+        if (recipient && recipient.send) {
+          await recipient.send(fullMessage.toAssignmentId, fullMessage);
+        }
       }
     }
 

@@ -49,6 +49,13 @@ export interface AgentPerformanceStats {
   compositeScore: number;
 }
 
+export interface StaffingBottlenecks {
+  staffingCappedCount: number;
+  collaborationRejectedCount: number;
+  collaborationApprovedCount: number;
+  collaborationDelayedCount: number;
+}
+
 export interface RunSummaryStats {
   runId: string;
   durationMs: number;
@@ -59,4 +66,5 @@ export interface RunSummaryStats {
   reworkCount: number;
   escalationsCount: number;
   firstPassRate: number;
+  staffingBottlenecks?: StaffingBottlenecks;
 }

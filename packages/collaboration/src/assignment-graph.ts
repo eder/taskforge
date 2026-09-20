@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { AgentAssignment, AgentRole } from '@taskforge/shared';
 
 export interface InternalAssignmentNode {
@@ -42,14 +43,20 @@ export class AssignmentGraph {
     investigators: Array<{ id: string; role: AgentRole; objective: string }>,
     implementer: { id: string; role: AgentRole; objective: string },
     reviewer?: { id: string; role: AgentRole; objective: string },
+    maxAgents?: number,
   ): AssignmentGraph {
     const graph = new AssignmentGraph();
     const investigatorIds: string[] = [];
 
+    const effectiveInvestigators =
+      maxAgents && maxAgents > 0
+        ? investigators.slice(0, Math.max(1, maxAgents - (reviewer ? 2 : 1)))
+        : investigators;
+
     // 1. Investigators run in parallel
-    for (const inv of investigators) {
+    for (const inv of effectiveInvestigators) {
       const asgn: AgentAssignment = {
-        id: `asgn-${taskId}-${inv.id}`,
+        id: `asgn-${taskId}-${inv.id}-${randomUUID().slice(0, 8)}`,
         taskId,
         agentId: inv.id,
         role: inv.role,
@@ -62,7 +69,7 @@ export class AssignmentGraph {
 
     // 2. Synthesis node depends on all investigators
     const synthesisAsgn: AgentAssignment = {
-      id: `asgn-${taskId}-synthesis`,
+      id: `asgn-${taskId}-synthesis-${randomUUID().slice(0, 8)}`,
       taskId,
       agentId: implementer.id,
       role: 'lead',
@@ -73,7 +80,7 @@ export class AssignmentGraph {
 
     // 3. Implementer depends on synthesis
     const implAsgn: AgentAssignment = {
-      id: `asgn-${taskId}-implementer`,
+      id: `asgn-${taskId}-implementer-${randomUUID().slice(0, 8)}`,
       taskId,
       agentId: implementer.id,
       role: implementer.role,
@@ -85,7 +92,7 @@ export class AssignmentGraph {
     // 4. Reviewer depends on implementer
     if (reviewer) {
       const revAsgn: AgentAssignment = {
-        id: `asgn-${taskId}-reviewer`,
+        id: `asgn-${taskId}-reviewer-${randomUUID().slice(0, 8)}`,
         taskId,
         agentId: reviewer.id,
         role: reviewer.role,

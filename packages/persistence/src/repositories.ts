@@ -512,6 +512,42 @@ export class AssignmentRepository {
       updatedAt: r.updated_at,
     }));
   }
+
+  get(id: string): AssignmentRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM assignments WHERE id = ?')
+      .get(id) as
+      | {
+          id: string;
+          task_id: string;
+          run_id: string;
+          agent_id: string;
+          role: string;
+          objective: string;
+          status: string;
+          branch_name: string | null;
+          worktree_path: string | null;
+          created_at: string;
+          updated_at: string;
+        }
+      | undefined;
+
+    if (!row) return undefined;
+
+    return {
+      id: row.id,
+      taskId: row.task_id,
+      runId: row.run_id,
+      agentId: row.agent_id,
+      role: row.role,
+      objective: row.objective,
+      status: row.status as AssignmentStatus,
+      branchName: row.branch_name ?? undefined,
+      worktreePath: row.worktree_path ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
 }
 
 export class ExecutionRepository {
@@ -624,6 +660,28 @@ export class EventRepository {
     const rows = this.db
       .prepare('SELECT * FROM events WHERE run_id = ? ORDER BY timestamp ASC')
       .all(runId) as Array<{
+      id: string;
+      run_id: string;
+      task_id: string | null;
+      type: string;
+      payload_json: string;
+      timestamp: string;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      runId: r.run_id,
+      taskId: r.task_id ?? undefined,
+      type: r.type as EventType,
+      payload: JSON.parse(r.payload_json),
+      timestamp: new Date(r.timestamp),
+    }));
+  }
+
+  listByTask(taskId: string): TaskForgeEvent[] {
+    const rows = this.db
+      .prepare('SELECT * FROM events WHERE task_id = ? ORDER BY timestamp ASC')
+      .all(taskId) as Array<{
       id: string;
       run_id: string;
       task_id: string | null;

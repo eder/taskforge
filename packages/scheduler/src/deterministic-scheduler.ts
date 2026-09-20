@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AgentAssignment, AgentUnavailableError, TaskForgeConfig } from '@taskforge/shared';
-import { TaskGraph, Task } from '@taskforge/core';
+import { TaskGraph, Task, computeTaskPriority } from '@taskforge/core';
 import { AgentRegistry, AgentActivityTracker } from '@taskforge/agents';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import {
@@ -14,7 +14,7 @@ import {
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
 import { NegotiationManager } from '@taskforge/negotiation';
-import { CommunicationBus, EscalationHandler } from '@taskforge/collaboration';
+import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
 import { InteractionGateway } from '@taskforge/execution';
 import { ConcurrencyManager } from './concurrency-manager.js';
 import { executeGovernedAssignment } from './governed-assignment.js';
@@ -41,7 +41,9 @@ export interface SchedulerContext {
   preferredAgentMapping?: Record<string, string>;
   abortSignal?: AbortSignal;
   negotiator?: NegotiationManager;
+  concurrency?: ConcurrencyManager;
   communicationBus?: CommunicationBus;
+  sessionRegistry?: SessionRegistry;
   escalationHandler?: EscalationHandler;
   onProgress?: (message: string) => void;
   collaborativeExecutors?: Map<
@@ -68,6 +70,7 @@ export class DeterministicScheduler {
 
   constructor(private ctx: SchedulerContext) {
     this.concurrency = new ConcurrencyManager(ctx.config);
+    this.ctx.concurrency = this.concurrency;
   }
 
   private resolveAgentId(task: Task): string {
@@ -133,6 +136,13 @@ export class DeterministicScheduler {
         // No candidates and nothing running, but not all completed -> deadlock or blocked
         break;
       }
+
+      // Prioritize candidate tasks: higher-criticality or dependency-blocking tasks acquire slots first
+      candidates.sort((a, b) => {
+        const prioA = computeTaskPriority(a, graph);
+        const prioB = computeTaskPriority(b, graph);
+        return prioB - prioA;
+      });
 
       for (const task of candidates) {
         const agentId = this.resolveAgentId(task);
@@ -273,9 +283,10 @@ export class DeterministicScheduler {
 
     // Check for collaborative execution override
     if (this.ctx.collaborativeExecutors?.has(task.id)) {
+      const collabAsgnId = `asgn-${task.id}-collab-${randomUUID().slice(0, 8)}`;
       this.ctx.activityTracker?.register({
         taskId: task.id,
-        assignmentId: `asgn-${task.id}-collab`,
+        assignmentId: collabAsgnId,
         taskTitle: task.title,
         agentId: 'collaborative',
         agentName: 'Collaborative Pair',
@@ -352,6 +363,12 @@ export class DeterministicScheduler {
         return;
       } finally {
         this.ctx.activityTracker?.complete(task.id);
+        const taskAssignments = this.ctx.assignmentRepo.listByTask(task.id);
+        for (const asgn of taskAssignments) {
+          await this.ctx.worktreeManager
+            .removeWorktree(task.id, asgn.id, true, true)
+            .catch(() => {});
+        }
       }
     }
 
@@ -420,6 +437,11 @@ export class DeterministicScheduler {
         eventRepo,
         interactionGateway: this.ctx.interactionGateway,
         activityTracker: this.ctx.activityTracker,
+        concurrency: this.concurrency,
+        graph,
+        priority: computeTaskPriority(task, graph),
+        communicationBus: this.ctx.communicationBus,
+        sessionRegistry: this.ctx.sessionRegistry,
         abortSignal,
         onAttention: (kind) => {
           taskRepo.updateStatus(task.id, kind);
@@ -441,20 +463,166 @@ export class DeterministicScheduler {
         collaborationProposal: govResult.collaborationProposal,
       };
 
-    if (agentResult.collaborationProposal && this.ctx.escalationHandler) {
-      this.ctx.escalationHandler.handleEscalation({
-        runId,
-        taskId: task.id,
-        workerAgentId: agentId,
-        proposal: agentResult.collaborationProposal,
-      });
-      graph.updateTaskStatus(task.id, 'blocked');
-      taskRepo.updateStatus(task.id, 'blocked');
-      this.ctx.onProgress?.(
-        `[${task.id}] Emergent collaboration escalated (${agentResult.collaborationProposal.reason})`,
-      );
-      return;
-    }
+      if (agentResult.collaborationProposal && this.ctx.escalationHandler) {
+        this.ctx.escalationHandler.handleEscalation({
+          runId,
+          taskId: task.id,
+          workerAgentId: agentId,
+          proposal: agentResult.collaborationProposal,
+        });
+
+        const maxAgents = this.ctx.config.collaboration?.maxAgentsPerTask ?? 3;
+        const existingAssignments = assignmentRepo.listByTask(task.id);
+        const requestedRoles = agentResult.collaborationProposal.requestedRoles?.length
+          ? agentResult.collaborationProposal.requestedRoles
+          : ['reviewer' as const];
+
+        if (existingAssignments.length >= maxAgents) {
+          this.ctx.onProgress?.(
+            `[${task.id}] ⚠ Emergent collaboration rejected: maxAgentsPerTask limit (${maxAgents}) reached.`,
+          );
+          eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId,
+            taskId: task.id,
+            type: 'COLLABORATION_REJECTED',
+            payload: {
+              taskId: task.id,
+              reason: `maxAgentsPerTask limit (${maxAgents}) reached`,
+              existingCount: existingAssignments.length,
+            },
+            timestamp: new Date(),
+          });
+          graph.updateTaskStatus(task.id, 'failed');
+          taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
+
+        const availableAgents = this.ctx.agentRegistry.list().map((a) => a.id);
+        const candidateAgentId =
+          availableAgents.find((id) => id !== agentId) ?? availableAgents[0];
+        const candidateAgent = candidateAgentId ? this.ctx.agentRegistry.get(candidateAgentId) : undefined;
+
+        if (!candidateAgent) {
+          this.ctx.onProgress?.(
+            `[${task.id}] ⚠ Emergent collaboration rejected: no suitable alternative agent found.`,
+          );
+          graph.updateTaskStatus(task.id, 'failed');
+          taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
+
+        if (this.concurrency && !this.concurrency.canSchedule(candidateAgent.id)) {
+          this.ctx.onProgress?.(
+            `[${task.id}] ⚠ Emergent collaboration delayed: concurrency slot unavailable for ${candidateAgent.name}.`,
+          );
+          eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId,
+            taskId: task.id,
+            type: 'COLLABORATION_DELAYED',
+            payload: {
+              taskId: task.id,
+              reason: 'concurrency unavailable',
+              agentId: candidateAgent.id,
+            },
+            timestamp: new Date(),
+          });
+          graph.updateTaskStatus(task.id, 'blocked');
+          taskRepo.updateStatus(task.id, 'blocked');
+          return;
+        }
+
+        task.contract.metadata = {
+          ...task.contract.metadata,
+          emergentCollaboration: {
+            reason: agentResult.collaborationProposal.reason,
+            requestedBy: agentId,
+            providedAgent: candidateAgent.id,
+            role: requestedRoles[0],
+          },
+        };
+
+        this.ctx.onProgress?.(
+          `[${task.id}] ✦ Emergent collaboration approved: adding ${candidateAgent.name} (${requestedRoles[0]}) to help with "${agentResult.collaborationProposal.reason}".`,
+        );
+
+        eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'COLLABORATION_APPROVED',
+          payload: {
+            taskId: task.id,
+            reason: agentResult.collaborationProposal.reason,
+            addedAgent: candidateAgent.id,
+            role: requestedRoles[0],
+          },
+          timestamp: new Date(),
+        });
+
+        const newAsgnId = `asgn-${task.id}-${randomUUID().slice(0, 8)}`;
+        const newAsgn: AgentAssignment = {
+          id: newAsgnId,
+          taskId: task.id,
+          agentId: candidateAgent.id,
+          role: requestedRoles[0],
+          objective: `${agentResult.collaborationProposal.reason}: ${task.contract.objective}`,
+          status: 'running',
+        };
+        assignmentRepo.create(newAsgn, runId);
+
+        const isReviewer = requestedRoles[0] === 'reviewer';
+        const baseCommitForNew = agentResult.commitHash ?? baseCommit;
+
+        const newGovResult = await executeGovernedAssignment({
+          runId,
+          baseCommit: baseCommitForNew,
+          repoRoot: this.ctx.repoRoot,
+          config,
+          task,
+          assignment: newAsgn,
+          agent: candidateAgent,
+          detached: isReviewer,
+          existingWorktree: isReviewer ? undefined : wt,
+          worktreeManager,
+          workspaceRepo,
+          assignmentRepo,
+          executionRepo,
+          eventRepo,
+          interactionGateway: this.ctx.interactionGateway,
+          activityTracker: this.ctx.activityTracker,
+          concurrency: this.concurrency,
+          communicationBus: this.ctx.communicationBus,
+          sessionRegistry: this.ctx.sessionRegistry,
+          abortSignal,
+          onAttention: (kind) => {
+            taskRepo.updateStatus(task.id, kind);
+            graph.updateTaskStatus(task.id, kind);
+          },
+          onResumed: () => {
+            taskRepo.updateStatus(task.id, 'running');
+            graph.updateTaskStatus(task.id, 'running');
+          },
+        });
+
+        if (isReviewer) {
+          await worktreeManager.removeWorktree(task.id, newAsgn.id, true, true).catch(() => {});
+        }
+
+        if (!newGovResult.success) {
+          graph.updateTaskStatus(task.id, 'failed');
+          taskRepo.updateStatus(task.id, 'failed');
+          this.ctx.onProgress?.(`[${task.id}] ✗ Emergent collaborator ${candidateAgent.name} failed.`);
+          return;
+        }
+
+        agentResult.success = true;
+        if (newGovResult.commitHash) {
+          agentResult.commitHash = newGovResult.commitHash;
+        }
+        this.ctx.onProgress?.(`[${task.id}] ✓ Emergent collaboration completed with ${candidateAgent.name}.`);
+      }
 
     if (!agentResult.success) {
       const rework = taskRepo.incrementRework(task.id);

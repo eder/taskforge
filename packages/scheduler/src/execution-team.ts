@@ -1,17 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { AgentAssignment, VerificationResult } from '@taskforge/shared';
-import { Task } from '@taskforge/core';
+import { AgentAssignment, VerificationResult, ReviewFinding } from '@taskforge/shared';
+import { Task, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter } from '@taskforge/agents';
 import { AssignmentGraph, SynthesisCoordinator } from '@taskforge/collaboration';
 import { RoutingDecision, SelectedAgentAssignment } from '@taskforge/router';
 import { executeGovernedAssignment } from './governed-assignment.js';
 import { SchedulerContext } from './deterministic-scheduler.js';
+import { TeamMemberReservation } from './concurrency-manager.js';
 
 export interface TeamExecutionResult {
   success: boolean;
   commitHash?: string;
   output?: string;
   worktreePath?: string;
+  findings?: ReviewFinding[];
 }
 
 /**
@@ -26,22 +28,31 @@ export async function executeExecutionTeam(
   routing: RoutingDecision,
   selected: SelectedAgentAssignment[],
 ): Promise<TeamExecutionResult> {
-  reportDegradedStaffing(task, ctx, routing, selected);
+  const maxAgents = ctx.config.collaboration?.maxAgentsPerTask ?? 3;
+  if (selected.length > maxAgents) {
+    ctx.onProgress?.(
+      `[${task.id}] Staffing capped from ${selected.length} to ${maxAgents} agents (collaboration.maxAgentsPerTask limit)`,
+    );
+  }
+  const effectiveSelected = selected.length > maxAgents ? selected.slice(0, maxAgents) : selected;
+
+  reportDegradedStaffing(task, ctx, routing, effectiveSelected);
 
   switch (routing.strategy) {
     case 'pair':
-    case 'review':
     case 'collaborative':
-      return runSequentialTeam(task, ctx, orderForStrategy(routing.strategy, selected));
+      return runCollaborativeTeam(task, ctx, effectiveSelected);
+    case 'review':
+      return runReviewTeam(task, ctx, effectiveSelected);
     case 'parallel':
-      return runConcurrentTeam(task, ctx, routing, selected);
+      return runConcurrentTeam(task, ctx, routing, effectiveSelected);
     case 'competitive':
-      return runCompetitiveTeam(task, ctx, selected);
+      return runCompetitiveTeam(task, ctx, effectiveSelected);
     default:
       ctx.onProgress?.(
-        `[${task.id}] Collaboration strategy '${routing.strategy}' has no dedicated coordinator yet; falling back to sequential handoff.`,
+        `[${task.id}] Collaboration strategy '${routing.strategy}' has no dedicated coordinator yet; falling back to collaborative handoff.`,
       );
-      return runSequentialTeam(task, ctx, selected);
+      return runCollaborativeTeam(task, ctx, effectiveSelected);
   }
 }
 
@@ -89,14 +100,9 @@ function reportDegradedStaffing(
 }
 
 /**
- * Chains all N selected agents through the same worktree/branch, one after
- * another (a real handoff, not a fresh copy each time). Used for 'pair'
- * (always exactly 2), 'review' (implementer + N reviewers, implementer
- * ordered first by orderForStrategy) and 'collaborative' (N coordinated
- * assignments) — previously only the first two of `selected` ever ran and
- * every agent beyond that was silently dropped.
+ * Chains agents sequentially on a shared worktree for 'pair' and 'collaborative'.
  */
-async function runSequentialTeam(
+async function runCollaborativeTeam(
   task: Task,
   ctx: SchedulerContext,
   selected: SelectedAgentAssignment[],
@@ -111,7 +117,7 @@ async function runSequentialTeam(
       assignment: buildAssignment(
         task,
         selection,
-        selection.roleRequest.objective || `Review and assist with ${task.contract.objective}`,
+        selection.roleRequest.objective || `Collaborate on ${task.contract.objective}`,
         'pending' as const,
       ),
     })),
@@ -131,11 +137,25 @@ async function runSequentialTeam(
 
   const outputs: string[] = [];
   let lastRes: Awaited<ReturnType<typeof executeGovernedAssignment>> | undefined;
+  let implementerRes: Awaited<ReturnType<typeof executeGovernedAssignment>> | undefined;
   let worktree: { path: string; branchName?: string } | undefined;
 
   for (let i = 0; i < chain.length; i++) {
     const { selection, assignment } = chain[i];
     const label = i === 0 ? 'Lead' : 'Partner';
+
+    if (i > 0 && ctx.communicationBus && lastRes) {
+      await ctx.communicationBus
+        .sendMessage({
+          runId: ctx.runId,
+          taskId: task.id,
+          fromAssignmentId: chain[i - 1].assignment.id,
+          toAssignmentId: assignment.id,
+          type: 'handoff',
+          body: `Handoff from ${chain[i - 1].selection.agent.name} (${chain[i - 1].selection.roleRequest.role}) to ${selection.agent.name} (${selection.roleRequest.role}):\n${lastRes.output ?? 'Completed step'}`,
+        })
+        .catch(() => {});
+    }
 
     const res = await executeGovernedAssignment(
       buildGovernedCtx(task, ctx, assignment, selection.agent, headCommit, {
@@ -146,16 +166,23 @@ async function runSequentialTeam(
 
     outputs.push(
       `[${label} - ${selection.agent.name} (${selection.roleRequest.role})]:\n${
-        res.output ?? (i === 0 ? 'Implemented' : 'Reviewed and verified')
+        res.output ?? (i === 0 ? 'Implemented' : 'Assisted and verified')
       }`,
     );
     lastRes = res;
+    if (i === 0) {
+      implementerRes = res;
+    }
 
     if (!res.success) {
       for (const remaining of chain.slice(i + 1)) {
         ctx.assignmentRepo.updateStatus(remaining.assignment.id, 'cancelled');
       }
-      return { success: false, output: outputs.join('\n\n'), worktreePath: res.worktreePath };
+      return {
+        success: false,
+        output: outputs.join('\n\n'),
+        worktreePath: implementerRes?.worktreePath ?? res.worktreePath,
+      };
     }
 
     worktree = { path: res.worktreePath, branchName: assignment.branchName };
@@ -163,9 +190,197 @@ async function runSequentialTeam(
 
   return {
     success: true,
-    commitHash: lastRes?.commitHash,
-    worktreePath: lastRes?.worktreePath,
+    commitHash: implementerRes?.commitHash ?? lastRes?.commitHash,
+    worktreePath: implementerRes?.worktreePath ?? lastRes?.worktreePath,
     output: outputs.join('\n\n'),
+  };
+}
+
+/**
+ * Independent Review Strategy:
+ * 1. Implementer runs and produces an implementation snapshot/commit.
+ * 2. Reviewer(s) independently inspect that exact snapshot in isolated, read-only
+ *    detached worktrees (detached: true). Reviewers cannot mutate the implementation.
+ * 3. Review findings are gathered and deterministically evaluated:
+ *    any critical/major findings fail the review and route the task back for rework.
+ * 4. All reviewer worktrees are deterministically removed upon completion.
+ */
+async function runReviewTeam(
+  task: Task,
+  ctx: SchedulerContext,
+  selected: SelectedAgentAssignment[],
+): Promise<TeamExecutionResult> {
+  const headCommit = ctx.baseCommit ?? (await ctx.gitService.getHeadCommit());
+  const ordered = orderForStrategy('review', selected);
+  const [lead, ...reviewers] = ordered;
+
+  // 1. Run implementer
+  const leadAssignment = buildAssignment(task, lead, task.contract.objective);
+  ctx.assignmentRepo.create(leadAssignment, ctx.runId);
+
+  ctx.onProgress?.(
+    `[${task.id}] Review pipeline: implementer ${lead.agent.name} (${lead.roleRequest.role}) starting...`,
+  );
+
+  const implementerRes = await executeGovernedAssignment(
+    buildGovernedCtx(task, ctx, leadAssignment, lead.agent, headCommit),
+  );
+
+  if (!implementerRes.success) {
+    ctx.onProgress?.(`[${task.id}] Implementer ${lead.agent.name} failed; aborting review.`);
+    return {
+      success: false,
+      output: implementerRes.output ?? implementerRes.message ?? 'Implementer failed',
+      worktreePath: implementerRes.worktreePath,
+    };
+  }
+
+  const implCommit = implementerRes.commitHash ?? headCommit;
+
+  // 2. Prepare reviewer assignments
+  const reviewerChain = reviewers.map((rev) => ({
+    selection: rev,
+    assignment: buildAssignment(
+      task,
+      rev,
+      rev.roleRequest.objective || `Review implementation against contract and safety criteria`,
+      'pending' as const,
+    ),
+  }));
+
+  for (const step of reviewerChain) {
+    ctx.assignmentRepo.create(step.assignment, ctx.runId);
+  }
+
+  if (reviewerChain.length === 0) {
+    return {
+      success: true,
+      commitHash: implCommit,
+      worktreePath: implementerRes.worktreePath,
+      output: implementerRes.output ?? 'Implemented',
+    };
+  }
+
+  ctx.onProgress?.(
+    `[${task.id}] Independent review: ${reviewerChain.length} reviewer(s) inspecting commit ${implCommit.slice(0, 7)}: ${reviewerChain
+      .map((r) => `${r.selection.agent.name} (${r.selection.roleRequest.role})`)
+      .join(', ')}`,
+  );
+
+  // Reserve concurrency capacity for all reviewers
+  if (ctx.concurrency) {
+    const reservations: TeamMemberReservation[] = reviewerChain.map((r) => ({
+      taskId: task.id,
+      assignmentId: r.assignment.id,
+      agentId: r.selection.agent.id,
+    }));
+    const priority = computeTaskPriority(task, ctx.graph);
+    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal, priority, task.id);
+  }
+
+  // 3. Run all reviewers independently on the implementer's commit in detached worktrees
+  const allFindings: ReviewFinding[] = [];
+  const reviewerOutputs: string[] = [];
+  let anyReviewerFailed = false;
+
+  await Promise.all(
+    reviewerChain.map(async ({ selection, assignment }) => {
+      if (ctx.communicationBus) {
+        await ctx.communicationBus
+          .sendMessage({
+            runId: ctx.runId,
+            taskId: task.id,
+            fromAssignmentId: leadAssignment.id,
+            toAssignmentId: assignment.id,
+            type: 'review',
+            body: `Review requested for commit ${implCommit}: ${task.contract.objective}`,
+          })
+          .catch(() => {});
+      }
+
+      let res;
+      try {
+        res = await executeGovernedAssignment(
+          buildGovernedCtx(task, ctx, assignment, selection.agent, implCommit, {
+            objectiveOverride: assignment.objective,
+            detached: true,
+          }),
+        );
+      } finally {
+        // Clean up reviewer detached worktree immediately after review finishes
+        await ctx.worktreeManager
+          .removeWorktree(task.id, assignment.id, true, true)
+          .catch(() => {});
+      }
+
+      if (ctx.communicationBus) {
+        await ctx.communicationBus
+          .sendMessage({
+            runId: ctx.runId,
+            taskId: task.id,
+            fromAssignmentId: assignment.id,
+            toAssignmentId: leadAssignment.id,
+            type: 'evidence',
+            body: `[Reviewer ${selection.agent.name}]: ${res.output ?? res.message ?? (res.success ? 'Approved' : 'Rejected')}`,
+          })
+          .catch(() => {});
+      }
+
+      reviewerOutputs.push(
+        `[Reviewer ${selection.agent.name} (${selection.roleRequest.role})]: ${res.output ?? res.message ?? (res.success ? 'Approved' : 'Failed')}`,
+      );
+
+      if (!res.success) {
+        anyReviewerFailed = true;
+      }
+      if (res.findings && res.findings.length > 0) {
+        allFindings.push(...res.findings);
+      }
+    }),
+  );
+
+  // 4. Deterministic evaluation of findings
+  const criticalOrMajor = allFindings.filter(
+    (f) => f.severity === 'critical' || f.severity === 'major',
+  );
+
+  if (anyReviewerFailed || criticalOrMajor.length > 0) {
+    if (criticalOrMajor.length > 0 && ctx.activityTracker) {
+      ctx.activityTracker.setCriticalFindings(task.id, criticalOrMajor);
+    }
+
+    const findingSummary = criticalOrMajor.length > 0
+      ? `\nCritical/Major findings:\n${criticalOrMajor.map((f) => `- [${f.severity.toUpperCase()}] ${f.file ? `${f.file}${f.line !== undefined ? `:${f.line}` : ''} ` : ''}${f.description}`).join('\n')}`
+      : '';
+
+    ctx.onProgress?.(
+      `[${task.id}] ✗ Review rejected: ${criticalOrMajor.length} blocking finding(s), reviewer failure: ${anyReviewerFailed}`,
+    );
+
+    for (const f of criticalOrMajor) {
+      const loc = f.file ? ` at ${f.file}${f.line !== undefined ? `:${f.line}` : ''}` : '';
+      ctx.onProgress?.(`[${task.id}] ✖ [${f.severity.toUpperCase()}]${loc}: ${f.description}`);
+    }
+
+    return {
+      success: false,
+      commitHash: implCommit,
+      worktreePath: implementerRes.worktreePath,
+      findings: allFindings,
+      output: `Review rejected:${findingSummary}\n\nReviewer logs:\n${reviewerOutputs.join('\n')}`,
+    };
+  }
+
+  ctx.onProgress?.(
+    `[${task.id}] ✓ Review approved by all ${reviewerChain.length} reviewer(s).`,
+  );
+
+  return {
+    success: true,
+    commitHash: implCommit,
+    worktreePath: implementerRes.worktreePath,
+    findings: allFindings,
+    output: `Implementation and review complete.\nImplementer: ${implementerRes.output ?? 'Done'}\n\n${reviewerOutputs.join('\n')}`,
   };
 }
 
@@ -177,6 +392,7 @@ async function runConcurrentTeam(
 ): Promise<TeamExecutionResult> {
   const headCommit = ctx.baseCommit ?? (await ctx.gitService.getHeadCommit());
   const policy = routing.investigationPolicy ?? 'all_required';
+  const maxAgents = ctx.config.collaboration?.maxAgentsPerTask ?? 3;
 
   const implementer = selected.find((s) => s.roleRequest.role === 'implementer') ?? selected[0];
   const investigators = selected.filter((s) => s !== implementer);
@@ -193,10 +409,25 @@ async function runConcurrentTeam(
       role: implementer.roleRequest.role,
       objective: implementer.roleRequest.objective || task.contract.objective,
     },
+    undefined,
+    maxAgents,
   );
 
   for (const node of asgnGraph.getAllNodes()) {
     ctx.assignmentRepo.create(node.assignment, ctx.runId);
+  }
+
+  if (ctx.communicationBus && routing.communication?.initialAlignment) {
+    await ctx.communicationBus
+      .sendMessage({
+        runId: ctx.runId,
+        taskId: task.id,
+        fromAssignmentId: `asgn-${task.id}-lead`,
+        toAssignmentId: undefined,
+        type: 'proposal',
+        body: `Initial alignment for parallel investigation: ${task.contract.objective}`,
+      })
+      .catch(() => {});
   }
 
   const completed = new Set<string>();
@@ -204,13 +435,41 @@ async function runConcurrentTeam(
   const failedInvestigators: string[] = [];
 
   const runnable = asgnGraph.getRunnableAssignments(completed);
+  if (ctx.concurrency && runnable.length > 0) {
+    const reservations: TeamMemberReservation[] = runnable.map((a) => ({
+      taskId: task.id,
+      assignmentId: a.id,
+      agentId: a.agentId,
+    }));
+    const priority = computeTaskPriority(task, ctx.graph);
+    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal, priority, task.id);
+  }
+
   await Promise.all(
     runnable.map(async (asgn) => {
       const agent = ctx.agentRegistry.get(asgn.agentId)!;
-      const res = await executeGovernedAssignment(buildGovernedCtx(task, ctx, asgn, agent, headCommit));
+      const res = await executeGovernedAssignment(
+        buildGovernedCtx(task, ctx, asgn, agent, headCommit, { detached: true }),
+      );
       completed.add(asgn.id);
+
+      // Clean up investigator's temporary worktree immediately
+      await ctx.worktreeManager.removeWorktree(task.id, asgn.id, true, true).catch(() => {});
+
       if (res.success) {
         outputs.push({ role: asgn.role, agentId: asgn.agentId, output: res.output ?? 'Done' });
+        if (ctx.communicationBus) {
+          await ctx.communicationBus
+            .sendMessage({
+              runId: ctx.runId,
+              taskId: task.id,
+              fromAssignmentId: asgn.id,
+              toAssignmentId: undefined,
+              type: 'evidence',
+              body: `[${asgn.role} by ${asgn.agentId}]: ${res.output ?? 'Done'}`,
+            })
+            .catch(() => {});
+        }
       } else {
         failedInvestigators.push(asgn.id);
       }
@@ -222,8 +481,7 @@ async function runConcurrentTeam(
 
   const policyViolated =
     failedInvestigators.length > 0 &&
-    ((policy === 'all_required') ||
-      (policy === 'quorum' && failureRatio >= 0.5));
+    (policy === 'all_required' || (policy === 'quorum' && failureRatio >= 0.5));
 
   if (policyViolated) {
     ctx.onProgress?.(
@@ -246,8 +504,20 @@ async function runConcurrentTeam(
     synthesizedObjective = `${task.contract.objective}\n\nSynthesized Guidance: ${synthesized.recommendedFix}`;
     ctx.assignmentRepo.updateStatus(synthesisNode.id, 'completed');
     completed.add(synthesisNode.id);
+
+    if (ctx.communicationBus) {
+      await ctx.communicationBus
+        .sendMessage({
+          runId: ctx.runId,
+          taskId: task.id,
+          fromAssignmentId: synthesisNode.id,
+          toAssignmentId: undefined,
+          type: 'proposal',
+          body: synthesized.recommendedFix,
+        })
+        .catch(() => {});
+    }
   } else if (synthesisNodes.length > 0) {
-    // best_effort with zero successful investigators: nothing to synthesize from.
     ctx.assignmentRepo.updateStatus(synthesisNodes[0].id, 'cancelled');
     completed.add(synthesisNodes[0].id);
   }
@@ -276,9 +546,7 @@ async function runConcurrentTeam(
  * True competitive strategy: each agent independently produces a full,
  * isolated solution to the same objective (its own worktree/branch, not a
  * shared investigation phase), then the candidates are evaluated and the
- * best one wins. Previously 'competitive' silently reused runConcurrentTeam
- * (parallel investigation → single implementer), which never actually
- * produced or compared competing solutions.
+ * best one wins. Losing worktrees are removed immediately.
  */
 async function runCompetitiveTeam(
   task: Task,
@@ -289,7 +557,11 @@ async function runCompetitiveTeam(
 
   const candidates = selected.map((selection) => ({
     selection,
-    assignment: buildAssignment(task, selection, selection.roleRequest.objective || task.contract.objective),
+    assignment: buildAssignment(
+      task,
+      selection,
+      selection.roleRequest.objective || task.contract.objective,
+    ),
   }));
 
   for (const candidate of candidates) {
@@ -301,6 +573,16 @@ async function runCompetitiveTeam(
       .map((c) => c.selection.agent.name)
       .join(', ')}`,
   );
+
+  if (ctx.concurrency && candidates.length > 0) {
+    const reservations: TeamMemberReservation[] = candidates.map((c) => ({
+      taskId: task.id,
+      assignmentId: c.assignment.id,
+      agentId: c.selection.agent.id,
+    }));
+    const priority = computeTaskPriority(task, ctx.graph);
+    await ctx.concurrency.waitForTeamSlots(reservations, ctx.abortSignal, priority, task.id);
+  }
 
   const attempts = await Promise.all(
     candidates.map(async (candidate) => ({
@@ -314,6 +596,12 @@ async function runCompetitiveTeam(
   const successful = attempts.filter((a) => a.result.success);
 
   if (successful.length === 0) {
+    // Clean up all failed candidate worktrees and branches
+    for (const candidate of attempts) {
+      await ctx.worktreeManager
+        .removeWorktree(task.id, candidate.assignment.id, true, true)
+        .catch(() => {});
+    }
     return {
       success: false,
       output: `All ${attempts.length} competing solutions failed:\n${attempts
@@ -365,6 +653,28 @@ async function runCompetitiveTeam(
     );
   }
 
+  // Deterministically clean up all non-winning candidate worktrees and branches
+  for (const candidate of attempts) {
+    if (candidate.assignment.id !== winner.assignment.id) {
+      await ctx.worktreeManager
+        .removeWorktree(task.id, candidate.assignment.id, true, true)
+        .catch(() => {});
+    }
+  }
+
+  if (ctx.communicationBus) {
+    await ctx.communicationBus
+      .sendMessage({
+        runId: ctx.runId,
+        taskId: task.id,
+        fromAssignmentId: winner.assignment.id,
+        toAssignmentId: undefined,
+        type: 'proposal',
+        body: `Competitive solution selected: ${winner.selection.agent.name}`,
+      })
+      .catch(() => {});
+  }
+
   const combinedOutput = [
     `[Selected - ${winner.selection.agent.name} (${winner.selection.roleRequest.role})]:\n${
       winner.result.output ?? 'Implemented'
@@ -394,7 +704,7 @@ function buildAssignment(
   status: AgentAssignment['status'] = 'running',
 ): AgentAssignment {
   return {
-    id: `asgn-${task.id}-${selection.agent.id}-${selection.roleRequest.role}`,
+    id: `asgn-${task.id}-${randomUUID().slice(0, 8)}`,
     taskId: task.id,
     agentId: selection.agent.id,
     role: selection.roleRequest.role,
@@ -430,6 +740,11 @@ function buildGovernedCtx(
     eventRepo: ctx.eventRepo,
     interactionGateway: ctx.interactionGateway,
     activityTracker: ctx.activityTracker,
+    concurrency: ctx.concurrency,
+    graph: ctx.graph,
+    priority: computeTaskPriority(task, ctx.graph),
+    communicationBus: ctx.communicationBus,
+    sessionRegistry: ctx.sessionRegistry,
     abortSignal: ctx.abortSignal,
     ...overrides,
   };
