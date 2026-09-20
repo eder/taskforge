@@ -92,8 +92,12 @@ export interface RouterHealthReport {
   details?: string;
 }
 
+export interface HealthCheckOptions {
+  validateKey?: boolean;
+}
+
 export interface RoutingProvider {
   readonly id: string;
   route(input: RoutingInput): Promise<RoutingDecision>;
-  healthCheck?(): Promise<RouterHealthReport>;
+  healthCheck?(options?: HealthCheckOptions): Promise<RouterHealthReport>;
 }

@@ -139,20 +139,85 @@ export class OpenAIRoutingProvider implements RoutingProvider {
   ) {
     this.performanceEngine = options.performanceEngine;
     if (this.apiKey === undefined) {
-      this.apiKey = process.env.OPENAI_API_KEY;
+      this.apiKey =
+        process.env.TASKFORGE_OPENAI_API_KEY ||
+        process.env.OPENAI_API_KEY;
     }
   }
 
-  async healthCheck(): Promise<RouterHealthReport> {
+  private validationCache?: { valid: boolean; error?: string; checkedAt: number };
+
+  async healthCheck(options: import('./router-types.js').HealthCheckOptions = {}): Promise<RouterHealthReport> {
     const hasKey = Boolean(this.apiKey && this.apiKey.trim().length > 0);
+    if (!hasKey) {
+      return {
+        status: 'degraded',
+        provider: this.id,
+        model: this.model,
+        adaptive: false,
+        details:
+          'OpenAI routing missing API key (set TASKFORGE_OPENAI_API_KEY or configure router.apiKey in ~/.taskforge/config.yaml); requests will fall back to static',
+      };
+    }
+
+    if (options.validateKey) {
+      const now = Date.now();
+      if (this.validationCache && now - this.validationCache.checkedAt < 60000) {
+        if (!this.validationCache.valid) {
+          return {
+            status: 'degraded',
+            provider: this.id,
+            model: this.model,
+            adaptive: false,
+            details: `OpenAI key invalid: ${this.validationCache.error} (check TASKFORGE_OPENAI_API_KEY or ~/.taskforge/config.yaml); requests will fall back to static`,
+          };
+        }
+      } else {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 2000);
+          const res = await fetch('https://api.openai.com/v1/models', {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${this.apiKey}` },
+            signal: controller.signal,
+          }).finally(() => clearTimeout(timeout));
+
+          if (!res.ok) {
+            let errMsg = `HTTP ${res.status}`;
+            if (res.status === 401) {
+              errMsg = 'invalid API key (HTTP 401)';
+            } else if (res.status === 429) {
+              errMsg = 'quota exceeded or rate limited (HTTP 429)';
+            }
+            this.validationCache = { valid: false, error: errMsg, checkedAt: now };
+            return {
+              status: 'degraded',
+              provider: this.id,
+              model: this.model,
+              adaptive: false,
+              details: `OpenAI key validation failed: ${errMsg} (requests will fall back to static)`,
+            };
+          }
+          this.validationCache = { valid: true, checkedAt: now };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            status: 'degraded',
+            provider: this.id,
+            model: this.model,
+            adaptive: false,
+            details: `OpenAI endpoint connectivity issue: ${msg}`,
+          };
+        }
+      }
+    }
+
     return {
-      status: hasKey ? 'healthy' : 'degraded',
+      status: 'healthy',
       provider: this.id,
       model: this.model,
       adaptive: false,
-      details: hasKey
-        ? `OpenAI routing active with model ${this.model}`
-        : `OpenAI routing missing API key; requests will fall back to static`,
+      details: `OpenAI routing active with model ${this.model}`,
     };
   }
 

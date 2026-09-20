@@ -10,6 +10,7 @@
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/typescript-v5.7-blue.svg" alt="TypeScript"></a>
   <a href="https://pnpm.io/"><img src="https://img.shields.io/badge/monorepo-pnpm%20workspaces-orange.svg" alt="pnpm"></a>
   <a href="https://sqlite.org/"><img src="https://img.shields.io/badge/persistence-SQLite%20(Node%20Native)-lightgrey.svg" alt="SQLite"></a>
+  <a href="#contributing--development"><img src="https://img.shields.io/badge/tests-229%20passed%20(100%25)-brightgreen.svg" alt="Tests: 229 passed"></a>
 </p>
 
 ---
@@ -151,13 +152,43 @@ pnpm build
 npm link apps/cli
 ```
 
-### Environment Configuration
+### Environment & Credential Configuration
 
-Configure your OpenAI API key for advisory routing, contract synthesis, and planning:
+TaskForge uses an OpenAI-compatible model for advisory routing, contract synthesis, and high-level goal decomposition. To protect your shell environment and prevent secret leakage into Git commits, credentials are resolved using a **strict 4-tier precedence order**:
 
-```bash
-export OPENAI_API_KEY="sk-proj-..."
-```
+1. **`TASKFORGE_OPENAI_API_KEY` (Recommended for environment variables)**:
+   A dedicated environment variable that isolates TaskForge from your global `OPENAI_API_KEY`, preventing conflicts with other CLI tools or shell scripts:
+   ```bash
+   export TASKFORGE_OPENAI_API_KEY="sk-proj-..."
+   ```
+
+2. **Global User Configuration (`~/.taskforge/config.yaml`) (Recommended for persistence)**:
+   Stored outside any Git repository in your user home directory (`chmod 600`), ensuring your API keys and default preferences **never leak into git commits**:
+   ```yaml
+   # ~/.taskforge/config.yaml
+   router:
+     provider: openai
+     model: gpt-4o        # e.g., gpt-4o or gpt-4o-mini
+     apiKey: "sk-proj-..."
+   ```
+
+3. **Project-Level Configuration (`.taskforge/config.yaml`)**:
+   Local project configuration (gitignored by default) for per-repository overrides.
+
+4. **`OPENAI_API_KEY` (Global fallback)**:
+   Standard fallback for developer environments where a global key is already exported.
+
+> [!TIP]
+> **Deterministic Static Fallback**: If no API key is configured or the provided key is invalid (e.g., HTTP 401), TaskForge **does not crash or block execution**. It gracefully falls back to its deterministic rule-based static router, allowing you to run all planning, scheduling, and agent operations offline.
+
+#### Active Key Verification & Health Monitoring
+
+Unlike tools that only verify if a string is non-empty, TaskForge performs **real-time active key probes** (`GET https://api.openai.com/v1/models` cached for 60 seconds) during startup and when running `/health`:
+
+- `● ready (OpenAI <model>)` (Green): Key verified and accepted by OpenAI.
+- `○ invalid key (static fallback)` (Red): HTTP 401 / revoked key detected; automatically switches to static router.
+- `○ missing key (static fallback)` (Gray): No key configured; runs cleanly on deterministic static rules.
+- `○ degraded (static fallback)` (Yellow): HTTP 429 quota exhaustion or network timeout.
 
 ---
 
@@ -223,12 +254,15 @@ Upon launching `tf`, TaskForge immediately profiles your workspace, analyzes the
     ● Codex CLI          [codex  ] ready
     ● Google Antigravity [agy    ] ready
 
-  Router      OpenAI       ● ready (OpenAI gpt-4o-mini)
+  Router      OpenAI       ● ready (OpenAI gpt-4o)
   ECC         ○ not detected
  ─────────────────────────────────────────────────────────────────
 
 > █
 ```
+
+> [!NOTE]
+> The `Router` line performs active validation. If your key is revoked or mistyped, it clearly warns `○ invalid key (static fallback)` in red. If no key is configured, it shows `○ missing key (static fallback)` and seamlessly uses deterministic offline routing.
 
 ##### Phase 2: Natural Language Objective
 
@@ -312,6 +346,7 @@ Type `/` at the prompt to trigger the **interactive command menu**. The palette 
   ┌─────────────────────────────────────────────────────────────┐
   │  /exit       Exit interactive session                       │
   │  /help       Display command reference and guide            │
+  │  /health     Inspect health of Router, agents, and local DB │
   │  /runs       List past execution runs & integration branches│
   │  /apply      Apply a completed run to its target branch     │
   │  /diff       Inspect changes a completed run would apply    │
@@ -328,6 +363,8 @@ Type `/` at the prompt to trigger the **interactive command menu**. The palette 
   │  /pending    View interactions awaiting approval            │
   │  /approve    Approve plan or pending interaction            │
   │  /deny       Deny pending interaction                       │
+  │  /reject     Reject current plan with feedback              │
+  │  /reassign   Reassign task to another agent                 │
   │  /cancel     Cancel active plan execution or running agent  │
   │  /pause      Pause orchestrator execution                   │
   │  /resume     Resume paused execution                        │
@@ -337,35 +374,38 @@ Type `/` at the prompt to trigger the **interactive command menu**. The palette 
 
 ##### Command Reference
 
-| Slash Command        | Description                                                                          |
-| :------------------- | :----------------------------------------------------------------------------------- |
-| `/runs`              | List past execution runs, their completion status, and delivery status              |
-| `/apply`             | Apply a completed run's changes to its target branch (also: `/apply run-<id>`)       |
-| `/diff`              | Inspect what a completed run would change before applying it                        |
-| `/pr`                | Create a GitHub pull request for a completed run with audit evidence                 |
-| `/discard`           | Mark a completed run as discarded without applying it (keeps the branch)             |
-| `/agents`            | View detected AI harnesses, binary paths, readiness, and real-time quota cooldowns   |
-| `/tasks`             | List all tasks in the current run DAG, dependencies, and execution status            |
-| `/status` / `/dash`  | Open the full-screen visual dashboard with repository, run, and agent metrics        |
-| `/stream`            | View real-time line-by-line streaming terminal output from an active agent worker    |
-| `/cost`              | Display detailed token consumption breakdown (input, output) and estimated USD costs |
-| `/stats`             | View performance analytics, duration per agent, and verification cycle metrics       |
-| `/plan`              | Re-display the currently active or proposed task dependency graph                    |
-| `/approve`           | Confirm and launch the proposed execution plan or pending interaction                |
-| `/reject`            | Reject the proposed plan and provide conversational steering feedback                |
-| `/deny`              | Deny an agent's request for out-of-scope permissions or destructive commands         |
-| `/cancel`            | Safely cancel the active task execution and restore worktree state                   |
-| `/pause` / `/resume` | Pause and resume running agent workers on the fly                                    |
-| `/clean`             | Prune all orphaned Git worktrees and stale assignment branches                       |
-| `/help`              | Print complete interactive guide and keybindings                                     |
-| `/exit`              | Safely terminate the session, prune ephemeral resources, and close SQLite handles    |
+| Slash Command        | Description                                                                           |
+| :------------------- | :------------------------------------------------------------------------------------ |
+| `/health`            | Inspect real-time health of Router (active key probe), agents, and local SQLite DB    |
+| `/runs`              | List past execution runs, their completion status, and delivery status               |
+| `/apply`             | Apply a completed run's changes to its target branch (also: `/apply run-<id>`)        |
+| `/diff`              | Inspect what a completed run would change before applying it                         |
+| `/pr`                | Create a GitHub pull request for a completed run with audit evidence                  |
+| `/discard`           | Mark a completed run as discarded without applying it (keeps the branch)              |
+| `/agents`            | View detected AI harnesses, binary paths, readiness, and real-time quota cooldowns    |
+| `/tasks`             | List all tasks in the current run DAG, dependencies, and execution status             |
+| `/status` / `/dash`  | Open the full-screen visual dashboard with repository, run, and agent metrics         |
+| `/stream`            | View real-time line-by-line streaming terminal output from an active agent worker     |
+| `/cost`              | Display detailed token consumption breakdown (input, output) and estimated USD costs  |
+| `/stats`             | View performance analytics, duration per agent, and verification cycle metrics        |
+| `/plan`              | Re-display the currently active or proposed task dependency graph                     |
+| `/approve`           | Confirm and launch the proposed execution plan or pending interaction                 |
+| `/reject`            | Reject the proposed plan and provide conversational steering feedback                 |
+| `/reassign`          | Reassign an in-progress or failed task to an alternative available agent              |
+| `/deny`              | Deny an agent's request for out-of-scope permissions or destructive commands          |
+| `/cancel`            | Safely cancel the active task execution and restore worktree state                    |
+| `/pause` / `/resume` | Pause and resume running agent workers on the fly                                     |
+| `/clean`             | Prune all orphaned Git worktrees and stale assignment branches                        |
+| `/help`              | Print complete interactive guide and keybindings                                      |
+| `/exit`              | Safely terminate the session, prune ephemeral resources, and close SQLite handles     |
 
-#### Terminal Navigation & Keybindings
+#### Terminal Navigation, Bracketed Paste & Keybindings
 
 - **`Up` / `Down`**: Navigate through previous command history (or move selection inside the `/` slash menu).
 - **`Left` / `Right`**: Move cursor inline for rapid prompt editing.
 - **`Backspace` / `Delete`**: Edit current prompt buffer.
 - **`Tab`**: Auto-complete matching slash command from the popup menu.
+- **Bracketed Paste Mode**: Pasting multiline text, large code blocks, or stack traces automatically folds into a clean `[Pasted text #1 +X lines]` chip in the prompt buffer without cluttering the screen. Pressing `Enter` expands and submits the full multiline content safely.
 - **`Ctrl + C`**: Interrupt and cancel currently running agent execution or plan; if idle, safely prompts to exit.
 - **`Esc`**: Dismiss the slash command autocomplete popup.
 
@@ -482,12 +522,21 @@ If you close TaskForge, restart your machine, or switch terminal tabs, you never
 
 ---
 
-## Configuration
+## Configuration & Settings Hierarchy
 
-TaskForge is pre-configured with robust defaults, but behavior can be customized via `.taskforge/config.json` or `taskforge.config.yaml` in your repository root:
+TaskForge is pre-configured with robust defaults, but behavior can be customized globally or on a per-project basis. Configuration files are automatically merged with the following precedence:
+
+1. **Local Repository Config**: `.taskforge/config.yaml` (or `.taskforge/config.json`, `taskforge.config.yaml`) in the repository root.
+2. **Global User Config**: `~/.taskforge/config.yaml` (or `~/.taskforge/config.json`) in the user's home directory.
+3. **Built-in Defaults**.
 
 ```yaml
-# taskforge.config.yaml
+# ~/.taskforge/config.yaml (Global machine defaults & secrets)
+router:
+  provider: openai
+  model: gpt-4o         # e.g., gpt-4o, gpt-4o-mini
+  apiKey: "sk-proj-..." # Stored safely outside Git repositories
+
 execution:
   maxParallelTasks: 3
   defaultTimeoutMinutes: 30
@@ -518,10 +567,6 @@ verification:
   review: true
   maxReworkCycles: 2
 
-router:
-  provider: openai
-  model: gpt-4o-mini
-
 # Which branch a run's Delivery Gate targets
 git:
   workflow: trunk         # trunk (default) | github-flow | gitflow | current-branch
@@ -540,6 +585,9 @@ delivery:
 
 TaskForge coordinates real external coding CLIs without sacrificing system security or developer sanity:
 
+- **Safe Credential Management**: API keys are isolated via `TASKFORGE_OPENAI_API_KEY` or `~/.taskforge/config.yaml` (file mode `600`), preventing keys from being accidentally committed into version control or clashing with global shell configs.
+- **Harness Argument Preservation**: Real-agent adapters (`ClaudeCodeAdapter`, `CodexAdapter`, `AntigravityAdapter`) strictly preserve CLI serialization flags (such as Codex `exec --json` and Antigravity `--output-format stream-json`), ensuring structured streaming is never corrupted by option overrides.
+- **Headless Auto-Denial Detection**: Headless tool denials (such as Antigravity/Jetski tool auto-denials in non-interactive mode) are explicitly detected as `deniedActions` and reported as harness failures rather than false successes.
 - **No Silent CLI Bypass**: Dangerous bypass flags (such as `--dangerously-skip-permissions` or `--dangerously-bypass-approvals-and-sandbox`) are permanently eliminated from default configurations.
 - **Strict Environment Allowlist & Redaction**: Child processes do not inherit arbitrary environment variables. Only essential system paths (`PATH`, `HOME`, `USER`) and necessary API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) are passed. Variables matching `*PASSWORD*`, `*SECRET*`, or `*TOKEN*` (e.g. AWS/GitHub tokens) are strictly denied to prevent secret leakage.
 - **Bidirectional I/O Mediation (`RealCliAgentSession`)**: TaskForge intercepts child process `stdout`/`stderr` line-by-line, parses JSON permission/question events, detects interactive terminal prompts (`(y/n)`), and safely responds via `stdin` through the `InteractionGateway` and `PermissionEngine`.

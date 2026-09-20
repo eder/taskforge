@@ -41,27 +41,29 @@ export class AgentRegistry {
   ) {
     if (registerDefaults) {
       // Register default known harnesses
-      this.register(
-        new ClaudeCodeAdapter({
-          binaryPath: agentConfigs?.claude?.command,
-          defaultArgs: agentConfigs?.claude?.args,
-          env: agentConfigs?.claude?.env,
-        }),
-      );
-      this.register(
-        new CodexAdapter({
-          binaryPath: agentConfigs?.codex?.command,
-          defaultArgs: agentConfigs?.codex?.args,
-          env: agentConfigs?.codex?.env,
-        }),
-      );
-      this.register(
-        new AntigravityAdapter({
-          binaryPath: agentConfigs?.agy?.command,
-          defaultArgs: agentConfigs?.agy?.args,
-          env: agentConfigs?.agy?.env,
-        }),
-      );
+      const claudeOpts: import('./real-adapters.js').CliAdapterOptions = {};
+      if (agentConfigs?.claude?.command) claudeOpts.binaryPath = agentConfigs.claude.command;
+      if (agentConfigs?.claude?.args && agentConfigs.claude.args.length > 0) {
+        claudeOpts.defaultArgs = agentConfigs.claude.args;
+      }
+      if (agentConfigs?.claude?.env) claudeOpts.env = agentConfigs.claude.env;
+      this.register(new ClaudeCodeAdapter(claudeOpts));
+
+      const codexOpts: import('./real-adapters.js').CliAdapterOptions = {};
+      if (agentConfigs?.codex?.command) codexOpts.binaryPath = agentConfigs.codex.command;
+      if (agentConfigs?.codex?.args && agentConfigs.codex.args.length > 0) {
+        codexOpts.defaultArgs = agentConfigs.codex.args;
+      }
+      if (agentConfigs?.codex?.env) codexOpts.env = agentConfigs.codex.env;
+      this.register(new CodexAdapter(codexOpts));
+
+      const agyOpts: import('./real-adapters.js').CliAdapterOptions = {};
+      if (agentConfigs?.agy?.command) agyOpts.binaryPath = agentConfigs.agy.command;
+      if (agentConfigs?.agy?.args && agentConfigs.agy.args.length > 0) {
+        agyOpts.defaultArgs = agentConfigs.agy.args;
+      }
+      if (agentConfigs?.agy?.env) agyOpts.env = agentConfigs.agy.env;
+      this.register(new AntigravityAdapter(agyOpts));
     }
   }
 

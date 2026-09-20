@@ -253,4 +253,49 @@ describe('Agents - FakeAgent and Registry', () => {
     const cleanResult = (claude as any).extractOutput(streamOutput, '');
     expect(cleanResult).toBe('Clean final markdown answer');
   });
+
+  it('preserves defaultArgs when constructed with empty or undefined options', async () => {
+    const { ClaudeCodeAdapter, AntigravityAdapter, CodexAdapter } = await import(
+      '../src/real-adapters.js'
+    );
+
+    const claude = new ClaudeCodeAdapter({ defaultArgs: undefined } as any);
+    const agy = new AntigravityAdapter({ defaultArgs: undefined } as any);
+    const codex = new CodexAdapter({ defaultArgs: undefined } as any);
+
+    expect((claude as any).options.defaultArgs).toContain('--output-format=stream-json');
+    expect((agy as any).options.defaultArgs).toContain('stream-json');
+    expect((codex as any).options.defaultArgs).toContain('--json');
+
+    // Also verify via AgentRegistry with empty agentConfigs
+    const registry = new AgentRegistry(true, {
+      claude: { enabled: true, maxParallel: 1 },
+      codex: { enabled: true, maxParallel: 2 },
+      agy: { enabled: true, maxParallel: 1 },
+    });
+
+    const regClaude = registry.get('claude');
+    const regCodex = registry.get('codex');
+    const regAgy = registry.get('agy');
+
+    expect((regClaude as any).options.defaultArgs).toContain('--output-format=stream-json');
+    expect((regCodex as any).options.defaultArgs).toEqual(['exec', '--json']);
+    expect((regAgy as any).options.defaultArgs).toEqual(['--output-format', 'stream-json', '-p']);
+  });
+
+  it('normalizes auto-denied headless tool requests as denied actions', async () => {
+    const { AntigravityAdapter } = await import('../src/real-adapters.js');
+    const agy = new AntigravityAdapter();
+
+    const rawStderr =
+      'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.';
+
+    const outcome = agy.normalizeOutcome('', rawStderr, 0);
+
+    expect(outcome.deniedActions.length).toBe(1);
+    expect(outcome.deniedActions[0].action).toBe('command');
+    expect(outcome.providerStatus).toBe('FAILED');
+    expect(outcome.errors.length).toBeGreaterThan(0);
+  });
 });
+
