@@ -98,24 +98,41 @@ export class DeliveryService {
       delivery.branch,
       delivery.targetBranch,
     );
-    const hasDiverged = status.headCommit !== delivery.baseCommit;
+    // Divergence must be measured against targetBranch's own HEAD, not
+    // whatever branch happens to be checked out in the working tree.
+    const targetHeadCommit = await this.gitService.resolveRef(
+      delivery.targetBranch,
+      this.repoRoot,
+    );
+    const hasDiverged = targetHeadCommit !== delivery.baseCommit;
 
     let wouldConflict = false;
     let conflictingFiles: string[] = [];
 
     if (!alreadyApplied && status.isClean) {
+      const originalBranch = status.currentBranch;
+      const needsCheckout = originalBranch !== delivery.targetBranch;
       try {
-        await this.gitService.merge(
-          delivery.branch,
-          { noFf: true, noCommit: true },
-          this.repoRoot,
-        );
-        await this.gitService.mergeAbort(this.repoRoot);
-      } catch {
-        const conflictStatus = await this.gitService.getStatus(this.repoRoot);
-        conflictingFiles = DeliveryService.extractConflictFiles(conflictStatus.uncommittedFiles);
-        wouldConflict = true;
-        await this.gitService.mergeAbort(this.repoRoot);
+        if (needsCheckout) {
+          await this.gitService.checkout(delivery.targetBranch, this.repoRoot);
+        }
+        try {
+          await this.gitService.merge(
+            delivery.branch,
+            { noFf: true, noCommit: true },
+            this.repoRoot,
+          );
+          await this.gitService.mergeAbort(this.repoRoot);
+        } catch {
+          const conflictStatus = await this.gitService.getStatus(this.repoRoot);
+          conflictingFiles = DeliveryService.extractConflictFiles(conflictStatus.uncommittedFiles);
+          wouldConflict = true;
+          await this.gitService.mergeAbort(this.repoRoot);
+        }
+      } finally {
+        if (needsCheckout) {
+          await this.gitService.checkout(originalBranch, this.repoRoot);
+        }
       }
     }
 
@@ -170,11 +187,28 @@ export class DeliveryService {
       );
     }
 
-    const commit = await this.gitService.merge(
-      delivery.branch,
-      { noFf: true, message: `Merge TaskForge run ${runId}` },
-      this.repoRoot,
-    );
+    // The merge must land on targetBranch itself, never on whatever branch
+    // the operator happens to have checked out; restore it afterward so
+    // /apply never disturbs the caller's working context.
+    const status = await this.gitService.getStatus(this.repoRoot, ['.taskforge']);
+    const originalBranch = status.currentBranch;
+    const needsCheckout = originalBranch !== delivery.targetBranch;
+
+    let commit: string;
+    try {
+      if (needsCheckout) {
+        await this.gitService.checkout(delivery.targetBranch, this.repoRoot);
+      }
+      commit = await this.gitService.merge(
+        delivery.branch,
+        { noFf: true, message: `Merge TaskForge run ${runId}` },
+        this.repoRoot,
+      );
+    } finally {
+      if (needsCheckout) {
+        await this.gitService.checkout(originalBranch, this.repoRoot);
+      }
+    }
 
     this.runRepo.mergeMetadata(runId, {
       delivery: {

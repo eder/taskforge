@@ -130,4 +130,36 @@ describe('DeliveryService', () => {
 
     db.close();
   });
+
+  it('merges into targetBranch even when a different branch is currently checked out', async () => {
+    const { db, runRepo, service } = makeService();
+    const runId = 'run-apply-other-branch-checked-out';
+    runRepo.create(runId);
+    const branch = await createIntegrationBranch(runId, 'feature4.txt', 'new feature 4\n');
+    service.markReady(runId, branch, 'main', baseCommit);
+
+    // Operator is mid-way through unrelated work on another branch when they run /apply.
+    await gitService.createBranch('feature/my-work', baseCommit);
+    await gitService.checkout('feature/my-work', testRepoRoot);
+    fs.writeFileSync(path.join(testRepoRoot, 'wip.txt'), 'work in progress\n');
+    const featureCommit = await gitService.stageAndCommit('wip: unrelated work', testRepoRoot);
+
+    const result = await service.apply(runId);
+
+    expect(result.alreadyApplied).toBe(false);
+
+    // feature/my-work must remain exactly as it was: same commit, still checked out.
+    const statusAfter = await gitService.getStatus(testRepoRoot);
+    expect(statusAfter.currentBranch).toBe('feature/my-work');
+    expect(statusAfter.headCommit).toBe(featureCommit);
+    expect(statusAfter.isClean).toBe(true);
+    expect(fs.existsSync(path.join(testRepoRoot, 'feature4.txt'))).toBe(false);
+
+    // main must have actually received the merge.
+    const mainHead = await gitService.resolveRef('main', testRepoRoot);
+    expect(mainHead).toBe(result.commit);
+    expect(mainHead).not.toBe(featureCommit);
+
+    db.close();
+  });
 });
