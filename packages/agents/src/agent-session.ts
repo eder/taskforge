@@ -65,6 +65,14 @@ export class FakeAgentSession implements AgentSession {
     }
     this.eventWaiters = [];
   }
+
+  public async close(): Promise<void> {
+    this.isCancelled = true;
+    for (const waiter of this.eventWaiters) {
+      waiter();
+    }
+    this.eventWaiters = [];
+  }
 }
 
 export interface RealCliSessionOptions {
@@ -313,6 +321,15 @@ export class RealCliAgentSession implements AgentSession {
         // ignore error on kill
       }
     }
+  }
+
+  /** Called after the assignment's process has already exited normally; only stops the event loop. */
+  public async close(): Promise<void> {
+    this.isCancelled = true;
+    for (const waiter of this.eventWaiters) {
+      waiter();
+    }
+    this.eventWaiters = [];
   }
 }
 

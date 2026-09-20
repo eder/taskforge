@@ -17,4 +17,6 @@ export interface AgentAdapter {
   createSession?(assignment: AgentAssignment, context: AgentContext): Promise<AgentSession>;
   send?(sessionId: string, message: AgentMessage): Promise<void>;
   cancel?(sessionId: string): Promise<void>;
+  /** Release a completed assignment's session (event loop + adapter-side bookkeeping); not a cancellation. */
+  releaseSession?(assignmentId: string): void;
 }

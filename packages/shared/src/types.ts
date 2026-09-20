@@ -349,7 +349,10 @@ export interface AgentSession {
   events(): AsyncIterable<AgentRuntimeEvent>;
   send(message: AgentMessage | string): Promise<void>;
   respond(response: InteractionResponse): Promise<void>;
+  /** User- or system-initiated abort of in-progress work (e.g. terminates the underlying process). */
   cancel(): Promise<void>;
+  /** Normal end-of-life teardown after the assignment finished running; must not be reported as a cancellation. */
+  close(): Promise<void>;
 }
 
 export type QuestionRoutingOutcome =

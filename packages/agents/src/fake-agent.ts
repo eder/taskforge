@@ -339,4 +339,8 @@ export class FakeAgent implements AgentAdapter {
       await session.cancel();
     }
   }
+
+  releaseSession(assignmentId: string): void {
+    this.activeSessions.delete(assignmentId);
+  }
 }

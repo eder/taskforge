@@ -244,6 +244,10 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     }
   }
 
+  releaseSession(assignmentId: string): void {
+    this.activeSessions.delete(assignmentId);
+  }
+
   async execute(assignment: AgentAssignment, context: AgentContext): Promise<AgentResult> {
     const startTime = Date.now();
     const isAvailable = await this.detect();
