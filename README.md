@@ -280,8 +280,13 @@ Once approved, the deterministic scheduler spawns isolated Git worktrees under `
 │    🧪 Running verification checks...
 │    ✔ Verified successfully ✓
 │
-│  ✔ Integration branch ready: taskforge/run-1789831200000
-│    To merge: git merge taskforge/run-1789831200000
+│  ✔ Task completed successfully
+│
+│    Verification   ✔ passed
+│    Delivery       ● READY TO APPLY
+│
+│    /apply    apply to main       /diff   inspect changes
+│    /pr       create pull request /discard keep on branch only
 ╰────────────────────────────────────────────────────────────────╯
 
 > █
@@ -308,6 +313,10 @@ Type `/` at the prompt to trigger the **interactive command menu**. The palette 
   │  /exit       Exit interactive session                       │
   │  /help       Display command reference and guide            │
   │  /runs       List past execution runs & integration branches│
+  │  /apply      Apply a completed run to its target branch     │
+  │  /diff       Inspect changes a completed run would apply    │
+  │  /pr         Create a pull request for a completed run      │
+  │  /discard    Discard a completed run without applying it    │
   │  /plan       Inspect current proposed or active plan        │
   │  /tasks      List status of all tasks in current run        │
   │  /status     Open full visual TUI dashboard                 │
@@ -330,7 +339,11 @@ Type `/` at the prompt to trigger the **interactive command menu**. The palette 
 
 | Slash Command        | Description                                                                          |
 | :------------------- | :----------------------------------------------------------------------------------- |
-| `/runs`              | List past execution runs, their completion status, and Git integration branch names  |
+| `/runs`              | List past execution runs, their completion status, and delivery status              |
+| `/apply`             | Apply a completed run's changes to its target branch (also: `/apply run-<id>`)       |
+| `/diff`              | Inspect what a completed run would change before applying it                        |
+| `/pr`                | Create a GitHub pull request for a completed run with audit evidence                 |
+| `/discard`           | Mark a completed run as discarded without applying it (keeps the branch)             |
 | `/agents`            | View detected AI harnesses, binary paths, readiness, and real-time quota cooldowns   |
 | `/tasks`             | List all tasks in the current run DAG, dependencies, and execution status            |
 | `/status` / `/dash`  | Open the full-screen visual dashboard with repository, run, and agent metrics        |
@@ -372,9 +385,13 @@ tf exec "Fix memory leak in websocket reconnection handler" --yes --concurrency 
 tf run "Migrate persistence layer from commonjs to ESM"
 ```
 
-### GitHub Workflow Integration
+### Delivery Gate & GitHub Workflow Integration
 
 ```bash
+# Apply the latest run that's ready to apply (or a specific one) to its target branch
+tf apply
+tf apply run-1789794456374
+
 # Import an existing GitHub issue and spawn a coordinated team to resolve it
 tf issue 42
 
@@ -385,7 +402,7 @@ tf pr create --base main
 ### Run Inspection, History & Cost Auditing
 
 ```bash
-# List past execution runs and their git integration branches
+# List past execution runs, their git integration branches, and delivery status
 tf runs
 
 # Inspect structured run state as human-readable report
@@ -423,26 +440,45 @@ tf clean
    taskforge/run-<runId>    (e.g., taskforge/run-1789852516195)
    ```
    Each verified task commit is cherry-picked onto this branch in dependency order.
-5. **Developer Merge & PR**: When the run concludes, TaskForge prints the branch name and merge command. You retain complete authority over your codebase:
-   ```bash
-   # Inspect changes
-   git diff main..taskforge/run-1789852516195
+5. **The Delivery Gate**: When the run concludes, TaskForge does not just print a `git merge` command — it resolves the target branch via the **Git Workflow Policy** (below) and hands you a gate. You retain complete authority over your codebase:
+   ```text
+   Delivery       ● READY TO APPLY
 
-   # Merge directly into main
-   git checkout main && git merge taskforge/run-1789852516195
-
-   # Or open a pull request with audit evidence
-   tf pr create --base main
+   /apply    apply to the target branch
+   /diff     inspect changes first
+   /pr       open a pull request with audit evidence
+   /discard  keep the branch, don't apply it
    ```
+   or non-interactively: `tf apply [run-id]`, `tf pr create --base main`.
+
+### Git Workflow Policy: Which Branch Gets the Change?
+
+By default (`git.workflow: trunk`), the target is whatever branch you were on when the run started — nothing to configure. Three more strategies are available:
+
+```yaml
+git:
+  workflow: trunk        # trunk (default) | github-flow | gitflow | current-branch
+  branches:
+    production: main     # used by gitflow
+    development: develop # used by gitflow — hotfix-worded goals target production instead
+```
+
+And `delivery.mode` controls what happens automatically once a run is `READY TO APPLY`:
+
+```yaml
+delivery:
+  mode: ask_human   # ask_human (default) | auto_apply | pull_request | branch_only
+```
+`auto_apply` still requires `permissions.git.merge_main: allow` as an explicit second opt-in — unattended merges are never a config accident.
 
 ### Finding Lost or Background Branches
 
 If you close TaskForge, restart your machine, or switch terminal tabs, you never have to worry about where your code went:
-- **CLI**: Run `tf runs` to see all runs, completion statuses, and branch names.
+- **CLI**: Run `tf runs` to see all runs, completion statuses, branch names, and delivery status.
 - **REPL**: Type `/runs` inside the interactive shell.
 - **Git**: Run `git branch --list 'taskforge/*'` or `git log taskforge/run-<runId>`.
 
-*For an in-depth architecture deep-dive, see the [Git Branch Lifecycle & Hardening Guide](docs/git-branch-lifecycle-and-hardening.md).*
+*For an in-depth architecture deep-dive — including the Delivery Gate's merge preflight and every Git Workflow Policy strategy — see the [Git Branch Lifecycle & Hardening Guide](docs/git-branch-lifecycle-and-hardening.md).*
 
 ---
 
@@ -485,6 +521,17 @@ verification:
 router:
   provider: openai
   model: gpt-4o-mini
+
+# Which branch a run's Delivery Gate targets
+git:
+  workflow: trunk         # trunk (default) | github-flow | gitflow | current-branch
+  branches:
+    production: main      # used by gitflow
+    development: develop  # used by gitflow
+
+# What happens once a run is ready to deliver
+delivery:
+  mode: ask_human   # ask_human (default) | auto_apply | pull_request | branch_only
 ```
 
 ---

@@ -1,19 +1,20 @@
 # TaskForge Git Worktrees, Branch Lifecycle & Real-Agent Hardening Guide
 
 **Document Status:** Official Reference & User Guide  
-**Version:** v0.1.0  
+**Version:** v0.2.0  
 **Target Audience:** Developers, Platform Engineers, and Multi-Agent Systems Architects  
 
 ---
 
 ## 1. Executive Summary & The Problem Statement
 
-When using TaskForge to coordinate autonomous AI agents (such as **Anthropic Claude Code**, **OpenAI Codex CLI**, or **Google Antigravity**), developers often have two critical questions:
+When using TaskForge to coordinate autonomous AI agents (such as **Anthropic Claude Code**, **OpenAI Codex CLI**, or **Google Antigravity**), developers often have three critical questions:
 
 1. **"Why didn't TaskForge modify or commit directly to my `main` branch?"**
 2. **"If I close the terminal or restart TaskForge, how do I know if the task succeeded and what branch the changes were saved to?"**
+3. **"The run says COMPLETED — how does my code actually get into my branch?"**
 
-This document explains the **Zero-Risk Git Worktree Architecture**, how integration branches (`taskforge/run-<runId>`) are named, discovered, and merged, and details the **Real-Agent Hardening** safeguards that protect your codebase and secrets.
+This document explains the **Zero-Risk Git Worktree Architecture**, how integration branches (`taskforge/run-<runId>`) are named, discovered, and merged, the **Delivery Gate** that turns a completed run into an applied change or a pull request, the **Git Workflow Policy** that decides which branch that change targets, and the **Real-Agent Hardening** safeguards that protect your codebase and secrets.
 
 ---
 
@@ -46,10 +47,12 @@ flowchart TD
         Gate2 -->|PASS: Cherry-pick| Branch
     end
 
-    subgraph Finalization [Developer Control]
-        Branch -->|tf runs / /runs| Inspect[Inspect Diff & Test]
-        Inspect -->|git merge| MainBranch[(main branch)]
-        Inspect -->|tf pr create| GitHubPR[GitHub Pull Request]
+    subgraph Delivery [The Delivery Gate]
+        Branch -->|Git Workflow Policy resolves target| Gate{Delivery Gate}
+        Gate -->|/apply or tf apply| MainBranch[(target branch: main / develop / current)]
+        Gate -->|/pr or tf pr create| GitHubPR[GitHub Pull Request]
+        Gate -->|/diff| Inspect[Inspect Diff]
+        Gate -->|/discard| Discarded[Marked discarded, branch kept]
     end
 ```
 
@@ -72,78 +75,126 @@ taskforge/run-<runId>    (e.g., taskforge/run-1789831200000)
 ```
 Each verified task commit is cherry-picked onto this integration branch in deterministic dependency order.
 
-### Step 5: Clean Main & Developer Control
-At the end of the run, TaskForge outputs the branch name and exact merge command:
+### Step 5: The Delivery Gate
+At the end of a successful run, TaskForge does **not** just print a `git merge` command and leave you to run it. It resolves the target branch (see [§3.5 Git Workflow Policy](#35-git-workflow-policy)), marks the run `ready_to_apply`, and shows a delivery gate instead of a status line:
 ```text
-✔ Integration branch ready: taskforge/run-1789831200000
-  To merge:           git merge taskforge/run-1789831200000
+✔ Task completed successfully
+
+  Verification   ✔ passed
+  Delivery       ● READY TO APPLY
+
+  /apply    apply to main
+  /diff     inspect changes
+  /pr       create pull request
 ```
-Temporary worktrees are automatically pruned, leaving your repository clean.
+Temporary worktrees are automatically pruned, leaving your repository clean. The integration branch itself is **not** deleted — it stays until you `/apply`, `/pr`, or `/discard` it (see §3 below).
 
 ---
 
-## 3. How to Find, Inspect, and Merge Integration Branches
+## 3. The Delivery Gate: Apply, Diff, PR, or Discard
 
-If you closed TaskForge, restarted your terminal, or ran tasks in the background, you never need to guess where your changes are.
+If you closed TaskForge, restarted your terminal, or ran tasks in the background, you never need to guess where your changes are — and you never have to hand-type a `git merge` command.
 
-### Method 1: The TaskForge CLI (`tf runs`)
-From any terminal inside your repository:
+### 3.1 Inspecting Runs (`tf runs` / `/runs`)
 ```bash
 tf runs
 ```
-**Example Output:**
+or, inside the interactive shell, `/runs`. Each completed run shows its **execution** status separately from its **delivery** status — a run can be `COMPLETED` while its delivery is still `READY TO APPLY`, `APPLIED`, `PR opened`, or `discarded`:
 ```text
   ✦ TaskForge Runs History
   ────────────────────────────────────────────────────────────────
-  ● run-1789852516195 [COMPLETED] (2026-09-19 18:15:16)
-    Goal:   Implement Redis-backed idempotency lock
-    Branch: taskforge/run-1789852516195
-    Merge:  git merge taskforge/run-1789852516195
-
-  ● run-1789831200000 [COMPLETED] (2026-09-19 12:40:00)
-    Goal:   Migrate persistence layer from commonjs to ESM
-    Branch: taskforge/run-1789831200000
-    Merge:  git merge taskforge/run-1789831200000
+  ● run-1789852516195 [COMPLETED] ✔ COMPLETED (2026-09-19 18:15:16)
+    Goal:     Implement Redis-backed idempotency lock
+    Branch:   taskforge/run-1789852516195
+    Delivery: ● READY TO APPLY
+    /apply run-1789852516195    /diff run-1789852516195    /pr run-1789852516195
   ────────────────────────────────────────────────────────────────
 ```
 
-### Method 2: The Interactive REPL (`/runs`)
-Inside the `tf` interactive session, simply type `/runs`:
-```text
-> /runs
-✦ TaskForge Runs History
-  ────────────────────────────────────────────────────────────────
-  ● run-1789852516195 [COMPLETED] ✔ (2026-09-19 18:15:16)
-    Goal:   Implement Redis-backed idempotency lock
-    Branch: taskforge/run-1789852516195
-    Merge:  git merge taskforge/run-1789852516195
-  ────────────────────────────────────────────────────────────────
-```
-
-### Method 3: Standard Git Commands
-Because TaskForge is pure Git under the hood, standard Git commands work instantly:
+### 3.2 Applying a Run (`/apply`, `tf apply`)
 ```bash
-# 1. List all TaskForge integration branches
-git branch --list 'taskforge/*'
+tf apply                    # applies the latest run whose delivery is READY TO APPLY
+tf apply run-1789852516195   # applies a specific run
+```
+or, in the REPL, `/apply` (also understands natural language: "aplica as mudanças", "merge this", "put this on main"). Before touching your target branch, `DeliveryService` runs a real preflight:
+1. **Working tree clean?** (TaskForge's own `.taskforge/` state directory is excluded from this check — only *your* uncommitted changes block an apply.)
+2. **Already applied?** If the integration branch is already an ancestor of the target branch, `/apply` is a no-op that reports success, not an error.
+3. **Would it conflict?** A real merge is attempted with `--no-commit --no-ff` and immediately aborted if it doesn't apply cleanly — your target branch is **never** left in a partial merge state.
 
-# 2. View recent commits on the integration branch
-git log --oneline -n 5 taskforge/run-1789852516195
+```text
+✦ Applying run-1789852516195
 
-# 3. Inspect the diff against your current main branch
-git diff main..taskforge/run-1789852516195
+  Target branch..........  main
+  Integration branch.....  taskforge/run-1789852516195
 
-# 4. Merge verified changes into main
-git checkout main
-git merge taskforge/run-1789852516195
+✔ Changes applied successfully.
+
+  main  a78f128 → d935ab2
+```
+If there's a conflict, TaskForge reports exactly which files conflict and does not touch the target branch:
+```text
+✦ Integration conflict detected
+
+main has changes that conflict with taskforge/run-1789852516195.
+
+Conflicting files:
+  packages/memory/src/service.ts
+
+I won't touch main. Inspect with /diff run-1789852516195, resolve manually, then retry /apply.
 ```
 
-### Method 4: Automated GitHub Pull Request
-To create a complete Pull Request with automated audit evidence, verification logs, and token cost metrics:
+### 3.3 Inspecting Changes (`/diff`)
+Inside the REPL, `/diff` (or `/diff run-<id>`) shows the file/line diff-stat between the target branch and the integration branch before you decide to apply. There is no `tf diff` CLI command yet — use plain `git diff` (§3.7) from a script or CI.
+
+### 3.4 Creating a Pull Request (`/pr`, `tf pr create`)
 ```bash
 tf pr create --base main
 ```
+or, in the REPL, `/pr`. This uses the same `GitHubWorkflowService` either way — a rich PR body with tasks executed, verification evidence, and token cost, via `gh pr create`.
 
-### Method 5: Cleaning Up Worktrees (`tf clean`)
+### 3.5 Git Workflow Policy: Which Branch Does `/apply` Target?
+By default (`git.workflow: trunk`), the target branch is whatever branch you were on when the run started — nothing to configure. Three more strategies are available in `.taskforge/config.yaml`:
+```yaml
+git:
+  workflow: trunk           # trunk (default) | github-flow | gitflow | current-branch
+  targetBranch: main        # used by trunk & github-flow; optional
+  branches:
+    production: main        # used by gitflow
+    development: develop    # used by gitflow
+```
+- **`trunk`** / **`current-branch`**: always target a fixed branch (`targetBranch`, default `main`) or whatever branch is currently checked out, respectively.
+- **`github-flow`**: same target-branch resolution as `trunk` — the difference is organizational; it pairs naturally with `delivery.mode: pull_request` below.
+- **`gitflow`**: targets `branches.development` (`develop`) by default, or `branches.production` (`main`) if the goal text looks like a hotfix (contains words like "hotfix", "urgent", "critical", "production crash/incident") — and always falls back to `production` if `develop` doesn't actually exist in the repo.
+
+If TaskForge detects both a `main`/`master` and a `develop` branch while you're still on the default `trunk` workflow, it prints a one-time, non-blocking suggestion to switch to `gitflow` — it never rewrites your config file for you.
+
+### 3.6 Choosing What Happens Automatically (`delivery.mode`)
+```yaml
+delivery:
+  mode: ask_human      # ask_human (default) | auto_apply | pull_request | branch_only
+  targetBranch: main   # optional manual override, takes priority over Git Workflow Policy
+```
+- **`ask_human`** (default): the run ends `READY TO APPLY`; you decide with `/apply`, `/pr`, or `/discard`.
+- **`auto_apply`**: TaskForge applies automatically at the end of a successful run — but only if `permissions.git.merge_main: allow` is also set (a second, explicit opt-in; the default `deny` blocks this even if `delivery.mode` is `auto_apply`, so unattended merges are never a config accident).
+- **`pull_request`**: TaskForge opens a PR automatically at the end of a successful run.
+- **`branch_only`**: leaves the integration branch in place; delivery stays `pending` until you act.
+
+### 3.7 Standard Git Commands
+Because TaskForge is pure Git under the hood, standard Git commands still work instantly:
+```bash
+git branch --list 'taskforge/*'
+git log --oneline -n 5 taskforge/run-1789852516195
+git diff main..taskforge/run-1789852516195
+```
+
+### 3.8 Discarding a Run (`/discard`)
+```text
+> /discard run-1789852516195
+Run run-1789852516195 marked as discarded. The integration branch was kept, nothing was merged.
+```
+Discarding is bookkeeping only — the branch is never deleted, so you can always go back to it with plain Git.
+
+### 3.9 Cleaning Up Worktrees (`tf clean`)
 If an agent crashed, was aborted via `Ctrl+C`, or left orphaned worktrees in `.taskforge/worktrees/`:
 ```bash
 tf clean
@@ -206,11 +257,28 @@ TaskForge includes an opt-in integration test suite (`packages/agents/tests/real
 
 | Question / Action | Recommended Command |
 | :--- | :--- |
-| **Where did my changes go?** | Check the integration branch: `taskforge/run-<runId>` |
-| **How do I list past runs?** | `tf runs` (from shell) or `/runs` (inside REPL) |
-| **How do I see what changed?** | `git diff main..taskforge/run-<runId>` |
-| **How do I merge into main?** | `git checkout main && git merge taskforge/run-<runId>` |
-| **How do I create a GitHub PR?** | `tf pr create --base main` |
+| **Where did my changes go?** | Check the integration branch: `taskforge/run-<runId>` (`/runs` shows it) |
+| **How do I list past runs?** | `tf runs` (from shell) or `/runs` (inside REPL) — shows delivery status too |
+| **How do I see what changed?** | `/diff` (or `/diff run-<id>`) in the REPL, or `git diff main..taskforge/run-<runId>` |
+| **How do I apply the changes?** | `/apply` (or `/apply run-<id>`) in the REPL, or `tf apply [run-id]` |
+| **How do I create a GitHub PR?** | `/pr` in the REPL, or `tf pr create --base main` |
+| **How do I decide not to apply a run?** | `/discard` (or `/discard run-<id>`) — keeps the branch, just stops suggesting it |
+| **Which branch does `/apply` target?** | Set by `git.workflow` in `.taskforge/config.yaml` (§3.5) |
+| **How do I make delivery fully automatic?** | Set `delivery.mode: auto_apply` **and** `permissions.git.merge_main: allow` (§3.6) |
 | **How do I clean up worktrees?** | `tf clean` |
 | **How do I cancel a running task?** | Press `Ctrl+C` or type `/cancel` |
 | **How do I view live agent logs?** | Type `/stream` in the REPL |
+
+---
+
+## 6. Extension Points for Future Work
+
+This section exists so the next change lands in the right file on the first try instead of growing a parallel, slightly-different mechanism. These are known, deliberately deferred items (see `ROADMAP.md`, Horizon 1):
+
+| Planned work | Ideal insertion point | Why there |
+| :--- | :--- | :--- |
+| **PR-first delivery with a human-readable delivery branch** (e.g. `taskforge/commitment-intelligence` instead of opening the PR straight from the ephemeral `taskforge/run-<id>`), plus renaming the ephemeral scheme to `taskforge/runs/<id>` | `packages/integration/src/delivery-service.ts` (new step before `createPullRequest()`) and `packages/integration/src/branch-naming.ts` (a second naming function, keep `integrationBranchName()` for the ephemeral branch) | This is the one function that already centralizes every branch name in the codebase — a second naming scheme belongs right next to it, not reinvented elsewhere. |
+| **Goal-based branch slug generation** (`"Add commitment intelligence"` → `commitment-intelligence`) | New `packages/git-workflow/src/branch-slug.ts`, consumed by `delivery-service.ts` | No slugification utility exists anywhere in the codebase yet; `git-workflow` already owns "turn goal text into a Git decision" (see `GitflowStrategy`'s hotfix heuristic). |
+| **Interactive workflow confirmation persisted to `.taskforge/config.yaml`** (today `detectWorkflowSuggestion()` only prints a one-time nudge — see §3.5) | A new `saveConfig(config, path?)` in `packages/shared/src/config.ts` (merge-only, must not re-serialize the whole resolved config over the user's file) + the interactive prompt itself in `packages/conversation/src/interactive-shell.ts`'s first-run banner | `loadConfig`/`getDefaultConfig` already live in `config.ts`; a save/merge function belongs beside them. The prompt belongs in the conversational shell, not in `RunOrchestrator` — the scheduler should stay ignorant of Git policy, exactly like it's already ignorant of "main" vs "develop". |
+| **New `GitWorkflowStrategy` implementations** (e.g. a stacked-PR or release-branch strategy) | `packages/git-workflow/src/strategies/*-strategy.ts`, registered in `packages/git-workflow/src/workflow-resolver.ts`'s `createGitWorkflowStrategy()` switch | The strategy interface (`resolveTargetBranch(ctx, goalDescription)`) is intentionally the only thing `RunOrchestrator` depends on — new strategies are additive and need zero changes outside this package. |
+| **New delivery destinations** (e.g. GitLab MRs, Gerrit changes) | A new method on `DeliveryService` (`packages/integration/src/delivery-service.ts`) alongside `apply`/`diff`/`discard`, plus a new `delivery.mode` enum value in `packages/shared/src/config.ts` | Keeps `RunOrchestrator` and the REPL/CLI command handlers unchanged — they already only know "call the delivery service," never "how to talk to GitHub/GitLab." |
