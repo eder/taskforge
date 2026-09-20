@@ -88,7 +88,7 @@ export function createCli(): Command {
           console.log(`    ${colors.dim}Goal:${colors.reset}   ${goal.description}`);
         }
         console.log(`    ${colors.dim}Branch:${colors.reset} ${colors.cyan}${branch}${colors.reset}`);
-        console.log(`    ${colors.dim}Merge:${colors.reset}  ${colors.green}git merge ${branch}${colors.reset}\n`);
+        console.log(`    ${colors.dim}Apply:${colors.reset}  ${colors.green}tf apply ${r.id}${colors.reset}\n`);
       }
       console.log(`  ${colors.darkGray}${'─'.repeat(64)}${colors.reset}\n`);
       db.close();

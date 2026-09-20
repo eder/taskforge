@@ -261,7 +261,7 @@ export class InteractiveShell {
       : `${colors.yellow}modified${colors.reset}`;
     const routerStatus =
       this.config.router.provider === 'openai' && Boolean(process.env.OPENAI_API_KEY)
-        ? `${colors.green}● ready${colors.reset} ${colors.dim}(OpenAI gpt-4o)${colors.reset}`
+        ? `${colors.green}● ready${colors.reset} ${colors.dim}(OpenAI ${this.config.router.model})${colors.reset}`
         : `${colors.gray}● static fallback${colors.reset}`;
 
     const lines = [
