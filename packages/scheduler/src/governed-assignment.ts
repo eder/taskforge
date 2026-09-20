@@ -56,6 +56,8 @@ export interface GovernedAssignmentResult {
   durationMs: number;
   collaborationProposal?: CollaborationProposal;
   findings?: import('@taskforge/shared').ReviewFinding[];
+  normalizedOutcome?: import('@taskforge/shared').ProviderExecutionOutcome;
+  completionReason?: import('@taskforge/shared').CompletionFailureReason;
 }
 
 /**
@@ -299,6 +301,9 @@ export async function executeGovernedAssignment(
       ctx.assignmentRepo.updateStatus(
         assignment.id,
         finalAsgnStatus,
+        undefined,
+        undefined,
+        agentResult?.completionReason,
       );
     } catch {
       // ignore persistence error
@@ -329,6 +334,8 @@ export async function executeGovernedAssignment(
     durationMs: agentResult.durationMs,
     collaborationProposal: agentResult.collaborationProposal,
     findings: resolvedFindings,
+    normalizedOutcome: agentResult.normalizedOutcome,
+    completionReason: agentResult.completionReason,
   };
 }
 

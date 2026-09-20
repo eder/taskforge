@@ -95,7 +95,12 @@ export class FakeAgent implements AgentAdapter {
     const session = this.activeSessions.get(assignment.id);
 
     // Default action if none specified
+    const defaultFileName = `taskforge-${assignment.taskId.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}.txt`;
     const action = this.actions.shift() ?? {
+      writeFile: {
+        path: defaultFileName,
+        content: `Completed assignment ${assignment.id} for task ${assignment.taskId} by ${this.id}\n`,
+      },
       gitCommitMessage: `feat(${assignment.taskId}): completed by ${this.id}`,
     };
 
@@ -128,14 +133,27 @@ export class FakeAgent implements AgentAdapter {
       };
 
       if (session) {
+        const respPromise = session.waitForResponse(requestId);
         session.pushEvent(permEvent);
-        const resp = await session.waitForResponse(requestId);
+        const resp = await respPromise;
         if (resp.decision === 'deny' || resp.decision === 'cancel') {
           return {
             success: false,
             message: `Permission denied: ${action.requestPermission.operation}`,
             output: resp.payload,
             durationMs: Date.now() - startTime,
+            completionReason: 'REQUIRED_ACTION_DENIED',
+            normalizedOutcome: {
+              processExitCode: 0,
+              providerStatus: 'FAILED',
+              finalResponse: resp.payload ?? '',
+              deniedActions: [{ action: action.requestPermission.operation }],
+              unresolvedInteractions: [],
+              errors: [`Permission denied: ${action.requestPermission.operation}`],
+              warnings: [],
+              artifacts: [],
+              runtimeLogRef: context.logPath,
+            },
           };
         }
       } else if (context.onEvent) {
@@ -158,8 +176,9 @@ export class FakeAgent implements AgentAdapter {
       };
 
       if (session) {
+        const respPromise = session.waitForResponse(requestId);
         session.pushEvent(qEvent);
-        const resp = await session.waitForResponse(requestId);
+        const resp = await respPromise;
         if (resp.decision === 'deny' || resp.decision === 'cancel') {
           return {
             success: false,
@@ -187,8 +206,9 @@ export class FakeAgent implements AgentAdapter {
       };
 
       if (session) {
+        const respPromise = session.waitForResponse(requestId);
         session.pushEvent(confEvent);
-        const resp = await session.waitForResponse(requestId);
+        const resp = await respPromise;
         if (resp.decision === 'deny' || resp.decision === 'cancel') {
           return {
             success: false,
@@ -216,8 +236,9 @@ export class FakeAgent implements AgentAdapter {
       };
 
       if (session) {
+        const respPromise = session.waitForResponse(requestId);
         session.pushEvent(authEvent);
-        const resp = await session.waitForResponse(requestId);
+        const resp = await respPromise;
         if (resp.decision === 'deny' || resp.decision === 'cancel') {
           return {
             success: false,
@@ -316,6 +337,18 @@ export class FakeAgent implements AgentAdapter {
         message: action.failMessage ?? `Failure simulated by ${this.id}`,
         durationMs: Date.now() - startTime,
         findings: action.findings,
+        completionReason: 'HARNESS_FAILED',
+        normalizedOutcome: {
+          processExitCode: 1,
+          providerStatus: 'FAILED',
+          finalResponse: '',
+          deniedActions: [],
+          unresolvedInteractions: [],
+          errors: [action.failMessage ?? `Failure simulated by ${this.id}`],
+          warnings: [],
+          artifacts: [],
+          runtimeLogRef: context.logPath,
+        },
       };
     }
 
@@ -326,6 +359,17 @@ export class FakeAgent implements AgentAdapter {
       output: `Executed ${assignment.objective}`,
       durationMs: Date.now() - startTime,
       findings: action.findings,
+      normalizedOutcome: {
+        processExitCode: 0,
+        providerStatus: 'SUCCESS',
+        finalResponse: `Executed ${assignment.objective}`,
+        deniedActions: [],
+        unresolvedInteractions: [],
+        errors: [],
+        warnings: [],
+        artifacts: action.writeFile ? [{ path: action.writeFile.path }] : [],
+        runtimeLogRef: context.logPath,
+      },
     };
   }
 

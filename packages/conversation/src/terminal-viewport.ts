@@ -5,6 +5,7 @@ import { colors } from './theme.js';
 export interface ViewportOptions {
   repoName?: string;
   branch?: string;
+  interactive?: boolean;
 }
 
 export class TerminalViewport {
@@ -25,13 +26,15 @@ export class TerminalViewport {
     options: ViewportOptions = {},
   ) {
     const streamAny = outStream as unknown as { isTTY?: boolean; rows?: number; columns?: number };
-    this.isInteractive = Boolean(
-      streamAny.isTTY &&
-      process.stdin.isTTY &&
-      typeof streamAny.rows === 'number' &&
-      streamAny.rows > 6 &&
-      outStream === process.stdout,
-    );
+    this.isInteractive = options.interactive !== undefined
+      ? options.interactive
+      : Boolean(
+          streamAny.isTTY &&
+          process.stdin.isTTY &&
+          typeof streamAny.rows === 'number' &&
+          streamAny.rows > 6 &&
+          outStream === process.stdout,
+        );
 
     this.rows = streamAny.rows || 24;
     this.cols = streamAny.columns || 80;
@@ -57,6 +60,8 @@ export class TerminalViewport {
     this.outStream.write(`\x1b[1;${this.scrollBottom}r`);
     // Clear entire screen and position at top left
     this.outStream.write('\x1b[2J\x1b[1;1H');
+    // Enable bracketed paste mode
+    this.outStream.write('\x1b[?2004h');
     this.renderInputLine('', 0, '', []);
   }
 
@@ -65,6 +70,8 @@ export class TerminalViewport {
     if (this.resizeListener) {
       process.stdout.off('resize', this.resizeListener);
     }
+    // Disable bracketed paste mode
+    this.outStream.write('\x1b[?2004l');
     // Reset terminal scrolling margin to full screen
     this.outStream.write('\x1b[r');
     // Position cursor at bottom row, show cursor, newline
@@ -147,7 +154,10 @@ export class TerminalViewport {
     const promptStr = `${colors.bold}${colors.green}>${colors.reset} `;
     const promptLen = 2; // length of "> " without ANSI escape codes
 
-    let lineContent = `${promptStr}${buffer}`;
+    const displayBuffer = buffer.includes('\n') ? buffer.replace(/\n/g, ' ↵ ') : buffer;
+    const displayCursorIndex = buffer.slice(0, cursorIndex).replace(/\n/g, ' ↵ ').length;
+
+    let lineContent = `${promptStr}${displayBuffer}`;
     if (status) {
       lineContent += ` ${colors.dim}[${status}]${colors.reset}`;
     }
@@ -156,7 +166,7 @@ export class TerminalViewport {
     this.outStream.write(`\x1b[${this.rows};1H\x1b[2K${lineContent}`);
 
     // Place cursor right after prompt + cursorIndex
-    const targetCol = promptLen + cursorIndex + 1;
+    const targetCol = promptLen + displayCursorIndex + 1;
     this.outStream.write(`\x1b[${this.rows};${targetCol}H`);
   }
 

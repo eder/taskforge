@@ -1,4 +1,5 @@
 import { RoutingProvider, RoutingInput, RoutingDecision } from './router-types.js';
+import { RouterQualityGuard } from './quality-guard.js';
 
 export class StaticRoutingProvider implements RoutingProvider {
   readonly id = 'static';
@@ -27,8 +28,10 @@ export class StaticRoutingProvider implements RoutingProvider {
       desc.includes('concurrency') ||
       input.signals?.risk === 'high';
 
+    let decision: RoutingDecision;
+
     if (isInvestigation) {
-      return {
+      decision = {
         strategy: 'parallel',
         complexity: 'high',
         risk: isHighRisk ? 'high' : 'medium',
@@ -61,11 +64,10 @@ export class StaticRoutingProvider implements RoutingProvider {
         },
         reason:
           'Task exhibits high uncertainty and potential financial or consistency risk: parallel investigation with multi-agent evidence synthesis selected.',
+        source: 'static',
       };
-    }
-
-    if (isHighRisk || input.task.type === 'review') {
-      return {
+    } else if (isHighRisk || input.task.type === 'review') {
+      decision = {
         strategy: 'review',
         complexity: 'medium',
         risk: 'high',
@@ -92,31 +94,35 @@ export class StaticRoutingProvider implements RoutingProvider {
           synthesisBeforeImplementation: false,
         },
         reason: 'Sensitive or high-risk component requires independent validation gate.',
+        source: 'static',
+      };
+    } else {
+      // Default minimal sufficient team: 1 worker
+      decision = {
+        strategy: 'single',
+        complexity: 'low',
+        risk: 'low',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite', 'canExecute'],
+            objective: input.task.contract.objective,
+            preferredAgent: 'claude',
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason:
+          'Straightforward engineering task with clear boundaries: minimum sufficient team is 1 worker.',
+        source: 'static',
       };
     }
 
-    // Default minimal sufficient team: 1 worker
-    return {
-      strategy: 'single',
-      complexity: 'low',
-      risk: 'low',
-      uncertainty: 'low',
-      teamSize: 1,
-      roles: [
-        {
-          role: 'implementer',
-          requiredCapabilities: ['canWrite', 'canExecute'],
-          objective: input.task.contract.objective,
-          preferredAgent: 'claude',
-        },
-      ],
-      communication: {
-        required: false,
-        initialAlignment: false,
-        synthesisBeforeImplementation: false,
-      },
-      reason:
-        'Straightforward engineering task with clear boundaries: minimum sufficient team is 1 worker.',
-    };
+    return RouterQualityGuard.evaluate(decision, input);
   }
 }

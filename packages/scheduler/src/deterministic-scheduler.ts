@@ -18,6 +18,7 @@ import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge
 import { InteractionGateway } from '@taskforge/execution';
 import { ConcurrencyManager } from './concurrency-manager.js';
 import { executeGovernedAssignment } from './governed-assignment.js';
+import { CompletionGate, sanitizeTaskOutput } from './completion-gate.js';
 
 export interface SchedulerContext {
   runId: string;
@@ -64,6 +65,7 @@ export interface SchedulerResult {
 
 export class DeterministicScheduler {
   private concurrency: ConcurrencyManager;
+  private completionGate: CompletionGate;
   private taskOutputs: Record<string, string> = {};
   private hasIntegratedCommits = false;
   private failedAgentsByTask = new Map<string, Set<string>>();
@@ -71,6 +73,7 @@ export class DeterministicScheduler {
   constructor(private ctx: SchedulerContext) {
     this.concurrency = new ConcurrencyManager(ctx.config);
     this.ctx.concurrency = this.concurrency;
+    this.completionGate = new CompletionGate(ctx.gitService);
   }
 
   private resolveAgentId(task: Task): string {
@@ -313,6 +316,63 @@ export class DeterministicScheduler {
           return;
         }
 
+        const verifyPath = (res as any).worktreePath ?? this.ctx.repoRoot;
+        const collabGate = await this.completionGate.evaluate({
+          task,
+          agentResult: {
+            success: res.success,
+            message: 'Collaborative execution completed',
+            durationMs: 0,
+            commitHash: res.commitHash,
+            output: (res as any).output,
+          },
+          baseCommit,
+          resultingCommit: res.commitHash,
+          worktreePath: verifyPath,
+          gitService: this.ctx.gitService,
+        });
+
+        if (!collabGate.accepted) {
+          eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId,
+            taskId: task.id,
+            type: 'COMPLETION_GATE_REJECTED',
+            payload: {
+              taskId: task.id,
+              assignmentId: collabAsgnId,
+              runId,
+              accepted: false,
+              failureReason: collabGate.failureReason,
+              evidence: collabGate.evidence,
+            },
+            timestamp: new Date(),
+          });
+          this.ctx.onProgress?.(
+            `[${task.id}] ✗ Completion gate rejected collaborative execution: ${collabGate.evidence.explanation || collabGate.failureReason}`,
+          );
+          graph.updateTaskStatus(task.id, 'failed');
+          taskRepo.updateStatus(task.id, 'failed');
+          graph.updateTaskStatus(task.id, 'blocked');
+          taskRepo.updateStatus(task.id, 'blocked');
+          return;
+        }
+
+        eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'COMPLETION_GATE_ACCEPTED',
+          payload: {
+            taskId: task.id,
+            assignmentId: collabAsgnId,
+            runId,
+            accepted: true,
+            evidence: collabGate.evidence,
+          },
+          timestamp: new Date(),
+        });
+
         graph.updateTaskStatus(task.id, 'completed');
         taskRepo.updateStatus(task.id, 'completed');
 
@@ -322,7 +382,6 @@ export class DeterministicScheduler {
         this.ctx.activityTracker?.updateStatus(task.id, 'Running automated verification checks...');
         this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
 
-        const verifyPath = (res as any).worktreePath ?? this.ctx.repoRoot;
         const verResult = await verificationRunner.verify({
           taskId: task.id,
           runId,
@@ -624,7 +683,11 @@ export class DeterministicScheduler {
         this.ctx.onProgress?.(`[${task.id}] ✓ Emergent collaboration completed with ${candidateAgent.name}.`);
       }
 
-    if (!agentResult.success) {
+    const isActionDenied =
+      govResult.completionReason === 'REQUIRED_ACTION_DENIED' ||
+      Boolean(govResult.normalizedOutcome?.deniedActions?.length);
+
+    if (!agentResult.success && !isActionDenied) {
       const rework = taskRepo.incrementRework(task.id);
 
       const errorSnippet = agentResult.output
@@ -665,11 +728,108 @@ export class DeterministicScheduler {
       return;
     }
 
+    const gateResult = await this.completionGate.evaluate({
+      task,
+      assignment,
+      agentResult: {
+        success: agentResult.success,
+        commitHash: agentResult.commitHash,
+        output: agentResult.output,
+        message: agentResult.message ?? '',
+        durationMs: agentResult.durationMs,
+        collaborationProposal: agentResult.collaborationProposal,
+        findings: govResult.findings,
+        normalizedOutcome: govResult.normalizedOutcome,
+        completionReason: govResult.completionReason,
+      },
+      normalizedOutcome: govResult.normalizedOutcome,
+      baseCommit,
+      resultingCommit: agentResult.commitHash,
+      worktreePath: wt.path,
+      gitService: this.ctx.gitService,
+    });
+
+    if (!gateResult.accepted) {
+      eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: task.id,
+        type: 'COMPLETION_GATE_REJECTED',
+        payload: {
+          taskId: task.id,
+          assignmentId,
+          runId,
+          accepted: false,
+          failureReason: gateResult.failureReason,
+          evidence: gateResult.evidence,
+        },
+        timestamp: new Date(),
+      });
+
+      if (gateResult.failureReason) {
+        assignmentRepo.updateStatus(
+          assignmentId,
+          'failed',
+          undefined,
+          undefined,
+          gateResult.failureReason,
+        );
+      }
+
+      const failMsg =
+        gateResult.evidence.explanation || gateResult.failureReason || 'Completion gate rejected';
+      this.ctx.onProgress?.(`[${task.id}] ✗ Completion gate rejected: ${failMsg}`);
+
+      if (!this.failedAgentsByTask.has(task.id)) {
+        this.failedAgentsByTask.set(task.id, new Set());
+      }
+      this.failedAgentsByTask.get(task.id)!.add(agentId);
+
+      if (gateResult.failureReason === 'REQUIRED_ACTION_DENIED') {
+        graph.updateTaskStatus(task.id, 'failed');
+        taskRepo.updateStatus(task.id, 'failed');
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+        return;
+      }
+
+      const rework = taskRepo.incrementRework(task.id);
+      if (rework <= config.verification.maxReworkCycles) {
+        graph.updateTaskStatus(task.id, 'failed');
+        taskRepo.updateStatus(task.id, 'failed');
+        graph.updateTaskStatus(task.id, 'retrying');
+        taskRepo.updateStatus(task.id, 'retrying');
+        graph.updateTaskStatus(task.id, 'ready');
+        taskRepo.updateStatus(task.id, 'ready');
+      } else {
+        graph.updateTaskStatus(task.id, 'failed');
+        taskRepo.updateStatus(task.id, 'failed');
+        graph.updateTaskStatus(task.id, 'blocked');
+        taskRepo.updateStatus(task.id, 'blocked');
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+      }
+      return;
+    }
+
+    eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId,
+      taskId: task.id,
+      type: 'COMPLETION_GATE_ACCEPTED',
+      payload: {
+        taskId: task.id,
+        assignmentId,
+        runId,
+        accepted: true,
+        evidence: gateResult.evidence,
+      },
+      timestamp: new Date(),
+    });
+
     graph.updateTaskStatus(task.id, 'completed');
     taskRepo.updateStatus(task.id, 'completed');
 
     if (agentResult.output && agentResult.output.trim().length > 0) {
-      this.taskOutputs[task.id] = agentResult.output.trim();
+      this.taskOutputs[task.id] = sanitizeTaskOutput(agentResult.output);
     }
 
     this.ctx.onProgress?.(
@@ -710,6 +870,24 @@ export class DeterministicScheduler {
       });
 
       if (!verResult.passed) {
+        eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'COMPLETION_GATE_REJECTED',
+          payload: {
+            taskId: task.id,
+            assignmentId,
+            runId,
+            accepted: false,
+            failureReason: 'VERIFICATION_FAILED',
+            evidence: {
+              verificationPassed: false,
+              explanation: `Automated verification failed: ${verResult.failureReason}`,
+            },
+          },
+          timestamp: new Date(),
+        });
         const rework = taskRepo.incrementRework(task.id);
         this.ctx.onProgress?.(
           `[${task.id}] Verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,

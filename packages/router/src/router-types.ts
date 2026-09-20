@@ -1,6 +1,32 @@
 import { AgentRole, CollaborationMode, RepositoryProfile } from '@taskforge/shared';
 import { Task } from '@taskforge/core';
 
+export type RoutingSource = 'openai' | 'static' | 'adaptive' | 'fallback';
+
+export type RouterFallbackReason =
+  | 'timeout'
+  | 'http_error'
+  | 'invalid_schema'
+  | 'empty_response'
+  | 'provider_unavailable'
+  | 'quota'
+  | 'unknown';
+
+export interface PolicyAdjustment {
+  originalComplexity: 'low' | 'medium' | 'high';
+  adjustedComplexity: 'low' | 'medium' | 'high';
+  originalRisk: 'low' | 'medium' | 'high';
+  adjustedRisk: 'low' | 'medium' | 'high';
+  reasons: string[];
+  crossCuttingRuntimeUpgrade?: boolean;
+}
+
+export interface RouterProposal {
+  strategy: CollaborationMode;
+  complexity: 'low' | 'medium' | 'high';
+  risk: 'low' | 'medium' | 'high';
+}
+
 export interface RoleRequest {
   role: AgentRole;
   requiredCapabilities: string[];
@@ -21,12 +47,29 @@ export interface RoutingDecision {
     synthesisBeforeImplementation: boolean;
   };
   reason: string;
-  /**
-   * How a concurrent (parallel/competitive) team handles investigator failures.
-   * Defaults to 'all_required' when omitted: any failed investigator aborts
-   * the team before synthesis/implementation runs.
-   */
   investigationPolicy?: 'all_required' | 'quorum' | 'best_effort';
+
+  // Provenance
+  source: RoutingSource;
+  provider?: string;
+  model?: string;
+  fallbackReason?: RouterFallbackReason;
+  promptVersion?: string;
+  contextHash?: string;
+
+  // Quality Guard Adjustments
+  routerProposal?: RouterProposal;
+  policyAdjustment?: PolicyAdjustment;
+
+  // Provenance grouping
+  provenance?: {
+    source: RoutingSource;
+    provider?: string;
+    model?: string;
+    fallbackReason?: RouterFallbackReason;
+    routerProposal?: RouterProposal;
+    policyAdjustment?: PolicyAdjustment;
+  };
 }
 
 export interface RoutingInput {

@@ -27,7 +27,10 @@ export type EventType =
   | 'DELIVERY_APPLIED'
   | 'DELIVERY_PR_CREATED'
   | 'DELIVERY_DISCARDED'
-  | 'DELIVERY_CONFLICT';
+  | 'DELIVERY_CONFLICT'
+  | 'COMPLETION_GATE_ACCEPTED'
+  | 'COMPLETION_GATE_REJECTED'
+  | 'PLAN_REVISED';
 
 export interface TaskForgeEvent {
   id: string;

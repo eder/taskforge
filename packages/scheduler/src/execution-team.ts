@@ -7,6 +7,7 @@ import { RoutingDecision, SelectedAgentAssignment } from '@taskforge/router';
 import { executeGovernedAssignment } from './governed-assignment.js';
 import { SchedulerContext } from './deterministic-scheduler.js';
 import { TeamMemberReservation } from './concurrency-manager.js';
+import { CompletionGate } from './completion-gate.js';
 
 export interface TeamExecutionResult {
   success: boolean;
@@ -231,6 +232,40 @@ async function runReviewTeam(
     return {
       success: false,
       output: implementerRes.output ?? implementerRes.message ?? 'Implementer failed',
+      worktreePath: implementerRes.worktreePath,
+    };
+  }
+
+  const gate = new CompletionGate(ctx.gitService);
+  const gateRes = await gate.evaluate({
+    task,
+    assignment: leadAssignment,
+    agentResult: {
+      success: implementerRes.success,
+      commitHash: implementerRes.commitHash,
+      output: implementerRes.output,
+      message: implementerRes.message ?? '',
+      durationMs: implementerRes.durationMs,
+      collaborationProposal: implementerRes.collaborationProposal,
+      findings: implementerRes.findings,
+      normalizedOutcome: implementerRes.normalizedOutcome,
+      completionReason: implementerRes.completionReason,
+    },
+    normalizedOutcome: implementerRes.normalizedOutcome,
+    baseCommit: headCommit,
+    resultingCommit: implementerRes.commitHash,
+    worktreePath: implementerRes.worktreePath,
+    gitService: ctx.gitService,
+  });
+
+  if (!gateRes.accepted) {
+    ctx.onProgress?.(
+      `[${task.id}] Implementer ${lead.agent.name} failed completion gate: ${gateRes.evidence.explanation || gateRes.failureReason}`,
+    );
+    return {
+      success: false,
+      output:
+        gateRes.evidence.explanation ?? implementerRes.output ?? 'Implementer failed completion gate',
       worktreePath: implementerRes.worktreePath,
     };
   }
