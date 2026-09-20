@@ -431,6 +431,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
     };
 
     const config = getDefaultConfig();
+    config.collaboration.maxAgentsPerTask = 4;
     config.verification.tests = false;
     config.verification.lint = false;
     config.verification.typecheck = false;
