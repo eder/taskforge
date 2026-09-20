@@ -178,7 +178,7 @@ export class SemanticPlanner implements Planner {
     fallbackGraph.metadata = {
       source: apiKey || this.customCaller ? 'fallback' : 'heuristic',
       model: this.model,
-      fallbackReason: apiKey ? 'model_unresponsive_or_invalid' : 'no_model_configured',
+      fallbackReason: apiKey || this.customCaller ? 'model_unresponsive_or_invalid' : 'no_model_configured',
       promptVersion: this.promptVersion,
       schemaVersion: this.schemaVersion,
     };
