@@ -9,6 +9,7 @@ import {
   AuditService,
 } from '@taskforge/persistence';
 import { TelemetryCollector } from '@taskforge/telemetry';
+import { integrationBranchName } from './branch-naming.js';
 
 export interface CreatePROptions {
   runId: string;
@@ -122,7 +123,7 @@ export class GitHubWorkflowService {
     const runId = options.runId;
     const branchName = options.runId.startsWith('taskforge/')
       ? options.runId
-      : `taskforge/${options.runId.startsWith('run-') ? options.runId : `run-${options.runId}`}`;
+      : integrationBranchName(options.runId);
 
     const summary = this.generatePullRequestSummary(runId);
     const title = options.title ?? `taskforge: automated integration for ${runId}`;

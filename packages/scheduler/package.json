@@ -26,6 +26,7 @@
     "@taskforge/negotiation": "workspace:*",
     "@taskforge/planner": "workspace:*",
     "@taskforge/router": "workspace:*",
+    "@taskforge/git-workflow": "workspace:*",
     "@taskforge/collaboration": "workspace:*"
   },
   "devDependencies": {

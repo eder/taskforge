@@ -25,6 +25,26 @@ describe('OperatorAgent Intent Layer', () => {
     if (constraint.type === 'add_constraint') {
       expect(constraint.constraint).toBe('Do not delete migrations');
     }
+
+    const apply = operator.parseIntent('/apply run-123');
+    expect(apply.type).toBe('apply_run');
+    if (apply.type === 'apply_run') expect(apply.runId).toBe('run-123');
+
+    const applyNoArg = operator.parseIntent('/apply');
+    expect(applyNoArg.type).toBe('apply_run');
+    if (applyNoArg.type === 'apply_run') expect(applyNoArg.runId).toBeUndefined();
+
+    const diff = operator.parseIntent('/diff run-123');
+    expect(diff.type).toBe('diff_run');
+    if (diff.type === 'diff_run') expect(diff.runId).toBe('run-123');
+
+    const pr = operator.parseIntent('/pr run-123');
+    expect(pr.type).toBe('create_pr');
+    if (pr.type === 'create_pr') expect(pr.runId).toBe('run-123');
+
+    const discard = operator.parseIntent('/discard run-123');
+    expect(discard.type).toBe('discard_run');
+    if (discard.type === 'discard_run') expect(discard.runId).toBe('run-123');
   });
 
   it('parses natural language intents', () => {
@@ -48,6 +68,19 @@ describe('OperatorAgent Intent Layer', () => {
     if (goalIntent.type === 'submit_goal') {
       expect(goalIntent.goal).toBe('implement API key authentication support');
     }
+
+    expect(operator.parseIntent('aplica as mudanças').type).toBe('apply_run');
+    expect(operator.parseIntent('merge this').type).toBe('apply_run');
+    expect(operator.parseIntent('put this on main').type).toBe('apply_run');
+
+    expect(operator.parseIntent('descarta').type).toBe('discard_run');
+    expect(operator.parseIntent("don't apply this").type).toBe('discard_run');
+
+    expect(operator.parseIntent('show me what changed').type).toBe('diff_run');
+    expect(operator.parseIntent('mostra as mudanças').type).toBe('diff_run');
+
+    expect(operator.parseIntent('create a pr').type).toBe('create_pr');
+    expect(operator.parseIntent('cria um pr').type).toBe('create_pr');
   });
 
   it('formats responses for each intent', () => {

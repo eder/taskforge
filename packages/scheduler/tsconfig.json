@@ -17,6 +17,7 @@
     { "path": "../negotiation" },
     { "path": "../planner" },
     { "path": "../router" },
+    { "path": "../git-workflow" },
     { "path": "../collaboration" }
   ],
   "include": ["src/**/*"]

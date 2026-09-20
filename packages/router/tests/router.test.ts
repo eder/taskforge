@@ -118,4 +118,22 @@ describe('Router and AgentSelector', () => {
     // Preferred agent was codex, but codex has exhausted quota, so claude is selected!
     expect(selected[0].agent.id).toBe('claude');
   });
+
+  it('AgentSelector marks staffing as degraded instead of silently duplicating an agent across roles', async () => {
+    const registry = new AgentRegistry(false);
+    const onlyAgent = new FakeAgent('solo-agent', 'Solo Agent');
+    registry.register(onlyAgent);
+
+    const selector = new AgentSelector(registry);
+    const selected = await selector.selectAgents([
+      { role: 'implementer', requiredCapabilities: ['canWrite'], objective: 'Implement' },
+      { role: 'reviewer', requiredCapabilities: ['canRead'], objective: 'Review' },
+    ]);
+
+    expect(selected.length).toBe(2);
+    expect(selected[0].agent.id).toBe('solo-agent');
+    expect(selected[0].degraded).toBeUndefined();
+    expect(selected[1].agent.id).toBe('solo-agent');
+    expect(selected[1].degraded).toBe(true);
+  });
 });

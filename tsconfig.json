@@ -14,6 +14,7 @@
     { "path": "./packages/planner" },
     { "path": "./packages/negotiation" },
     { "path": "./packages/router" },
+    { "path": "./packages/git-workflow" },
     { "path": "./packages/collaboration" },
     { "path": "./packages/operator" },
     { "path": "./packages/conversation" },

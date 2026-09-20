@@ -95,6 +95,12 @@ export class IntegrationError extends TaskForgeError {
   }
 }
 
+export class DeliveryError extends TaskForgeError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, 'DELIVERY_ERROR', context);
+  }
+}
+
 export class PluginError extends TaskForgeError {
   constructor(message: string, context?: Record<string, unknown>) {
     super(message, 'PLUGIN_ERROR', context);

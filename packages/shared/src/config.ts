@@ -206,6 +206,31 @@ export const TaskForgeConfigSchema = z.object({
         confirmation: 'block',
       },
     }),
+  delivery: z
+    .object({
+      mode: z
+        .enum(['ask_human', 'auto_apply', 'pull_request', 'branch_only'])
+        .default('ask_human'),
+      targetBranch: z.string().optional(),
+    })
+    .default({
+      mode: 'ask_human',
+    }),
+  git: z
+    .object({
+      workflow: z.enum(['trunk', 'github-flow', 'gitflow', 'current-branch']).default('trunk'),
+      targetBranch: z.string().optional(),
+      branches: z
+        .object({
+          production: z.string().default('main'),
+          development: z.string().default('develop'),
+        })
+        .default({ production: 'main', development: 'develop' }),
+    })
+    .default({
+      workflow: 'trunk',
+      branches: { production: 'main', development: 'develop' },
+    }),
 });
 
 export type TaskForgeConfig = z.infer<typeof TaskForgeConfigSchema>;

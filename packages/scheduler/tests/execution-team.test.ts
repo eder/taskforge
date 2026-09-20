@@ -252,4 +252,206 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
 
     db.close();
   });
+
+  it('routes strategy "parallel" with exactly 2 roles through the concurrent investigation path, not the sequential pair handoff', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const assignmentRepo = new AssignmentRepository(db);
+    const registry = new AgentRegistry(false);
+
+    const investigatorAgent = new FakeAgent('investigator-agent', 'Investigator Agent', [
+      {
+        writeFile: { path: 'notes.md', content: 'Investigation notes\n' },
+        gitCommitMessage: 'docs: investigation notes',
+      },
+    ]);
+    const implementerAgent = new FakeAgent('implementer-agent', 'Implementer Agent', [
+      {
+        writeFile: { path: 'feature.ts', content: 'export const feature = true;\n' },
+        gitCommitMessage: 'feat: implement feature',
+      },
+    ]);
+
+    registry.register(investigatorAgent);
+    registry.register(implementerAgent);
+
+    const parallelRouter: RoutingProvider = {
+      id: 'mock-parallel-router',
+      route: async () => ({
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'medium',
+        teamSize: 2,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement fix',
+            preferredAgent: 'implementer-agent',
+          },
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Investigate root cause',
+            preferredAgent: 'investigator-agent',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Parallel investigation required before implementation',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: parallelRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-PARALLEL-1',
+      title: 'Fix flaky test',
+      description: 'Investigate then implement a fix for a flaky test',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-PARALLEL-1',
+        objective: 'Fix flaky test',
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Test passes reliably'],
+      },
+    };
+    graph.addTask(task);
+
+    const result = await orchestrator.run('Fix flaky test', { preplannedGraph: graph });
+
+    expect(result.status).toBe('completed');
+
+    const assignments = assignmentRepo.listByTask('TASK-PARALLEL-1');
+    // The concurrent path creates: 1 investigator + 1 synthesis ('lead') + 1 implementer = 3.
+    // The old bug (dispatching on selected.length === 2) would only create 2 (lead/partner handoff).
+    expect(assignments.length).toBe(3);
+    expect(assignments.some((a) => a.role === 'lead')).toBe(true);
+    expect(assignments.some((a) => a.agentId === 'investigator-agent')).toBe(true);
+
+    db.close();
+  });
+
+  it('aborts before synthesis when an investigator fails under the default all_required policy', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const assignmentRepo = new AssignmentRepository(db);
+    const registry = new AgentRegistry(false);
+
+    const failingInvestigator = new FakeAgent('failing-investigator', 'Failing Investigator', [
+      { shouldFail: true, failMessage: 'Could not reproduce the issue' },
+    ]);
+    const implementerAgent = new FakeAgent('implementer-agent-2', 'Implementer Agent 2', [
+      {
+        writeFile: { path: 'feature.ts', content: 'export const feature = true;\n' },
+        gitCommitMessage: 'feat: implement feature',
+      },
+    ]);
+
+    registry.register(failingInvestigator);
+    registry.register(implementerAgent);
+
+    const parallelRouter: RoutingProvider = {
+      id: 'mock-parallel-router-fail',
+      route: async () => ({
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'high',
+        teamSize: 2,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement fix',
+            preferredAgent: 'implementer-agent-2',
+          },
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Investigate root cause',
+            preferredAgent: 'failing-investigator',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Parallel investigation required before implementation',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: parallelRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-PARALLEL-FAIL',
+      title: 'Fix flaky test',
+      description: 'Investigate then implement a fix for a flaky test',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-PARALLEL-FAIL',
+        objective: 'Fix flaky test',
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Test passes reliably'],
+      },
+    };
+    graph.addTask(task);
+
+    const result = await orchestrator.run('Fix flaky test', {
+      preplannedGraph: graph,
+    });
+
+    // Investigator failed and policy defaults to all_required: the team must
+    // fail before synthesis/implementation ever runs, not silently proceed.
+    expect(implementerAgent.executedAssignments.length).toBe(0);
+    expect(result.tasksFailed).toBeGreaterThan(0);
+
+    const assignments = assignmentRepo.listByTask('TASK-PARALLEL-FAIL');
+    expect(assignments.some((a) => a.agentId === 'failing-investigator' && a.status === 'failed')).toBe(
+      true,
+    );
+    // The synthesis ('lead') and implementer nodes are pre-registered by the
+    // assignment graph but must never run when the investigation is aborted.
+    const leadAssignment = assignments.find((a) => a.role === 'lead');
+    expect(leadAssignment?.status).not.toBe('completed');
+
+    db.close();
+  });
 });

@@ -2,6 +2,7 @@ import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { EventRepository } from '@taskforge/persistence';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationError, TaskForgeConfig } from '@taskforge/shared';
+import { integrationBranchName } from './branch-naming.js';
 
 export interface IntegrateTaskOptions {
   runId: string;
@@ -23,7 +24,7 @@ export class IntegrationService {
   private queueLock: Promise<void> = Promise.resolve();
 
   getBranchName(runId: string): string {
-    return `taskforge/run-${runId}`;
+    return integrationBranchName(runId);
   }
 
   async initIntegrationBranch(runId: string, baseCommit: string): Promise<string> {

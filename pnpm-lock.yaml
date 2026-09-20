@@ -407,6 +407,16 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/git-workflow:
+    dependencies:
+      '@taskforge/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/integration:
     dependencies:
       '@taskforge/execution':
@@ -545,6 +555,9 @@ importers:
       '@taskforge/execution':
         specifier: workspace:*
         version: link:../execution
+      '@taskforge/git-workflow':
+        specifier: workspace:*
+        version: link:../git-workflow
       '@taskforge/integration':
         specifier: workspace:*
         version: link:../integration
