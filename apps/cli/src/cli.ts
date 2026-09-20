@@ -167,6 +167,16 @@ export function createCli(): Command {
       );
     });
 
+  // tf health
+  program
+    .command('health')
+    .description('Inspect system health for Router, agents, and local database')
+    .action(async () => {
+      const shell = new InteractiveShell();
+      const output = await shell.handleInput('/health');
+      console.log(`\n${output}\n`);
+    });
+
   // tf cleanup
   program
     .command('cleanup')

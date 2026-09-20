@@ -1,8 +1,17 @@
-import { RoutingProvider, RoutingInput, RoutingDecision } from './router-types.js';
+import { RoutingProvider, RoutingInput, RoutingDecision, RouterHealthReport } from './router-types.js';
 import { RouterQualityGuard } from './quality-guard.js';
 
 export class StaticRoutingProvider implements RoutingProvider {
   readonly id = 'static';
+
+  async healthCheck(): Promise<RouterHealthReport> {
+    return {
+      status: 'healthy',
+      provider: this.id,
+      adaptive: false,
+      details: 'Deterministic rule-based routing active',
+    };
+  }
 
   async route(input: RoutingInput): Promise<RoutingDecision> {
     const desc =

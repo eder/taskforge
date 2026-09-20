@@ -1,4 +1,4 @@
-import { RepositoryProfile, Constraint } from '@taskforge/shared';
+import { RepositoryProfile, Constraint, PlannerProvenance } from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
 
 export function isPureExplanationGoal(description: string): boolean {
@@ -319,6 +319,18 @@ export class HeuristicPlanner implements Planner {
       }
     }
 
-    return new TaskGraph(tasks);
+    const graph = new TaskGraph(tasks);
+    const plannerMeta: PlannerProvenance = {
+      source: 'heuristic_fallback',
+      fallbackReason: 'heuristic_planner',
+      promptVersion: 'v1.0',
+      schemaVersion: 'v1.0',
+    };
+    graph.metadata = {
+      planner: plannerMeta,
+      source: 'heuristic',
+    };
+    return graph;
   }
 }
+

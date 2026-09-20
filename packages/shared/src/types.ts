@@ -57,25 +57,36 @@ export type AssignmentStatus =
 export type ExecutionStatus =
   'pending' | 'running' | 'success' | 'failed' | 'timeout' | 'cancelled';
 
+export type PlanRevisionType =
+  | 'modify_dependency'
+  | 'add_constraint'
+  | 'assign_agent'
+  | 'add_task'
+  | 'split_task'
+  | 'general_feedback';
+
 export interface PlanRevision {
-  feedback?: string;
-  revisionType?:
-    | 'modify_dependency'
-    | 'add_constraint'
-    | 'assign_agent'
-    | 'add_task'
-    | 'split_task'
-    | 'general_feedback';
-  type?:
-    | 'modify_dependency'
-    | 'add_constraint'
-    | 'assign_agent'
-    | 'add_task'
-    | 'split_task'
-    | 'general_feedback';
+  revisionType: PlanRevisionType;
+  feedback: string;
+  type?: PlanRevisionType;
   taskId?: string;
   details?: string | Record<string, unknown>;
 }
+
+export type PlannerSource =
+  | 'semantic_model'
+  | 'deterministic_decomposition'
+  | 'heuristic_fallback';
+
+export interface PlannerProvenance {
+  source: PlannerSource;
+  provider?: string;
+  model?: string;
+  fallbackReason?: string;
+  promptVersion?: string;
+  schemaVersion?: string;
+}
+
 
 export interface Constraint {
   type: string;

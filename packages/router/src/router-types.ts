@@ -84,7 +84,16 @@ export interface RoutingInput {
   budgetPreference?: 'cost' | 'balanced' | 'quality';
 }
 
+export interface RouterHealthReport {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  provider: string;
+  model?: string;
+  adaptive: boolean;
+  details?: string;
+}
+
 export interface RoutingProvider {
   readonly id: string;
   route(input: RoutingInput): Promise<RoutingDecision>;
+  healthCheck?(): Promise<RouterHealthReport>;
 }

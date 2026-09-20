@@ -1,19 +1,16 @@
-import { RepositoryProfile } from '@taskforge/shared';
+import {
+  RepositoryProfile,
+  PlanRevision,
+  PlanRevisionType,
+  PlannerProvenance,
+  PlannerSource,
+} from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
 import { HeuristicPlanner } from './planner.js';
 import { TaskGraphValidator, RawPlanOutput } from './task-graph-validator.js';
 
-export interface PlanRevision {
-  feedback: string;
-  revisionType:
-    | 'modify_dependency'
-    | 'add_constraint'
-    | 'assign_agent'
-    | 'add_task'
-    | 'split_task'
-    | 'general_feedback';
-  details?: Record<string, unknown>;
-}
+export type { PlanRevision, PlanRevisionType, PlannerProvenance, PlannerSource };
+
 
 export interface SemanticPlanOptions {
   previousGraph?: TaskGraph;
@@ -105,7 +102,7 @@ export class SemanticPlanner implements Planner {
     fallbackPlanner?: HeuristicPlanner;
     customCaller?: ModelCaller;
   } = {}) {
-    this.apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
+    this.apiKey = 'apiKey' in options ? options.apiKey : process.env.OPENAI_API_KEY;
     this.model = options.model ?? 'gpt-5.6-luna';
     this.timeoutMs = options.timeoutMs ?? 15000;
     this.fallbackPlanner = options.fallbackPlanner ?? new HeuristicPlanner();
@@ -116,14 +113,54 @@ export class SemanticPlanner implements Planner {
     this.customCaller = caller;
   }
 
+  public classifyGoal(goal: Goal): { isComplex: boolean; minTasks: number } {
+    const text = goal.description;
+
+    const rawLines = text
+      .split('\n')
+      .map((l) => l.replace(/^[-*•>\d.]+\s*/, '').trim())
+      .filter((l) => l.length > 0);
+
+    const clauses: string[] = [];
+    if (rawLines.length > 2) {
+      clauses.push(...rawLines);
+    } else {
+      const parts = text
+        .split(/;|\band\b|\bwith\b/i)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 10);
+      if (parts.length >= 3) {
+        clauses.push(...parts);
+      }
+    }
+
+    const lower = text.toLowerCase();
+    const hasComplexKeywords =
+      lower.includes('complex') ||
+      lower.includes('cross-cutting') ||
+      lower.includes('end-to-end') ||
+      lower.includes('self-hosting') ||
+      lower.includes('pipeline') ||
+      lower.includes('subsystems') ||
+      lower.includes('architecture') ||
+      lower.includes('dogfood');
+
+    const isComplex = clauses.length >= 3 || (hasComplexKeywords && (clauses.length >= 2 || text.length > 60));
+    const minTasks = isComplex ? Math.max(3, Math.min(clauses.length || 3, 6)) : 1;
+
+    return { isComplex, minTasks };
+  }
+
   async plan(
     goal: Goal,
     profile?: RepositoryProfile,
     options: SemanticPlanOptions = {},
   ): Promise<TaskGraph> {
-    const apiKey = options.apiKey ?? this.apiKey;
+    const apiKey = 'apiKey' in options ? options.apiKey : this.apiKey;
     const model = options.model ?? this.model;
     const timeoutMs = options.timeoutMs ?? this.timeoutMs;
+
+    const { minTasks } = this.classifyGoal(goal);
 
     // 1. Try semantic planning with model caller if configured
     if (this.customCaller || apiKey) {
@@ -140,9 +177,18 @@ export class SemanticPlanner implements Planner {
             rawOutput = await this.callOpenAI(messages, apiKey!, model, timeoutMs);
           }
 
-          const validation = TaskGraphValidator.validate(rawOutput, goal.id);
+          const validation = TaskGraphValidator.validate(rawOutput, goal.id, { minTasks });
           if (validation.valid && validation.graph) {
+            const plannerProvenance: PlannerProvenance = {
+              source: 'semantic_model',
+              provider: this.customCaller ? 'custom' : 'openai',
+              model,
+              promptVersion: this.promptVersion,
+              schemaVersion: this.schemaVersion,
+            };
             validation.graph.metadata = {
+              ...(validation.graph.metadata ?? {}),
+              planner: plannerProvenance,
               source: 'semantic',
               model,
               promptVersion: this.promptVersion,
@@ -161,11 +207,22 @@ export class SemanticPlanner implements Planner {
     // 2. Complex Goal Semantic Decomposition (Fallback engine for complex multi-clause objectives)
     const decomposed = this.tryDecomposeComplexGoal(goal, profile);
     if (decomposed) {
-      const validation = TaskGraphValidator.validate(decomposed, goal.id);
+      const validation = TaskGraphValidator.validate(decomposed, goal.id, {
+        minTasks: Math.min(minTasks, decomposed.tasks.length),
+      });
       if (validation.valid && validation.graph) {
+        const fallbackReason = apiKey || this.customCaller ? 'model_unresponsive_or_invalid' : undefined;
+        const plannerProvenance: PlannerProvenance = {
+          source: 'deterministic_decomposition',
+          fallbackReason,
+          promptVersion: this.promptVersion,
+          schemaVersion: this.schemaVersion,
+        };
         validation.graph.metadata = {
-          source: 'semantic',
-          model: this.model,
+          ...(validation.graph.metadata ?? {}),
+          planner: plannerProvenance,
+          source: 'deterministic_decomposition',
+          fallbackReason,
           promptVersion: this.promptVersion,
           schemaVersion: this.schemaVersion,
         };
@@ -175,10 +232,20 @@ export class SemanticPlanner implements Planner {
 
     // 3. Fallback to heuristic planner
     const fallbackGraph = await this.fallbackPlanner.plan(goal, profile);
+    const fallbackReason = apiKey || this.customCaller ? 'model_unresponsive_or_invalid' : 'no_model_configured';
+    const plannerProvenance: PlannerProvenance = {
+      source: 'heuristic_fallback',
+      fallbackReason,
+      model: this.model,
+      promptVersion: this.promptVersion,
+      schemaVersion: this.schemaVersion,
+    };
     fallbackGraph.metadata = {
+      ...(fallbackGraph.metadata ?? {}),
+      planner: plannerProvenance,
       source: apiKey || this.customCaller ? 'fallback' : 'heuristic',
       model: this.model,
-      fallbackReason: apiKey || this.customCaller ? 'model_unresponsive_or_invalid' : 'no_model_configured',
+      fallbackReason,
       promptVersion: this.promptVersion,
       schemaVersion: this.schemaVersion,
     };
@@ -192,13 +259,52 @@ export class SemanticPlanner implements Planner {
     _profile?: RepositoryProfile,
   ): Promise<TaskGraph> {
     const existingTasks = currentGraph.getAllTasks();
+    const revType: PlanRevisionType = revision.revisionType ?? revision.type ?? 'general_feedback';
+    const feedbackText =
+      revision.feedback ||
+      (typeof revision.details === 'string' ? revision.details : '') ||
+      '';
+
+    const buildValidatedGraph = (tasks: Task[], type: PlanRevisionType): TaskGraph => {
+      const rawPlan: RawPlanOutput = {
+        summary: `Revised plan (${type})`,
+        tasks: tasks.map((t) => ({
+          taskId: t.id,
+          title: t.title,
+          description: t.description,
+          type: t.type,
+          dependencies: t.dependencies,
+          objective: t.contract.objective,
+          allowedScope: t.contract.allowedScope,
+          forbiddenChanges: t.contract.forbiddenChanges,
+          acceptanceCriteria: t.contract.acceptanceCriteria,
+        })),
+      };
+
+      const val = TaskGraphValidator.validate(rawPlan, goal.id);
+      if (!val.valid || !val.graph) {
+        throw new Error(`Revised task graph failed validation: ${val.errors.join(', ')}`);
+      }
+
+      val.graph.metadata = {
+        ...(currentGraph.metadata ?? {}),
+        planner: currentGraph.metadata?.planner,
+        source: currentGraph.metadata?.source ?? 'semantic',
+        revised: true,
+        revisionType: type,
+        feedback: feedbackText,
+      };
+      return val.graph;
+    };
 
     // 1. add_constraint
-    if (revision.revisionType === 'add_constraint') {
+    if (revType === 'add_constraint') {
       const forbidden =
-        (revision.details?.forbiddenScope as string) ??
-        (revision.feedback.match(/(?:don't|do not)\s+(?:modify|touch|change)\s+(?:the\s+)?(.+)/i)?.[1] ||
-          '');
+        (typeof revision.details === 'object' && revision.details !== null
+          ? (revision.details as any).forbiddenScope
+          : undefined) ??
+        (feedbackText.match(/(?:don't|do not|must not|constraint)\s+(?:modify|touch|change)?\s*(?:the\s+)?(.+)/i)?.[1] ||
+          feedbackText);
 
       const updatedTasks = existingTasks.map((t) => {
         const forbiddenChanges = [...t.contract.forbiddenChanges];
@@ -215,23 +321,23 @@ export class SemanticPlanner implements Planner {
         };
       });
 
-      const updatedGraph = new TaskGraph(updatedTasks);
-      updatedGraph.metadata = {
-        ...(currentGraph.metadata ?? {}),
-        source: 'semantic',
-        revised: true,
-        revisionType: 'add_constraint',
-      };
-      return updatedGraph;
+      return buildValidatedGraph(updatedTasks, 'add_constraint');
     }
 
     // 2. modify_dependency
-    if (revision.revisionType === 'modify_dependency') {
-      let targetTaskId = revision.details?.task as string;
-      let dependsOnId = revision.details?.dependsOn as string;
+    if (revType === 'modify_dependency') {
+      let targetTaskId =
+        revision.taskId ??
+        (typeof revision.details === 'object' && revision.details !== null
+          ? (revision.details as any).task
+          : undefined);
+      let dependsOnId =
+        typeof revision.details === 'object' && revision.details !== null
+          ? (revision.details as any).dependsOn
+          : undefined;
 
       if (!targetTaskId || !dependsOnId) {
-        const match = revision.feedback.match(
+        const match = feedbackText.match(
           /task\s*(\d+|[A-Z0-9_-]+)\s*should\s+depend\s+on\s+task\s*(\d+|[A-Z0-9_-]+)/i,
         );
         if (match) {
@@ -264,41 +370,17 @@ export class SemanticPlanner implements Planner {
             return t;
           });
 
-          // Validate that the modified graph remains acyclic
-          const rawPlan = {
-            tasks: updatedTasks.map((t) => ({
-              taskId: t.id,
-              title: t.title,
-              description: t.description,
-              type: t.type,
-              dependencies: t.dependencies,
-              objective: t.contract.objective,
-              allowedScope: t.contract.allowedScope,
-              forbiddenChanges: t.contract.forbiddenChanges,
-              acceptanceCriteria: t.contract.acceptanceCriteria,
-            })),
-          };
-
-          const val = TaskGraphValidator.validate(rawPlan, goal.id);
-          if (val.valid && val.graph) {
-            val.graph.metadata = {
-              ...(currentGraph.metadata ?? {}),
-              source: 'semantic',
-              revised: true,
-              revisionType: 'modify_dependency',
-            };
-            return val.graph;
-          }
+          return buildValidatedGraph(updatedTasks, 'modify_dependency');
         }
       }
     }
 
     // 3. add_task
-    if (revision.revisionType === 'add_task') {
+    if (revType === 'add_task') {
       const isVerification =
-        revision.feedback.toLowerCase().includes('verification') ||
-        revision.feedback.toLowerCase().includes('verify') ||
-        revision.feedback.toLowerCase().includes('test');
+        feedbackText.toLowerCase().includes('verification') ||
+        feedbackText.toLowerCase().includes('verify') ||
+        feedbackText.toLowerCase().includes('test');
 
       const nextNum = existingTasks.length + 1;
       const newTaskId = `TASK-${String(nextNum).padStart(2, '0')}`;
@@ -309,15 +391,15 @@ export class SemanticPlanner implements Planner {
         goalId: goal.id,
         title: isVerification
           ? 'Comprehensive Verification and Quality Review'
-          : `Additional Task: ${revision.feedback}`,
+          : `Additional Task: ${feedbackText}`,
         description: isVerification
           ? 'Execute full automated verification, regression tests, and acceptance validation'
-          : revision.feedback,
+          : feedbackText,
         type: isVerification ? 'testing' : 'implementation',
         status: 'proposed',
         dependencies: previousIds.length > 0 ? [previousIds[previousIds.length - 1]] : [],
         contract: {
-          objective: isVerification ? 'Verify all acceptance criteria pass' : revision.feedback,
+          objective: isVerification ? 'Verify all acceptance criteria pass' : feedbackText,
           allowedScope: ['*'],
           forbiddenChanges: [],
           acceptanceCriteria: ['All tests and quality checks pass'],
@@ -329,24 +411,19 @@ export class SemanticPlanner implements Planner {
         updatedAt: new Date(),
       };
 
-      const updatedGraph = new TaskGraph([...existingTasks, newTask]);
-      updatedGraph.metadata = {
-        ...(currentGraph.metadata ?? {}),
-        source: 'semantic',
-        revised: true,
-        revisionType: 'add_task',
-      };
-      return updatedGraph;
+      return buildValidatedGraph([...existingTasks, newTask], 'add_task');
     }
 
     // 4. split_task
-    if (revision.revisionType === 'split_task') {
-      const broadTask = existingTasks.find(
-        (t) => t.type === 'implementation' || t.dependencies.length === 0,
-      ) ?? existingTasks[0];
+    if (revType === 'split_task') {
+      const targetId = revision.taskId;
+      const broadTask =
+        (targetId ? existingTasks.find((t) => t.id.toUpperCase() === targetId.toUpperCase()) : undefined) ??
+        existingTasks.find((t) => t.type === 'implementation' || t.dependencies.length === 0) ??
+        existingTasks[0];
 
       if (broadTask) {
-        const splitMatch = revision.feedback.match(/split\s+(.+)\s+from\s+(.+)/i);
+        const splitMatch = feedbackText.match(/split\s+(.+)\s+from\s+(.+)/i);
         const partA = splitMatch ? splitMatch[1].trim() : 'Part A';
         const partB = splitMatch ? splitMatch[2].trim() : 'Part B';
 
@@ -401,14 +478,7 @@ export class SemanticPlanner implements Planner {
             return t;
           });
 
-        const updatedGraph = new TaskGraph([taskA, taskB, ...remainingTasks]);
-        updatedGraph.metadata = {
-          ...(currentGraph.metadata ?? {}),
-          source: 'semantic',
-          revised: true,
-          revisionType: 'split_task',
-        };
-        return updatedGraph;
+        return buildValidatedGraph([taskA, taskB, ...remainingTasks], 'split_task');
       }
     }
 
@@ -417,21 +487,13 @@ export class SemanticPlanner implements Planner {
       ...t,
       contract: {
         ...t.contract,
-        objective: `${t.contract.objective} (Requirement: ${revision.feedback})`,
-        acceptanceCriteria: [...t.contract.acceptanceCriteria, `Satisfies constraint: ${revision.feedback}`],
+        objective: `${t.contract.objective} (Requirement: ${feedbackText})`,
+        acceptanceCriteria: [...t.contract.acceptanceCriteria, `Satisfies constraint: ${feedbackText}`],
       },
       updatedAt: new Date(),
     }));
 
-    const updatedGraph = new TaskGraph(updatedTasks);
-    updatedGraph.metadata = {
-      ...(currentGraph.metadata ?? {}),
-      source: 'semantic',
-      revised: true,
-      revisionType: revision.revisionType,
-      feedback: revision.feedback,
-    };
-    return updatedGraph;
+    return buildValidatedGraph(updatedTasks, revType);
   }
 
   private buildPromptMessages(

@@ -193,4 +193,26 @@ describe('Persistence - SQLite Repositories', () => {
     expect(result?.passed).toBe(true);
     expect(result?.checks.length).toBe(1);
   });
+
+  it('runs database healthCheck successfully with diagnostics', () => {
+    runRepo.create('run-health-1', undefined, { initiatedBy: 'human' });
+    taskRepo.create({
+      id: 'task-health-1',
+      runId: 'run-health-1',
+      title: 'Health Task',
+      description: 'Verifies DB health',
+      type: 'testing',
+      status: 'completed',
+    });
+
+    const report = db.healthCheck();
+    expect(report.status).toBe('healthy');
+    expect(report.integrityOk).toBe(true);
+    expect(report.journalMode).toBeDefined();
+    expect(report.path).toBe(':memory:');
+    expect(report.tables).toBeGreaterThan(5);
+    expect(report.totalRuns).toBeGreaterThanOrEqual(1);
+    expect(report.totalTasks).toBeGreaterThanOrEqual(1);
+    expect(typeof report.latencyMs).toBe('number');
+  });
 });

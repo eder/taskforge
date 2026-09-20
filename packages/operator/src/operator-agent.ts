@@ -1,4 +1,4 @@
-import { InteractionScope, PlanRevision, ConversationState } from '@taskforge/shared';
+import { InteractionScope, PlanRevision, PlanRevisionType, ConversationState } from '@taskforge/shared';
 
 export interface IntentParsingContext {
   conversationState?: ConversationState;
@@ -39,6 +39,7 @@ export type OperatorIntent =
   | { type: 'diff_run'; runId?: string }
   | { type: 'create_pr'; runId?: string }
   | { type: 'discard_run'; runId?: string }
+  | { type: 'inspect_health' }
   | { type: 'stream_logs'; taskId?: string }
   | { type: 'submit_goal'; goal: string }
   | { type: 'general_query'; query: string };
@@ -56,7 +57,7 @@ export class OperatorIntentParser {
         return { type: 'reject_plan', feedback: text.replace('/reject', '').trim() };
       }
       if (context?.conversationState === 'AWAITING_PLAN_APPROVAL' || context?.hasActivePlan) {
-        let revisionType: PlanRevision['type'] = 'general_feedback';
+        let revisionType: PlanRevisionType = 'general_feedback';
         if (lower.includes('split')) {
           revisionType = 'split_task';
         } else if (
@@ -80,7 +81,9 @@ export class OperatorIntentParser {
         return {
           type: 'revise_plan',
           revision: {
+            revisionType,
             type: revisionType,
+            feedback: text,
             taskId: taskMatch ? taskMatch[0].toUpperCase() : undefined,
             details: text,
           },
@@ -106,6 +109,14 @@ export class OperatorIntentParser {
       return { type: 'inspect_tasks', taskId: parts[1] };
     }
     if (text.startsWith('/agents')) return { type: 'inspect_agents' };
+    if (
+      text.startsWith('/health') ||
+      text === 'health' ||
+      lower.includes('health check') ||
+      lower.includes('system health')
+    ) {
+      return { type: 'inspect_health' };
+    }
     if (text.startsWith('/plan')) return { type: 'inspect_plan' };
     if (text.startsWith('/cost')) return { type: 'inspect_cost' };
     if (text.startsWith('/stats')) return { type: 'inspect_stats' };
@@ -324,7 +335,7 @@ export class OperatorIntentParser {
 
     // Context-aware plan revision: when awaiting plan approval and user sends modification feedback
     if (context?.conversationState === 'AWAITING_PLAN_APPROVAL' || context?.hasActivePlan) {
-      let revisionType: PlanRevision['type'] = 'general_feedback';
+      let revisionType: PlanRevisionType = 'general_feedback';
       if (lower.includes('split')) {
         revisionType = 'split_task';
       } else if (
@@ -348,7 +359,9 @@ export class OperatorIntentParser {
       return {
         type: 'revise_plan',
         revision: {
+          revisionType,
           type: revisionType,
+          feedback: text,
           taskId: taskMatch ? taskMatch[0].toUpperCase() : undefined,
           details: text,
         },
@@ -556,6 +569,9 @@ export class OperatorAgent {
 
       case 'inspect_cost':
         return `Accumulated usage: ${state.tokensUsed || 0} tokens (Estimated cost: $${state.estimatedCost || '0.00'})`;
+
+      case 'inspect_health':
+        return 'System health status inspected.';
 
       default:
         return 'Command received. Control plane processing...';

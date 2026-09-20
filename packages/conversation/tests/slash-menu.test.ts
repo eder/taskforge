@@ -97,4 +97,16 @@ describe('SlashMenu', () => {
     const item = menu.getSelected();
     expect(item?.desc).toContain('Exit interactive session');
   });
+
+  it('recognizes and autocompletes /health command', () => {
+    const out = new PassThrough();
+    const menu = new SlashMenu(out);
+
+    const res = menu.update('/hea');
+    expect(menu.isOpen).toBe(true);
+    expect(menu.matches.length).toBe(1);
+    expect(menu.matches[0].cmd).toBe('/health');
+    expect(res.autoCompleted).toBe('/health');
+    expect(menu.matches[0].desc).toContain('health and status');
+  });
 });
