@@ -11,7 +11,26 @@ import { CompletionGate } from './completion-gate.js';
 
 export interface TeamExecutionResult {
   success: boolean;
+  /**
+   * The commit that callers (CompletionGate, IntegrationService) should treat
+   * as "the task's result". For sequential collaborative teams this is always
+   * `integrationCommit` below — a commit that represents the COMPLETE
+   * cumulative team output relative to `baseCommit`, never a single member's
+   * intermediate delta.
+   */
   commitHash?: string;
+  /**
+   * Cumulative squash commit whose diff against `baseCommit` equals the full
+   * team result (baseline -> final shared worktree state). Only set for
+   * sequential collaborative/pair teams that produced changes.
+   */
+  integrationCommit?: string;
+  /** Actual HEAD of the shared team worktree after the last successful member. */
+  finalCommit?: string;
+  /** Task baseline commit the team started from. */
+  baseCommit?: string;
+  /** Number of distinct commits produced by team members between baseCommit and finalCommit. */
+  teamCommitCount?: number;
   output?: string;
   worktreePath?: string;
   findings?: ReviewFinding[];
@@ -189,10 +208,54 @@ async function runCollaborativeTeam(
     worktree = { path: res.worktreePath, branchName: assignment.branchName };
   }
 
+  const finalWorktreePath = worktree?.path ?? implementerRes?.worktreePath ?? lastRes?.worktreePath;
+  const finalCommit =
+    lastRes?.commitHash ??
+    (finalWorktreePath ? await ctx.gitService.getHeadCommit(finalWorktreePath) : undefined);
+
+  let integrationCommit: string | undefined;
+  let teamCommitCount = 0;
+
+  // Represent the FULL cumulative delta (every team member's changes), not just
+  // the last member's commit, as a single squash commit: same tree as the final
+  // shared worktree HEAD, but parented directly on the task baseline. Cherry-picking
+  // (or diffing against) that one commit then reproduces the entire team result.
+  if (finalCommit && finalCommit !== headCommit && finalWorktreePath) {
+    teamCommitCount = await ctx.gitService.countCommits(headCommit, finalCommit, finalWorktreePath);
+    const treeHash = await ctx.gitService.getTreeHash(finalCommit, finalWorktreePath);
+    const members = chain.map((s) => `${s.selection.agent.name} (${s.selection.roleRequest.role})`);
+    integrationCommit = await ctx.gitService.commitTree(
+      treeHash,
+      headCommit,
+      `chore(${task.id}): integrate cumulative team result\n\n${teamCommitCount} commit(s) by: ${members.join(' -> ')}`,
+      finalWorktreePath,
+    );
+
+    ctx.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId: ctx.runId,
+      taskId: task.id,
+      type: 'TEAM_CUMULATIVE_INTEGRATION',
+      payload: {
+        strategy: 'collaborative',
+        baseCommit: headCommit,
+        finalCommit,
+        integrationCommit,
+        teamCommitCount,
+        members: chain.map((s) => ({ agentId: s.selection.agent.id, role: s.selection.roleRequest.role })),
+      },
+      timestamp: new Date(),
+    });
+  }
+
   return {
     success: true,
-    commitHash: implementerRes?.commitHash ?? lastRes?.commitHash,
-    worktreePath: implementerRes?.worktreePath ?? lastRes?.worktreePath,
+    commitHash: integrationCommit,
+    integrationCommit,
+    finalCommit,
+    baseCommit: headCommit,
+    teamCommitCount,
+    worktreePath: finalWorktreePath,
     output: outputs.join('\n\n'),
   };
 }
