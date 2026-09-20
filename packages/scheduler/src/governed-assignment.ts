@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { AgentAssignment, CollaborationProposal, TaskForgeConfig } from '@taskforge/shared';
+import { AgentAssignment, AgentResult, CollaborationProposal, TaskForgeConfig } from '@taskforge/shared';
 import { Task } from '@taskforge/core';
 import { AgentAdapter, AgentActivityTracker } from '@taskforge/agents';
 import { WorktreeManager } from '@taskforge/workspace';
@@ -182,39 +182,51 @@ export async function executeGovernedAssignment(
     }
   }
 
-  const agentResult = await agent.execute(assignment, {
-    worktreePath: wt.path,
-    task: taskContract,
-    assignment,
-    abortSignal,
-    logPath,
-    onActivity: (activity: string) => {
-      ctx.activityTracker?.updateStatus(task.id, activity);
-    },
-    onEvent: async (event) => {
-      if (ctx.interactionGateway && session) {
-        if (event.type === 'permission_request') {
-          ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
-          ctx.onAttention?.('waiting_permission');
-          ctx.activityTracker?.setAttention(task.id, {
-            type: 'permission',
-            prompt: (event as any).prompt || 'Permission approval required',
-            resource: (event as any).resource,
+  let agentResult: AgentResult;
+  try {
+    agentResult = await agent.execute(assignment, {
+      worktreePath: wt.path,
+      task: taskContract,
+      assignment,
+      abortSignal,
+      logPath,
+      onActivity: (activity: string) => {
+        ctx.activityTracker?.updateStatus(task.id, activity);
+      },
+      onEvent: async (event) => {
+        if (ctx.interactionGateway && session) {
+          if (event.type === 'permission_request') {
+            ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
+            ctx.onAttention?.('waiting_permission');
+            ctx.activityTracker?.setAttention(task.id, {
+              type: 'permission',
+              prompt: (event as any).prompt || 'Permission approval required',
+              resource: (event as any).resource,
+            });
+          }
+          await ctx.interactionGateway.handleEvent(event, session, {
+            runId,
+            taskId: task.id,
+            assignmentId: assignment.id,
+            agentId: agent.id,
           });
+          ctx.activityTracker?.clearAttention(task.id);
+          ctx.activityTracker?.updateStatus(task.id, 'Resumed work after approval');
+          ctx.assignmentRepo.updateStatus(assignment.id, 'running');
+          ctx.onResumed?.();
         }
-        await ctx.interactionGateway.handleEvent(event, session, {
-          runId,
-          taskId: task.id,
-          assignmentId: assignment.id,
-          agentId: agent.id,
-        });
-        ctx.activityTracker?.clearAttention(task.id);
-        ctx.activityTracker?.updateStatus(task.id, 'Resumed work after approval');
-        ctx.assignmentRepo.updateStatus(assignment.id, 'running');
-        ctx.onResumed?.();
-      }
-    },
-  });
+      },
+    });
+  } finally {
+    // The assignment has finished (successfully, with a failure, or by
+    // throwing) — end the session's event loop and drop the adapter's
+    // reference so long-running REPLs don't accumulate one session per
+    // assignment forever. This is normal teardown, not a cancellation.
+    if (session) {
+      await session.close();
+    }
+    agent.releaseSession?.(assignment.id);
+  }
 
   ctx.executionRepo.complete(
     execRecord.id,

@@ -199,6 +199,10 @@ export class GitService {
     await this.exec(['merge', '--abort'], cwd).catch(() => {});
   }
 
+  async resolveRef(ref: string, cwd: string = this.repoRoot): Promise<string> {
+    return this.exec(['rev-parse', ref], cwd);
+  }
+
   async isAncestor(
     ancestorRef: string,
     ref: string,
