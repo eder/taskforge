@@ -20,13 +20,19 @@ export interface ExecutionIntentDecision {
   reason: string;
 }
 
-// Explicit "do not <mutate>" directives, in either language. Presence
-// anywhere in the goal text wins over any other keyword heuristic -- an
-// explicit instruction not to touch the repository is a stronger signal than
-// any incidental mention of an action-sounding word elsewhere in the text.
-const NO_MUTATION_DIRECTIVE_PATTERNS: RegExp[] = [
-  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\b/i,
-  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\b/i,
+/**
+ * These patterns mean "do not mutate the repository at all". They are
+ * intentionally narrower than a generic "do not modify X" match: a scoped
+ * constraint such as "implement /health, but do not modify the Delivery Gate"
+ * must remain an implementation request rather than turning the whole run into
+ * READ_ONLY_ANALYSIS.
+ */
+const GLOBAL_NO_MUTATION_PATTERNS: RegExp[] = [
+  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\s+(?:anything|the\s+(?:repository|repo)|(?:any|all)\s+(?:files?|code))\b/i,
+  /\b(?:make|perform)\s+no\s+(?:changes?|modifications?)\b/i,
+  /\bno\s+(?:repository|repo|code|file)\s+changes?\b/i,
+  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\s+(?:nada|o\s+reposit[oó]rio|reposit[oó]rio|nenhum(?:a)?\s+(?:arquivo|c[oó]digo))\b/i,
+  /\bsem\s+(?:alterar|modificar|editar|escrever|criar|remover)\s+(?:nada|arquivos?|o\s+reposit[oó]rio|reposit[oó]rio)\b/i,
 ];
 
 // Explicit "this is read-only / analysis-only" phrases.
@@ -46,35 +52,102 @@ const ACTION_VERB_PATTERN =
 const EXPLANATION_PATTERN =
   /\b(explain|analyze|analyse|evaluate|assess|review|opinion|what do you think|recommend|investigate|understand|avalie|analise|explique|opini[ãa]o|investigue|entenda)\b/i;
 
-function hasExplicitNoMutationDirective(text: string): boolean {
-  return NO_MUTATION_DIRECTIVE_PATTERNS.some((p) => p.test(text));
+/**
+ * Clause terminators deliberately treat "." as punctuation only when it is
+ * followed by whitespace/end. That keeps file names such as package.json or
+ * README.md intact.
+ */
+const SCOPED_NO_MUTATION_PATTERNS: RegExp[] = [
+  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\s+(.+?)(?=\s+(?:but|however)\s+|\s+and\s+(?=(?:create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\s+(.+?)(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bsem\s+(?:alterar|modificar|editar|escrever|criar|remover)\s+(.+?)(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+];
+
+const NEGATED_MUTATION_CLAUSE_PATTERNS: RegExp[] = [
+  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\b.+?(?=\s+(?:but|however)\s+|\s+and\s+(?=(?:create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\b.+?(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bsem\s+(?:alterar|modificar|editar|escrever|criar|remover)\b.+?(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+];
+
+function hasGlobalNoMutationDirective(text: string): boolean {
+  return GLOBAL_NO_MUTATION_PATTERNS.some((p) => p.test(text));
 }
 
 function hasExplicitReadOnlyPhrase(text: string): boolean {
   return EXPLICIT_READ_ONLY_PATTERNS.some((p) => p.test(text));
 }
 
+function stripNegatedMutationClauses(text: string): string {
+  return NEGATED_MUTATION_CLAUSE_PATTERNS.reduce(
+    (remaining, pattern) => remaining.replace(pattern, ' '),
+    text,
+  );
+}
+
+function normalizeRestrictionTarget(raw: string): string | undefined {
+  const cleaned = raw
+    .trim()
+    .replace(/^(?:the|o|a|os|as)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return undefined;
+
+  // Whole-repository restrictions are represented by the authoritative
+  // wildcard rather than a human-readable scoped target.
+  if (
+    /^(?:anything|everything|any\s+files?|all\s+files?|the\s+repository|repository|repo|nada|nenhum(?:a)?\s+arquivo|arquivos?|reposit[oó]rio)$/i.test(
+      cleaned,
+    )
+  ) {
+    return undefined;
+  }
+
+  return cleaned;
+}
+
+function extractScopedNoMutationTargets(text: string): string[] {
+  const targets = new Set<string>();
+
+  for (const pattern of SCOPED_NO_MUTATION_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      const target = normalizeRestrictionTarget(match[1] ?? '');
+      if (target) targets.add(target);
+    }
+  }
+
+  return [...targets];
+}
+
 function isExplanationOnlyHeuristic(text: string): boolean {
-  return !ACTION_VERB_PATTERN.test(text) && EXPLANATION_PATTERN.test(text);
+  const positiveText = stripNegatedMutationClauses(text);
+  return !ACTION_VERB_PATTERN.test(positiveText) && EXPLANATION_PATTERN.test(text);
 }
 
 /**
  * Determines the execution intent for an entire run from the user's raw goal
- * text, before any planning happens. This is the first of two barriers (see
- * the Intent Guard, applied after planning) that keep READ_ONLY_ANALYSIS
- * requests from silently becoming implementation work.
+ * text, before any planning happens.
+ *
+ * Important distinction:
+ * - "Do not modify anything" is a GLOBAL read-only directive.
+ * - "Implement X, but do not modify Y" is IMPLEMENTATION with Y propagated
+ *   as a scoped forbidden change.
+ *
+ * This prevents a normal engineering constraint from disabling the entire run.
  */
 export function detectExecutionIntent(goalDescription: string): ExecutionIntentDecision {
   const text = goalDescription ?? '';
 
-  if (hasExplicitNoMutationDirective(text)) {
+  if (hasGlobalNoMutationDirective(text)) {
     return {
       intent: 'READ_ONLY_ANALYSIS',
       mutationAllowed: false,
       deliveryAllowed: false,
       allowedScope: [],
       forbiddenChanges: ['*'],
-      reason: 'Goal text contains an explicit instruction not to modify the repository.',
+      reason: 'Goal text explicitly forbids repository mutation for the whole run.',
     };
   }
 
@@ -89,14 +162,22 @@ export function detectExecutionIntent(goalDescription: string): ExecutionIntentD
     };
   }
 
-  if (isExplanationOnlyHeuristic(text)) {
+  const scopedRestrictions = extractScopedNoMutationTargets(text);
+  const positiveMutationText = stripNegatedMutationClauses(text);
+  const hasPositiveMutationRequest = ACTION_VERB_PATTERN.test(positiveMutationText);
+
+  if (
+    isExplanationOnlyHeuristic(text) ||
+    (!hasPositiveMutationRequest && scopedRestrictions.length > 0)
+  ) {
     return {
       intent: 'READ_ONLY_ANALYSIS',
       mutationAllowed: false,
       deliveryAllowed: false,
       allowedScope: [],
       forbiddenChanges: ['*'],
-      reason: 'Goal text has no mutating action verb and reads as an explanation/analysis request.',
+      reason:
+        'Goal text requests analysis/explanation without an affirmative repository mutation request.',
     };
   }
 
@@ -105,7 +186,10 @@ export function detectExecutionIntent(goalDescription: string): ExecutionIntentD
     mutationAllowed: true,
     deliveryAllowed: true,
     allowedScope: ['*'],
-    forbiddenChanges: [],
-    reason: 'Goal text contains a mutating action verb; treated as normal implementation work.',
+    forbiddenChanges: scopedRestrictions,
+    reason:
+      scopedRestrictions.length > 0
+        ? `Goal requests implementation with scoped no-modification constraints: ${scopedRestrictions.join(', ')}.`
+        : 'Goal text contains or implies implementation work.',
   };
 }

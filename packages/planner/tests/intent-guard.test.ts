@@ -6,11 +6,6 @@ import { normalizeGraphForExecutionIntent } from '../src/intent-guard.js';
 
 describe('normalizeGraphForExecutionIntent', () => {
   it('downgrades a planner-produced implementation task to investigation when the run intent is READ_ONLY_ANALYSIS', async () => {
-    // The planner's own keyword heuristics would happily classify this as an
-    // 'implementation' task with an open scope purely because "README"/
-    // "update" appear in the text -- exactly the bug the spec describes. The
-    // Intent Guard is the second, authoritative barrier that must correct it
-    // regardless of what the planner decided.
     const planner = new HeuristicPlanner();
     const goal: Goal = {
       id: 'goal-1',
@@ -21,7 +16,7 @@ describe('normalizeGraphForExecutionIntent', () => {
       createdAt: new Date(),
     };
     const graph = await planner.plan(goal);
-    expect(graph.getAllTasks()[0].type).toBe('implementation'); // sanity: planner really did misclassify
+    expect(graph.getAllTasks()[0].type).toBe('implementation');
 
     const intent = detectExecutionIntent(
       'DO NOT update README.md. Just tell me if the content of README.md needs changes.',
@@ -40,7 +35,7 @@ describe('normalizeGraphForExecutionIntent', () => {
     expect(task.contract.forbiddenChanges).toEqual(['*']);
   });
 
-  it('leaves the graph untouched when the run intent is IMPLEMENTATION', async () => {
+  it('leaves the graph untouched when the run intent is IMPLEMENTATION without scoped restrictions', async () => {
     const planner = new HeuristicPlanner();
     const goal: Goal = {
       id: 'goal-2',
@@ -61,10 +56,96 @@ describe('normalizeGraphForExecutionIntent', () => {
     expect(graph.getAllTasks()[0].contract.allowedScope).toEqual(['*']);
   });
 
-  it('does not re-flag a task that is already a closed-scope investigation under READ_ONLY_ANALYSIS', async () => {
+  it('propagates scoped no-modification constraints into every planned task without changing task type or scope', async () => {
     const planner = new HeuristicPlanner();
     const goal: Goal = {
       id: 'goal-3',
+      description: 'Implement /health and add tests. Do not modify the Delivery Gate.',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    const before = graph.getAllTasks().map((task) => ({
+      id: task.id,
+      type: task.type,
+      allowedScope: [...task.contract.allowedScope],
+    }));
+    const intent = detectExecutionIntent(goal.description);
+
+    expect(intent.intent).toBe('IMPLEMENTATION');
+    expect(intent.forbiddenChanges).toEqual(['Delivery Gate']);
+
+    const normalizations = normalizeGraphForExecutionIntent(graph, intent);
+    const tasks = graph.getAllTasks();
+
+    expect(normalizations).toHaveLength(tasks.length);
+    expect(
+      tasks.map((task) => ({
+        id: task.id,
+        type: task.type,
+        allowedScope: task.contract.allowedScope,
+      })),
+    ).toEqual(before);
+    expect(tasks.every((task) => task.contract.forbiddenChanges.includes('Delivery Gate'))).toBe(
+      true,
+    );
+  });
+
+  it('merges run-level scoped restrictions with planner-provided forbidden changes', async () => {
+    const planner = new HeuristicPlanner();
+    const goal: Goal = {
+      id: 'goal-4',
+      description: 'Fix the scheduler. Do not modify package.json.',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    graph.getAllTasks()[0].contract.forbiddenChanges = ['README.md'];
+
+    const intent = detectExecutionIntent(goal.description);
+    normalizeGraphForExecutionIntent(graph, intent);
+
+    expect(graph.getAllTasks()[0].contract.forbiddenChanges).toEqual([
+      'README.md',
+      'package.json',
+    ]);
+  });
+
+  it('does not duplicate a scoped restriction if the planner already preserved it', async () => {
+    const planner = new HeuristicPlanner();
+    const goal: Goal = {
+      id: 'goal-5',
+      description: 'Fix the scheduler. Do not modify package.json.',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    for (const task of graph.getAllTasks()) {
+      task.contract.forbiddenChanges = ['package.json'];
+    }
+
+    const intent = detectExecutionIntent(goal.description);
+    const normalizations = normalizeGraphForExecutionIntent(graph, intent);
+
+    expect(normalizations).toHaveLength(0);
+    expect(
+      graph.getAllTasks().every((task) => task.contract.forbiddenChanges.join(',') === 'package.json'),
+    ).toBe(true);
+  });
+
+  it('does not re-flag a task that is already a closed-scope investigation under READ_ONLY_ANALYSIS', async () => {
+    const planner = new HeuristicPlanner();
+    const goal: Goal = {
+      id: 'goal-6',
       description: 'Please explain how the scheduler assigns agents to tasks.',
       repository: '/fake/repo',
       constraints: [],
@@ -75,9 +156,7 @@ describe('normalizeGraphForExecutionIntent', () => {
     const intent = detectExecutionIntent(goal.description);
     expect(intent.intent).toBe('READ_ONLY_ANALYSIS');
 
-    // First pass normalizes (or confirms) the graph.
     normalizeGraphForExecutionIntent(graph, intent);
-    // A second pass over the now-normalized graph must be a no-op.
     const secondPass = normalizeGraphForExecutionIntent(graph, intent);
     expect(secondPass).toHaveLength(0);
   });
