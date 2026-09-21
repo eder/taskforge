@@ -12,7 +12,7 @@ describe('detectExecutionIntent', () => {
     expect(decision.forbiddenChanges).toEqual(['*']);
   });
 
-  it('does not let "do not modify documentation" turn into a documentation-update intent', () => {
+  it('keeps a scoped negative directive read-only when there is no affirmative mutation request', () => {
     const decision = detectExecutionIntent(
       'DO NOT update documentation. Evaluate whether documentation needs changes.',
     );
@@ -56,6 +56,46 @@ describe('detectExecutionIntent', () => {
     const decision = detectExecutionIntent('Fix the runtime agent failover bug in the scheduler.');
     expect(decision.intent).toBe('IMPLEMENTATION');
     expect(decision.mutationAllowed).toBe(true);
+  });
+
+  it('keeps implementation intent when a scoped English no-modification constraint is present', () => {
+    const decision = detectExecutionIntent(
+      'Implement /health and add tests. Do not modify the Delivery Gate.',
+    );
+
+    expect(decision.intent).toBe('IMPLEMENTATION');
+    expect(decision.mutationAllowed).toBe(true);
+    expect(decision.deliveryAllowed).toBe(true);
+    expect(decision.forbiddenChanges).toEqual(['Delivery Gate']);
+  });
+
+  it('keeps implementation intent when a scoped Portuguese no-modification constraint is present', () => {
+    const decision = detectExecutionIntent(
+      'Corrija o scheduler mas não modifique o schema do banco.',
+    );
+
+    expect(decision.intent).toBe('IMPLEMENTATION');
+    expect(decision.mutationAllowed).toBe(true);
+    expect(decision.forbiddenChanges).toEqual(['schema do banco']);
+  });
+
+  it('keeps implementation intent with a concrete file restriction', () => {
+    const decision = detectExecutionIntent(
+      "Fix the scheduler. Don't change package.json.",
+    );
+
+    expect(decision.intent).toBe('IMPLEMENTATION');
+    expect(decision.forbiddenChanges).toEqual(['package.json']);
+  });
+
+  it('global no-mutation directive remains authoritative even with an implementation verb elsewhere', () => {
+    const decision = detectExecutionIntent(
+      'Implement the feature conceptually, but do not modify anything in the repository.',
+    );
+
+    expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
+    expect(decision.mutationAllowed).toBe(false);
+    expect(decision.forbiddenChanges).toEqual(['*']);
   });
 
   it('never allows delivery for a READ_ONLY_ANALYSIS decision', () => {
