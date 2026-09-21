@@ -60,7 +60,7 @@ export class CockpitPanels {
       colors.dim + 'Agent:' + colors.reset + '     ' + request.agentId,
       colors.dim + 'Task:' + colors.reset + '      ' + request.taskId,
       request.resource ? colors.dim + 'Resource:' + colors.reset + '  ' + request.resource : '',
-      colors.dim + 'Result:' + colors.reset + '    ' + scopeText,
+      colors.dim + 'Result:' + colors.reset + '    ' + (allowed ? 'allowed — ' + scopeText : 'denied — ' + scopeText),
     ].filter(Boolean), 64);
   }
 
