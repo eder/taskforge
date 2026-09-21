@@ -88,20 +88,26 @@ describe('InteractiveShell (REPL)', () => {
     const streamIdleReply = await shell.handleInput('/stream');
     expect(streamIdleReply).toContain('No active agent tasks currently streaming');
 
-    // Check /stream when an agent is actively tracked
+    // Check /stream when an agent is actively tracked -- enters Focus Mode
+    // on that assignment (see focus-mode.test.ts for full Focus Mode coverage).
     shell.activityTracker.register({
       taskId: 'task-test-stream',
+      assignmentId: 'asgn-test-stream',
+      taskTitle: 'Test stream task',
       agentId: 'claude',
       agentName: 'Claude Code',
+      role: 'implementer',
       status: 'Building packages...',
       startedAt: new Date(),
       lastActiveAt: new Date(),
     });
     const streamActiveReply = await shell.handleInput('/stream');
-    expect(streamActiveReply).toContain('Live Stream:');
     expect(streamActiveReply).toContain('task-test-stream');
     expect(streamActiveReply).toContain('Claude Code');
-    expect(streamActiveReply).toContain('[1: task-test-stream]');
+    expect(streamActiveReply).toContain('implementer');
+
+    // Exit Focus Mode so the rest of the REPL flow below behaves normally.
+    await shell.handleInput('/back');
 
     // Check /cancel command
     const cancelReply = await shell.handleInput('/cancel');

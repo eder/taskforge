@@ -14,6 +14,7 @@ import { GitService } from '@taskforge/workspace';
 import { AgentAdapter } from './adapter-interface.js';
 import { AgentQuotaTracker } from './quota-tracker.js';
 import { RealCliAgentSession } from './agent-session.js';
+import { parseAgentStreamEvents } from './stream-event-parser.js';
 
 export interface CliAdapterOptions {
   binaryPath?: string;
@@ -173,6 +174,36 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       const lastLine = rawLines[rawLines.length - 1];
       const cleaned = lastLine.length > 64 ? `${lastLine.slice(0, 61)}...` : lastLine;
       callback(cleaned);
+    }
+  }
+
+  /**
+   * Normalizes a raw chunk into AgentStreamEvents and hands each one to
+   * context.onStreamEvent, when the caller wired one up. Additive to
+   * extractActivity (a single display string): this is the richer,
+   * tool-call-level feed a live cockpit UI or event bus can subscribe to.
+   * Never throws -- a malformed chunk or a broken listener must never
+   * interrupt agent execution.
+   */
+  protected publishStreamEvents(
+    chunk: string,
+    assignment: AgentAssignment,
+    context: AgentContext,
+  ): void {
+    if (!context.onStreamEvent) return;
+    try {
+      const events = parseAgentStreamEvents(chunk, {
+        runId: context.runId ?? '',
+        taskId: assignment.taskId,
+        assignmentId: assignment.id,
+        agentId: this.id,
+        role: assignment.role,
+      });
+      for (const event of events) {
+        context.onStreamEvent(event);
+      }
+    } catch {
+      // best-effort: never let event normalization break execution
     }
   }
 
@@ -492,12 +523,14 @@ export abstract class BaseCliAdapter implements AgentAdapter {
           session.handleOutputChunk(chunk, 'stdout');
         }
         this.extractActivity(chunk, context.onActivity);
+        this.publishStreamEvents(chunk, assignment, context);
       },
       onStderr: (chunk) => {
         if (session instanceof RealCliAgentSession) {
           session.handleOutputChunk(chunk, 'stderr');
         }
         this.extractActivity(chunk, context.onActivity);
+        this.publishStreamEvents(chunk, assignment, context);
       },
     });
 
@@ -506,10 +539,20 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     try {
       const status = await git.getStatus(context.worktreePath);
       if (!status.isClean) {
-        commitHash = await git.stageAndCommit(
-          `feat(${assignment.taskId}): completed by ${this.name}`,
-          context.worktreePath,
-        );
+        if (context.mutationAllowed === false) {
+          // Read-only task policy: never commit, and never leave a mutation
+          // behind, regardless of what the provider process attempted.
+          context.onActivity?.(
+            `Blocked by task policy: discarding uncommitted repository changes (${status.uncommittedFiles.length} file(s)) -- mutation is not allowed for this task.`,
+          );
+          await git.discardAllChanges(context.worktreePath);
+          commitHash = status.headCommit;
+        } else {
+          commitHash = await git.stageAndCommit(
+            `feat(${assignment.taskId}): completed by ${this.name}`,
+            context.worktreePath,
+          );
+        }
       } else {
         commitHash = status.headCommit;
       }

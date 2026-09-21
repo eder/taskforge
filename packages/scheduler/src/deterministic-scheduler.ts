@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { AgentAssignment, AgentUnavailableError, TaskForgeConfig } from '@taskforge/shared';
+import { AgentAssignment, AgentStreamBus, AgentUnavailableError, TaskForgeConfig } from '@taskforge/shared';
 import { TaskGraph, Task, computeTaskPriority } from '@taskforge/core';
 import { AgentRegistry, AgentActivityTracker } from '@taskforge/agents';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
@@ -39,6 +39,7 @@ export interface SchedulerContext {
   workspaceRepo: WorkspaceRepository;
   interactionGateway?: InteractionGateway;
   activityTracker?: AgentActivityTracker;
+  streamBus?: AgentStreamBus;
   preferredAgentMapping?: Record<string, string>;
   abortSignal?: AbortSignal;
   negotiator?: NegotiationManager;
@@ -376,10 +377,15 @@ export class DeterministicScheduler {
         graph.updateTaskStatus(task.id, 'completed');
         taskRepo.updateStatus(task.id, 'completed');
 
+        const collabOutput = (res as any).output as string | undefined;
+        if (collabOutput && collabOutput.trim().length > 0) {
+          this.taskOutputs[task.id] = sanitizeTaskOutput(collabOutput);
+        }
+
         // Verification
         graph.updateTaskStatus(task.id, 'verification');
         taskRepo.updateStatus(task.id, 'verification');
-        this.ctx.activityTracker?.updateStatus(task.id, 'Running automated verification checks...');
+        this.ctx.activityTracker?.updateStatus(collabAsgnId, 'Running automated verification checks...');
         this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
 
         const verResult = await verificationRunner.verify({
@@ -421,7 +427,7 @@ export class DeterministicScheduler {
         taskRepo.updateStatus(task.id, 'integrated');
         return;
       } finally {
-        this.ctx.activityTracker?.complete(task.id);
+        this.ctx.activityTracker?.completeAssignment(collabAsgnId);
         const taskAssignments = this.ctx.assignmentRepo.listByTask(task.id);
         for (const asgn of taskAssignments) {
           await this.ctx.worktreeManager
@@ -496,6 +502,7 @@ export class DeterministicScheduler {
         eventRepo,
         interactionGateway: this.ctx.interactionGateway,
         activityTracker: this.ctx.activityTracker,
+        streamBus: this.ctx.streamBus,
         concurrency: this.concurrency,
         graph,
         priority: computeTaskPriority(task, graph),
@@ -651,6 +658,7 @@ export class DeterministicScheduler {
           eventRepo,
           interactionGateway: this.ctx.interactionGateway,
           activityTracker: this.ctx.activityTracker,
+          streamBus: this.ctx.streamBus,
           concurrency: this.concurrency,
           communicationBus: this.ctx.communicationBus,
           sessionRegistry: this.ctx.sessionRegistry,
@@ -858,7 +866,7 @@ export class DeterministicScheduler {
       // 4. Verification
       graph.updateTaskStatus(task.id, 'verification');
       taskRepo.updateStatus(task.id, 'verification');
-      this.ctx.activityTracker?.updateStatus(task.id, 'Running automated verification checks...');
+      this.ctx.activityTracker?.updateStatus(assignmentId, 'Running automated verification checks...');
       this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
 
       const verResult = await verificationRunner.verify({
@@ -915,7 +923,7 @@ export class DeterministicScheduler {
 
       // 5. Integration: cherry-pick task commit into run integration branch
       if (agentResult.commitHash && agentResult.commitHash !== baseCommit) {
-        this.ctx.activityTracker?.updateStatus(task.id, 'Integrating commit into run branch...');
+        this.ctx.activityTracker?.updateStatus(assignmentId, 'Integrating commit into run branch...');
         this.ctx.onProgress?.(
           `[${task.id}] Integrating commit ${agentResult.commitHash.slice(0, 7)}...`,
         );
@@ -935,7 +943,7 @@ export class DeterministicScheduler {
       graph.updateTaskStatus(task.id, 'integrated');
       taskRepo.updateStatus(task.id, 'integrated');
     } finally {
-      this.ctx.activityTracker?.complete(task.id);
+      this.ctx.activityTracker?.completeAssignment(assignmentId);
     }
   }
 }

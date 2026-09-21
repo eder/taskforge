@@ -169,6 +169,16 @@ export class GitService {
     return this.getHeadCommit(cwd);
   }
 
+  /**
+   * Reverts a worktree to a clean state (discards uncommitted changes and
+   * untracked files/dirs). Used to enforce read-only task policies where an
+   * agent must not be allowed to leave any repository mutation behind.
+   */
+  async discardAllChanges(cwd: string, ref: string = 'HEAD'): Promise<void> {
+    await this.exec(['reset', '--hard', ref], cwd);
+    await this.exec(['clean', '-fd'], cwd);
+  }
+
   async cherryPick(commitHash: string, cwd: string = this.repoRoot): Promise<string> {
     await this.exec(['cherry-pick', commitHash], cwd);
     return this.getHeadCommit(cwd);

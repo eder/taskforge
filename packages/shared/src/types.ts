@@ -1,3 +1,5 @@
+import { AgentStreamEvent } from './agent-stream-event.js';
+
 export type TaskStatus =
   | 'proposed'
   | 'preflight'
@@ -252,6 +254,22 @@ export interface AgentContext {
   onEvent?: (event: AgentRuntimeEvent) => Promise<void>;
   onActivity?: (activity: string) => void;
   onProgress?: (progress: string) => void;
+  /**
+   * When explicitly false, the adapter must never commit or otherwise
+   * persist a repository mutation for this assignment: any uncommitted
+   * changes left behind by the provider are a policy violation and must be
+   * discarded, not committed. Undefined/true preserves normal behavior.
+   */
+  mutationAllowed?: boolean;
+  /** The run this assignment belongs to; only needed to stamp AgentStreamEvents. */
+  runId?: string;
+  /**
+   * Sink for normalized, tool-call-level activity (message/tool/file/command/
+   * status/error), published live as the provider emits output. Additive to
+   * onActivity (a single display string) -- this carries structured events a
+   * cockpit UI can render per tool call without parsing provider JSON itself.
+   */
+  onStreamEvent?: (event: AgentStreamEvent) => void;
 }
 
 export interface VerificationCheck {

@@ -2,17 +2,24 @@ import { ActiveAgentState, ReviewFinding } from '@taskforge/shared';
 
 export type ActivityListener = (active: ActiveAgentState[]) => void;
 
+/**
+ * Tracks live agent activity keyed by assignmentId, not taskId. A single task
+ * can have several assignments running concurrently (e.g. a parallel
+ * investigation team of Codex + Antigravity + Claude), and each one must be
+ * independently observable and independently completable -- keying by taskId
+ * would let concurrent assignments on the same task overwrite one another.
+ */
 export class AgentActivityTracker {
   private activeMap = new Map<string, ActiveAgentState>();
   private listeners = new Set<ActivityListener>();
 
   public register(state: ActiveAgentState): void {
-    this.activeMap.set(state.taskId, { ...state });
+    this.activeMap.set(state.assignmentId, { ...state });
     this.notify();
   }
 
-  public updateStatus(taskId: string, status: string): void {
-    const existing = this.activeMap.get(taskId);
+  public updateStatus(assignmentId: string, status: string): void {
+    const existing = this.activeMap.get(assignmentId);
     if (existing) {
       existing.status = status;
       existing.lastActiveAt = new Date();
@@ -21,14 +28,14 @@ export class AgentActivityTracker {
   }
 
   public setAttention(
-    taskId: string,
+    assignmentId: string,
     attention: {
       type: 'permission' | 'question' | 'auth';
       prompt: string;
       resource?: string;
     },
   ): void {
-    const existing = this.activeMap.get(taskId);
+    const existing = this.activeMap.get(assignmentId);
     if (existing) {
       existing.attentionRequired = attention;
       existing.lastActiveAt = new Date();
@@ -36,8 +43,8 @@ export class AgentActivityTracker {
     }
   }
 
-  public clearAttention(taskId: string): void {
-    const existing = this.activeMap.get(taskId);
+  public clearAttention(assignmentId: string): void {
+    const existing = this.activeMap.get(assignmentId);
     if (existing) {
       existing.attentionRequired = undefined;
       existing.lastActiveAt = new Date();
@@ -45,8 +52,8 @@ export class AgentActivityTracker {
     }
   }
 
-  public setCriticalFindings(taskId: string, findings: ReviewFinding[]): void {
-    const existing = this.activeMap.get(taskId);
+  public setCriticalFindings(assignmentId: string, findings: ReviewFinding[]): void {
+    const existing = this.activeMap.get(assignmentId);
     if (existing) {
       existing.criticalFindings = findings;
       existing.lastActiveAt = new Date();
@@ -54,8 +61,8 @@ export class AgentActivityTracker {
     }
   }
 
-  public clearCriticalFindings(taskId: string): void {
-    const existing = this.activeMap.get(taskId);
+  public clearCriticalFindings(assignmentId: string): void {
+    const existing = this.activeMap.get(assignmentId);
     if (existing) {
       existing.criticalFindings = undefined;
       existing.lastActiveAt = new Date();
@@ -63,8 +70,23 @@ export class AgentActivityTracker {
     }
   }
 
-  public complete(taskId: string): void {
-    if (this.activeMap.delete(taskId)) {
+  /** Finishes and removes a single assignment, leaving other assignments on the same task untouched. */
+  public completeAssignment(assignmentId: string): void {
+    if (this.activeMap.delete(assignmentId)) {
+      this.notify();
+    }
+  }
+
+  /** Finishes and removes every assignment currently tracked for a task (e.g. task-level cancel/teardown). */
+  public completeTask(taskId: string): void {
+    let changed = false;
+    for (const [assignmentId, state] of this.activeMap) {
+      if (state.taskId === taskId) {
+        this.activeMap.delete(assignmentId);
+        changed = true;
+      }
+    }
+    if (changed) {
       this.notify();
     }
   }
@@ -78,8 +100,13 @@ export class AgentActivityTracker {
     return Array.from(this.activeMap.values());
   }
 
-  public getByTaskId(taskId: string): ActiveAgentState | undefined {
-    return this.activeMap.get(taskId);
+  public getByAssignment(assignmentId: string): ActiveAgentState | undefined {
+    return this.activeMap.get(assignmentId);
+  }
+
+  /** All active assignments for a task -- may be more than one for a concurrent team. */
+  public getByTask(taskId: string): ActiveAgentState[] {
+    return this.getActive().filter((state) => state.taskId === taskId);
   }
 
   public subscribe(listener: ActivityListener): () => void {

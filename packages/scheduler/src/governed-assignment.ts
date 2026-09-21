@@ -1,9 +1,15 @@
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { AgentAssignment, AgentResult, CollaborationProposal, TaskForgeConfig } from '@taskforge/shared';
+import {
+  AgentAssignment,
+  AgentResult,
+  AgentStreamBus,
+  CollaborationProposal,
+  TaskForgeConfig,
+} from '@taskforge/shared';
 import { Task, TaskGraph, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter, AgentActivityTracker } from '@taskforge/agents';
-import { WorktreeManager } from '@taskforge/workspace';
+import { WorktreeManager, GitService } from '@taskforge/workspace';
 import {
   AssignmentRepository,
   EventRepository,
@@ -35,6 +41,7 @@ export interface GovernedAssignmentContext {
   eventRepo: EventRepository;
   interactionGateway?: InteractionGateway;
   activityTracker?: AgentActivityTracker;
+  streamBus?: AgentStreamBus;
   concurrency?: ConcurrencyManager;
   graph?: TaskGraph;
   priority?: number;
@@ -65,7 +72,7 @@ export interface GovernedAssignmentResult {
  * single-agent scheduler path uses: isolated worktree, workspace + execution
  * records, and every AgentRuntimeEvent (permission/question/auth) routed
  * through the InteractionGateway. Callers own task-level status transitions,
- * verification and integration, and activityTracker.complete(task.id).
+ * verification and integration, and activityTracker.completeAssignment(assignment.id).
  */
 export async function executeGovernedAssignment(
   ctx: GovernedAssignmentContext,
@@ -117,7 +124,7 @@ export async function executeGovernedAssignment(
     `${task.id}-${assignment.id}.log`,
   );
 
-  const activeState = ctx.activityTracker?.getByTaskId(task.id);
+  const activeState = ctx.activityTracker?.getByAssignment(assignment.id);
   if (activeState) {
     activeState.logPath = logPath;
     activeState.status = 'Agent executing in worktree...';
@@ -135,6 +142,13 @@ export async function executeGovernedAssignment(
   const taskContract = ctx.objectiveOverride
     ? { ...task.contract, objective: ctx.objectiveOverride }
     : task.contract;
+
+  // Derived from the task contract, not a separately tracked flag: a task
+  // whose forbidden changes are wildcarded is read-only. The Intent Guard
+  // normalizes forbiddenChanges to ['*'] for READ_ONLY_ANALYSIS tasks, so
+  // this stays authoritative even when routing/planning disagreed with the
+  // original user intent.
+  const mutationAllowed = !taskContract.forbiddenChanges?.includes('*');
 
   if (ctx.concurrency) {
     const priority =
@@ -178,7 +192,7 @@ export async function executeGovernedAssignment(
               if (event.type === 'permission_request') {
                 ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
                 ctx.onAttention?.('waiting_permission');
-                ctx.activityTracker?.setAttention(task.id, {
+                ctx.activityTracker?.setAttention(assignment.id, {
                   type: 'permission',
                   prompt: (event as any).prompt || 'Permission approval required',
                   resource: (event as any).resource,
@@ -186,14 +200,14 @@ export async function executeGovernedAssignment(
               } else if (event.type === 'question') {
                 ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_input');
                 ctx.onAttention?.('waiting_input');
-                ctx.activityTracker?.setAttention(task.id, {
+                ctx.activityTracker?.setAttention(assignment.id, {
                   type: 'question',
                   prompt: (event as any).prompt || 'Question answer required',
                 });
               } else if (event.type === 'authentication_required') {
                 ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_auth');
                 ctx.onAttention?.('waiting_auth');
-                ctx.activityTracker?.setAttention(task.id, {
+                ctx.activityTracker?.setAttention(assignment.id, {
                   type: 'auth',
                   prompt: (event as any).prompt || 'Authentication required',
                 });
@@ -206,8 +220,8 @@ export async function executeGovernedAssignment(
                 agentId: agent.id,
               });
 
-              ctx.activityTracker?.clearAttention(task.id);
-              ctx.activityTracker?.updateStatus(task.id, 'Resumed work after approval');
+              ctx.activityTracker?.clearAttention(assignment.id);
+              ctx.activityTracker?.updateStatus(assignment.id, 'Resumed work after approval');
               ctx.assignmentRepo.updateStatus(assignment.id, 'running');
               ctx.onResumed?.();
             }
@@ -224,15 +238,20 @@ export async function executeGovernedAssignment(
       assignment,
       abortSignal,
       logPath,
+      mutationAllowed,
+      runId,
       onActivity: (activity: string) => {
-        ctx.activityTracker?.updateStatus(task.id, activity);
+        ctx.activityTracker?.updateStatus(assignment.id, activity);
+      },
+      onStreamEvent: (event) => {
+        ctx.streamBus?.publish(event);
       },
       onEvent: async (event) => {
         if (ctx.interactionGateway && session) {
           if (event.type === 'permission_request') {
             ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
             ctx.onAttention?.('waiting_permission');
-            ctx.activityTracker?.setAttention(task.id, {
+            ctx.activityTracker?.setAttention(assignment.id, {
               type: 'permission',
               prompt: (event as any).prompt || 'Permission approval required',
               resource: (event as any).resource,
@@ -244,8 +263,8 @@ export async function executeGovernedAssignment(
             assignmentId: assignment.id,
             agentId: agent.id,
           });
-          ctx.activityTracker?.clearAttention(task.id);
-          ctx.activityTracker?.updateStatus(task.id, 'Resumed work after approval');
+          ctx.activityTracker?.clearAttention(assignment.id);
+          ctx.activityTracker?.updateStatus(assignment.id, 'Resumed work after approval');
           ctx.assignmentRepo.updateStatus(assignment.id, 'running');
           ctx.onResumed?.();
         }
@@ -310,6 +329,47 @@ export async function executeGovernedAssignment(
     }
   }
 
+  // Defense in depth: enforcement inside individual adapters (e.g.
+  // BaseCliAdapter) is preferred, but is not guaranteed for every AgentAdapter
+  // implementation. Regardless of what the adapter did, a read-only task's
+  // worktree must never end up with an uncommitted mutation or a rogue commit
+  // ahead of baseCommit -- verify and revert here, at the single chokepoint
+  // every execution path (single-agent, collaborative, parallel, review,
+  // competitive) runs through.
+  if (!mutationAllowed) {
+    try {
+      const guardGit = new GitService(wt.path);
+      const guardStatus = await guardGit.getStatus(wt.path);
+      const committedBeyondBase = Boolean(
+        agentResult.commitHash && agentResult.commitHash !== baseCommit,
+      );
+      if (!guardStatus.isClean || committedBeyondBase) {
+        ctx.eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'MUTATION_BLOCKED',
+          payload: {
+            taskId: task.id,
+            assignmentId: assignment.id,
+            agentId: agent.id,
+            uncommittedFiles: guardStatus.uncommittedFiles,
+            blockedCommit: committedBeyondBase ? agentResult.commitHash : undefined,
+          },
+          timestamp: new Date(),
+        });
+        ctx.activityTracker?.updateStatus(
+          assignment.id,
+          'Blocked by task policy: reverted a repository mutation -- this task is read-only.',
+        );
+        await guardGit.discardAllChanges(wt.path, baseCommit);
+        agentResult.commitHash = baseCommit;
+      }
+    } catch {
+      // best-effort guard; do not fail the task solely because the guard check itself errored
+    }
+  }
+
   const resolvedFindings =
     agentResult.findings && agentResult.findings.length > 0
       ? agentResult.findings
@@ -321,9 +381,21 @@ export async function executeGovernedAssignment(
       (f) => f.severity === 'critical' || f.severity === 'major',
     );
     if (criticals.length > 0) {
-      ctx.activityTracker.setCriticalFindings(task.id, criticals);
+      ctx.activityTracker.setCriticalFindings(assignment.id, criticals);
     }
   }
+
+  ctx.streamBus?.publish({
+    type: 'completed',
+    timestamp: new Date(),
+    runId,
+    taskId: task.id,
+    assignmentId: assignment.id,
+    agentId: agent.id,
+    role: assignment.role,
+    success: agentResult.success,
+    summary: agentResult.message,
+  });
 
   return {
     success: agentResult.success,
