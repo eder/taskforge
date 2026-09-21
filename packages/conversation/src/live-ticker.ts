@@ -76,8 +76,13 @@ export class LiveTicker {
       const agentColor = this.getAgentColor(a.agentId);
       const duration = this.formatDuration(a.startedAt);
       const statusText = a.status.length > 50 ? `${a.status.slice(0, 47)}...` : a.status;
+      const recovered =
+        a.recovery && new Date(a.recovery.recoveredUntil).getTime() > Date.now();
+      const recoveryTag = recovered
+        ? ` ${colors.green}${colors.bold}↻ recovered${colors.reset}`
+        : '';
       lines.push(
-        `  ${colors.cyan}${spinner}${colors.reset} ${colors.bold}${a.taskId}${colors.reset} ${agentColor}[${a.agentName}]${colors.reset}: ${statusText} ${colors.dim}(${duration})${colors.reset}`,
+        `  ${colors.cyan}${spinner}${colors.reset} ${colors.bold}${a.taskId}${colors.reset} ${agentColor}[${a.agentName}]${colors.reset}${recoveryTag}: ${statusText} ${colors.dim}(${duration})${colors.reset}`,
       );
     }
 
