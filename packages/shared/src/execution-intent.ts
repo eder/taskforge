@@ -53,20 +53,20 @@ const EXPLANATION_PATTERN =
   /\b(explain|analyze|analyse|evaluate|assess|review|opinion|what do you think|recommend|investigate|understand|avalie|analise|explique|opini[ãa]o|investigue|entenda)\b/i;
 
 /**
- * A scoped no-mutation clause is a constraint, not necessarily a read-only
- * request. Capture the target so it can be propagated into TaskContract
- * forbiddenChanges by the deterministic Intent Guard.
+ * Clause terminators deliberately treat "." as punctuation only when it is
+ * followed by whitespace/end. That keeps file names such as package.json or
+ * README.md intact.
  */
 const SCOPED_NO_MUTATION_PATTERNS: RegExp[] = [
-  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\s+([^.!?\n]+)/gi,
-  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\s+([^.!?\n]+)/gi,
-  /\bsem\s+(?:alterar|modificar|editar|escrever|criar|remover)\s+([^.!?\n]+)/gi,
+  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\s+(.+?)(?=\s+(?:but|however)\s+|\s+and\s+(?=(?:create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\s+(.+?)(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bsem\s+(?:alterar|modificar|editar|escrever|criar|remover)\s+(.+?)(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
 ];
 
 const NEGATED_MUTATION_CLAUSE_PATTERNS: RegExp[] = [
-  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\b[^.!?\n]*/gi,
-  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\b[^.!?\n]*/gi,
-  /\bsem\s+(?:alterar|modificar|editar|escrever|criar|remover)\b[^.!?\n]*/gi,
+  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\b.+?(?=\s+(?:but|however)\s+|\s+and\s+(?=(?:create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\b.+?(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bsem\s+(?:alterar|modificar|editar|escrever|criar|remover)\b.+?(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
 ];
 
 function hasGlobalNoMutationDirective(text: string): boolean {
@@ -166,7 +166,10 @@ export function detectExecutionIntent(goalDescription: string): ExecutionIntentD
   const positiveMutationText = stripNegatedMutationClauses(text);
   const hasPositiveMutationRequest = ACTION_VERB_PATTERN.test(positiveMutationText);
 
-  if (isExplanationOnlyHeuristic(text) || (!hasPositiveMutationRequest && scopedRestrictions.length > 0)) {
+  if (
+    isExplanationOnlyHeuristic(text) ||
+    (!hasPositiveMutationRequest && scopedRestrictions.length > 0)
+  ) {
     return {
       intent: 'READ_ONLY_ANALYSIS',
       mutationAllowed: false,
