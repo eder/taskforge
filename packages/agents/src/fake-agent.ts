@@ -7,6 +7,7 @@ import {
   AgentMessage,
   AgentResult,
   AgentSession,
+  CompletionFailureReason,
   ReviewFinding,
 } from '@taskforge/shared';
 import { GitService } from '@taskforge/workspace';
@@ -23,6 +24,7 @@ export interface FakeAgentAction {
   delayMs?: number;
   shouldFail?: boolean;
   failMessage?: string;
+  failCompletionReason?: CompletionFailureReason;
   findings?: ReviewFinding[];
   collaborationProposal?: import('@taskforge/shared').CollaborationProposal;
   requestPermission?: {
@@ -337,7 +339,7 @@ export class FakeAgent implements AgentAdapter {
         message: action.failMessage ?? `Failure simulated by ${this.id}`,
         durationMs: Date.now() - startTime,
         findings: action.findings,
-        completionReason: 'HARNESS_FAILED',
+        completionReason: action.failCompletionReason ?? 'HARNESS_FAILED',
         normalizedOutcome: {
           processExitCode: 1,
           providerStatus: 'FAILED',
