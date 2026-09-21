@@ -136,4 +136,66 @@ describe('Router and AgentSelector', () => {
     expect(selected[1].agent.id).toBe('solo-agent');
     expect(selected[1].degraded).toBe(true);
   });
+
+  it('AgentSelector never returns a quota-exhausted agent, even from its last-ditch/degraded fallbacks', async () => {
+    const { AgentQuotaTracker } = await import('@taskforge/agents');
+    AgentQuotaTracker.resetInstance();
+    const tracker = AgentQuotaTracker.getInstance();
+
+    // Only one agent registered at all, and it's quota-exhausted: every
+    // fallback step (capability match, any-ready, and the final degraded
+    // reuse) must all refuse to select it.
+    tracker.setManualStatus('sole-agent', 'quota_exhausted', 'limit hit');
+
+    const registry = new AgentRegistry(false);
+    registry.register(new FakeAgent('sole-agent', 'Sole Agent'));
+
+    const selector = new AgentSelector(registry);
+    const selected = await selector.selectAgents([
+      { role: 'implementer', requiredCapabilities: ['canWrite'], objective: 'Implement' },
+    ]);
+
+    // No eligible agent exists -- the role is left unfilled rather than
+    // silently staffed with a provider the tracker marked unavailable.
+    expect(selected.length).toBe(0);
+
+    AgentQuotaTracker.resetInstance();
+  });
+
+  it('AgentSelector.selectAgentForRole finds a distinct replacement while excluding already-tried agents', async () => {
+    const { AgentQuotaTracker } = await import('@taskforge/agents');
+    AgentQuotaTracker.resetInstance();
+
+    const registry = new AgentRegistry(false);
+    registry.register(new FakeAgent('agy', 'Google Antigravity'));
+    registry.register(new FakeAgent('codex', 'Codex CLI'));
+    registry.register(new FakeAgent('claude', 'Claude Code'));
+
+    const selector = new AgentSelector(registry);
+    const roleRequest = {
+      role: 'researcher' as const,
+      requiredCapabilities: ['canRead'],
+      objective: 'Investigate root cause',
+      preferredAgent: 'agy',
+    };
+
+    const first = await selector.selectAgentForRole(roleRequest, {
+      excludeAgentIds: new Set(['agy']),
+    });
+    expect(first?.agent.id).not.toBe('agy');
+    expect(first?.roleRequest.role).toBe('researcher');
+
+    const second = await selector.selectAgentForRole(roleRequest, {
+      excludeAgentIds: new Set(['agy', first!.agent.id]),
+    });
+    expect(second?.agent.id).not.toBe('agy');
+    expect(second?.agent.id).not.toBe(first!.agent.id);
+
+    const third = await selector.selectAgentForRole(roleRequest, {
+      excludeAgentIds: new Set(['agy', first!.agent.id, second!.agent.id]),
+    });
+    expect(third).toBeUndefined();
+
+    AgentQuotaTracker.resetInstance();
+  });
 });

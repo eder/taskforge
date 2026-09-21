@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { AgentAssignment, VerificationResult, ReviewFinding } from '@taskforge/shared';
 import { Task, computeTaskPriority } from '@taskforge/core';
-import { AgentAdapter } from '@taskforge/agents';
+import { AgentAdapter, AgentQuotaTracker } from '@taskforge/agents';
 import { AssignmentGraph, SynthesisCoordinator } from '@taskforge/collaboration';
-import { RoutingDecision, SelectedAgentAssignment } from '@taskforge/router';
+import { RoutingDecision, SelectedAgentAssignment, AgentSelector, RoleRequest } from '@taskforge/router';
 import { executeGovernedAssignment } from './governed-assignment.js';
 import { SchedulerContext } from './deterministic-scheduler.js';
 import { TeamMemberReservation } from './concurrency-manager.js';
 import { CompletionGate } from './completion-gate.js';
+import { classifyTeamMemberFailure } from './failure-classification.js';
 
 export interface TeamExecutionResult {
   success: boolean;
@@ -531,8 +532,25 @@ async function runConcurrentTeam(
 
   const completed = new Set<string>();
   const outputs: Array<{ role: string; agentId: string; output: string }> = [];
-  const failedInvestigators: string[] = [];
-  const failedDetails: Array<{ id: string; agentId: string; role: string; reason: string }> = [];
+
+  interface RoleOutcome {
+    role: string;
+    satisfied: boolean;
+    reason?: string;
+    attempts: number;
+  }
+  const roleOutcomes: RoleOutcome[] = [];
+
+  // Original RoleRequest (capabilities/objective/preferredAgent) per
+  // investigator, keyed by the agent+role it was originally staffed with --
+  // needed to find a same-role replacement if that agent turns out to be
+  // unavailable mid-run.
+  const roleRequestByAgentAndRole = new Map<string, RoleRequest>();
+  for (const inv of investigators) {
+    roleRequestByAgentAndRole.set(`${inv.agent.id}::${inv.roleRequest.role}`, inv.roleRequest);
+  }
+  const agentSelector = new AgentSelector(ctx.agentRegistry);
+  const quotaTracker = AgentQuotaTracker.getInstance();
 
   const runnable = asgnGraph.getRunnableAssignments(completed);
   if (ctx.concurrency && runnable.length > 0) {
@@ -547,56 +565,210 @@ async function runConcurrentTeam(
 
   await Promise.all(
     runnable.map(async (asgn) => {
-      const agent = ctx.agentRegistry.get(asgn.agentId)!;
-      const res = await executeGovernedAssignment(
-        buildGovernedCtx(task, ctx, asgn, agent, headCommit, { detached: true }),
-      );
-      completed.add(asgn.id);
+      const roleRequest = roleRequestByAgentAndRole.get(`${asgn.agentId}::${asgn.role}`);
+      const triedAgentIds = new Set<string>([asgn.agentId]);
+      let attempt = 1;
+      let currentAssignment: AgentAssignment = asgn;
+      let currentAgent = ctx.agentRegistry.get(asgn.agentId)!;
 
-      // Clean up investigator's temporary worktree immediately
-      await ctx.worktreeManager.removeWorktree(task.id, asgn.id, true, true).catch(() => {});
+      for (;;) {
+        const res = await executeGovernedAssignment(
+          buildGovernedCtx(task, ctx, currentAssignment, currentAgent, headCommit, { detached: true }),
+        );
+        completed.add(currentAssignment.id);
 
-      if (res.success) {
-        outputs.push({ role: asgn.role, agentId: asgn.agentId, output: res.output ?? 'Done' });
-        if (ctx.communicationBus) {
-          await ctx.communicationBus
-            .sendMessage({
+        // Clean up investigator's temporary worktree immediately
+        await ctx.worktreeManager
+          .removeWorktree(task.id, currentAssignment.id, true, true)
+          .catch(() => {});
+
+        if (res.success) {
+          outputs.push({ role: asgn.role, agentId: currentAgent.id, output: res.output ?? 'Done' });
+          roleOutcomes.push({ role: asgn.role, satisfied: true, attempts: attempt });
+
+          if (attempt > 1) {
+            ctx.onProgress?.(`[${task.id}] ✓ ${asgn.role} role recovered with ${currentAgent.name}`);
+            ctx.eventRepo.append({
+              id: `evt-${randomUUID()}`,
               runId: ctx.runId,
               taskId: task.id,
-              fromAssignmentId: asgn.id,
-              toAssignmentId: undefined,
-              type: 'evidence',
-              body: `[${asgn.role} by ${asgn.agentId}]: ${res.output ?? 'Done'}`,
-            })
-            .catch(() => {});
+              type: 'INVESTIGATOR_REASSIGNED',
+              payload: {
+                taskId: task.id,
+                role: asgn.role,
+                failedAgentId: asgn.agentId,
+                replacementAgentId: currentAgent.id,
+                attempt,
+                investigationPolicy: policy,
+              },
+              timestamp: new Date(),
+            });
+          }
+
+          if (ctx.communicationBus) {
+            await ctx.communicationBus
+              .sendMessage({
+                runId: ctx.runId,
+                taskId: task.id,
+                fromAssignmentId: currentAssignment.id,
+                toAssignmentId: undefined,
+                type: 'evidence',
+                body: `[${asgn.role} by ${currentAgent.id}]: ${res.output ?? 'Done'}`,
+              })
+              .catch(() => {});
+          }
+          return;
         }
-      } else {
-        failedInvestigators.push(asgn.id);
+
+        const cancelled = Boolean(ctx.abortSignal?.aborted);
+        const failureClass = classifyTeamMemberFailure(res.completionReason, cancelled);
         const reason = res.message || res.output || 'Execution failed';
-        failedDetails.push({ id: asgn.id, agentId: asgn.agentId, role: asgn.role, reason });
+
+        if (failureClass !== 'provider_unavailable') {
+          // Semantic/permission/cancellation failure: the work itself did
+          // not succeed. This role stays unsatisfied and is subject to the
+          // investigation policy like any other failure -- never auto-retried.
+          roleOutcomes.push({ role: asgn.role, satisfied: false, reason, attempts: attempt });
+          return;
+        }
+
+        // Recoverable provider/capacity failure: announce it, then try to
+        // find a distinct healthy agent for the SAME role. Bounded: every
+        // eligible agent is tried at most once per role (triedAgentIds only
+        // grows), so this can never loop forever.
+        const quotaInfo = quotaTracker.getQuotaStatus(currentAgent.id);
+        const quotaNote = quotaInfo.reason
+          ? `${quotaInfo.reason}${quotaInfo.resetAt ? ` (resets ${quotaInfo.resetAt.toISOString()})` : ''}`
+          : reason;
+        ctx.onProgress?.(`[${task.id}] ⚠ ${currentAgent.name} unavailable for ${asgn.role}: ${quotaNote}`);
+        ctx.eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId: ctx.runId,
+          taskId: task.id,
+          type: 'INVESTIGATOR_FAILED',
+          payload: {
+            taskId: task.id,
+            role: asgn.role,
+            failedAgentId: currentAgent.id,
+            failureReason: res.completionReason ?? 'UNKNOWN',
+            reason: quotaNote,
+            resetAt: quotaInfo.resetAt?.toISOString(),
+            attempt,
+            investigationPolicy: policy,
+          },
+          timestamp: new Date(),
+        });
+
+        if (!roleRequest) {
+          roleOutcomes.push({ role: asgn.role, satisfied: false, reason: quotaNote, attempts: attempt });
+          return;
+        }
+
+        const replacement = await agentSelector.selectAgentForRole(roleRequest, {
+          excludeAgentIds: triedAgentIds,
+        });
+
+        if (!replacement) {
+          const triedList = Array.from(triedAgentIds).join(', ');
+          ctx.onProgress?.(
+            `[${task.id}] ✕ Investigation role '${asgn.role}' could not be satisfied. Tried: ${triedList}. Reason: no healthy eligible agents remain. Policy: ${policy}.`,
+          );
+          ctx.eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId: ctx.runId,
+            taskId: task.id,
+            type: 'INVESTIGATOR_CAPACITY_EXHAUSTED',
+            payload: {
+              taskId: task.id,
+              role: asgn.role,
+              triedAgentIds: Array.from(triedAgentIds),
+              investigationPolicy: policy,
+            },
+            timestamp: new Date(),
+          });
+          roleOutcomes.push({
+            role: asgn.role,
+            satisfied: false,
+            reason: `no healthy eligible agents remain (tried: ${triedList})`,
+            attempts: attempt,
+          });
+          return;
+        }
+
+        ctx.onProgress?.(`[${task.id}] ↻ Reassigning ${asgn.role} → ${replacement.agent.name}`);
+
+        triedAgentIds.add(replacement.agent.id);
+        attempt += 1;
+        currentAgent = replacement.agent;
+        currentAssignment = {
+          id: `asgn-${task.id}-${asgn.role}-retry-${randomUUID().slice(0, 8)}`,
+          taskId: task.id,
+          agentId: replacement.agent.id,
+          role: asgn.role,
+          objective: roleRequest.objective,
+          status: 'pending',
+        };
+        ctx.assignmentRepo.create(currentAssignment, ctx.runId);
       }
     }),
   );
 
-  const investigatorCount = runnable.length;
-  const failureRatio = investigatorCount > 0 ? failedInvestigators.length / investigatorCount : 0;
+  const investigatorCount = roleOutcomes.length;
+  const unsatisfiedRoles = roleOutcomes.filter((r) => !r.satisfied);
+  const satisfiedRoles = roleOutcomes.filter((r) => r.satisfied);
+  const failureRatio = investigatorCount > 0 ? unsatisfiedRoles.length / investigatorCount : 0;
 
-  const policyViolated =
-    failedInvestigators.length > 0 &&
-    (policy === 'all_required' || (policy === 'quorum' && failureRatio >= 0.5));
+  let policyViolated: boolean;
+  if (investigatorCount > 0 && satisfiedRoles.length === 0) {
+    // Nothing was produced at all -- nothing to synthesize, regardless of policy.
+    policyViolated = true;
+  } else {
+    switch (policy) {
+      case 'quorum':
+        policyViolated = failureRatio >= 0.5;
+        break;
+      case 'best_effort':
+        policyViolated = false;
+        break;
+      case 'all_required':
+      default:
+        policyViolated = unsatisfiedRoles.length > 0;
+        break;
+    }
+  }
 
   if (policyViolated) {
     const detailMsg =
-      failedDetails.length > 0
-        ? ` Reason: ${failedDetails.map((d) => `${d.agentId} (${d.role}): ${d.reason}`).join('; ')}`
+      unsatisfiedRoles.length > 0
+        ? ` Reason: ${unsatisfiedRoles.map((r) => `${r.role}: ${r.reason}`).join('; ')}`
         : '';
     ctx.onProgress?.(
-      `[${task.id}] Investigation phase failed under '${policy}' policy: ${failedInvestigators.length}/${investigatorCount} investigators failed.${detailMsg}`,
+      `[${task.id}] Investigation phase failed under '${policy}' policy: ${unsatisfiedRoles.length}/${investigatorCount} roles unsatisfied.${detailMsg}`,
     );
     return {
       success: false,
-      output: `Investigation phase failed under '${policy}' policy (${failedInvestigators.length}/${investigatorCount} failed)${detailMsg}`,
+      output: `Investigation phase failed under '${policy}' policy (${unsatisfiedRoles.length}/${investigatorCount} roles unsatisfied)${detailMsg}`,
     };
+  }
+
+  if (unsatisfiedRoles.length > 0) {
+    ctx.onProgress?.(
+      `[${task.id}] Proceeding with degraded investigation: ${unsatisfiedRoles.length}/${investigatorCount} role(s) unsatisfied (${unsatisfiedRoles
+        .map((r) => r.role)
+        .join(', ')}); policy '${policy}' allows continuing.`,
+    );
+    ctx.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId: ctx.runId,
+      taskId: task.id,
+      type: 'INVESTIGATION_DEGRADED',
+      payload: {
+        taskId: task.id,
+        investigationPolicy: policy,
+        unsatisfiedRoles: unsatisfiedRoles.map((r) => ({ role: r.role, reason: r.reason })),
+      },
+      timestamp: new Date(),
+    });
   }
 
   const synthesisNodes = asgnGraph.getRunnableAssignments(completed);

@@ -1,4 +1,5 @@
 import { ActiveAgentState } from '@taskforge/shared';
+import { AgentQuotaTracker } from '@taskforge/agents';
 import { colors } from './theme.js';
 
 export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -86,16 +87,26 @@ export class LiveTicker {
       );
     }
 
-    // Free agents summary & shortcut hint
+    // Free agents summary & shortcut hint. Excludes agents currently sitting
+    // out a quota/rate-limit cooldown — they aren't actually available for
+    // new work even though they're not in `activeAgents`.
+    const quotaTracker = AgentQuotaTracker.getInstance();
     const activeAgentIds = new Set(activeAgents.map((a) => a.agentId));
-    const freeAgents = registeredAgents.filter((r) => !activeAgentIds.has(r.id));
+    const freeAgents = registeredAgents.filter(
+      (r) => !activeAgentIds.has(r.id) && quotaTracker.isAvailable(r.id),
+    );
+    const onCooldown = registeredAgents.filter(
+      (r) => !activeAgentIds.has(r.id) && !quotaTracker.isAvailable(r.id),
+    );
     const freeText =
       freeAgents.length > 0
         ? `Free: ${freeAgents.map((f) => f.name).join(', ')}`
         : 'All registered agents active';
+    const cooldownText =
+      onCooldown.length > 0 ? `  •  On cooldown: ${onCooldown.map((f) => f.name).join(', ')}` : '';
 
     lines.push(
-      `  ${colors.dim}○ ${freeText}  •  Type /stream <task> to inspect  •  REPL is ready${colors.reset}`,
+      `  ${colors.dim}○ ${freeText}${cooldownText}  •  Type /stream <task> to inspect  •  REPL is ready${colors.reset}`,
     );
 
     return lines;
