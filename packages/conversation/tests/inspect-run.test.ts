@@ -49,7 +49,10 @@ describe('/inspect: completed-run Run -> Task -> Assignment review', () => {
     const inspection = stripAnsi(await shell.handleInput('/inspect'));
 
     expect(inspection).toContain('RUN');
-    expect(inspection).toMatch(/T\d+/); // at least one task id
+    // Task id format depends on which planner path produced the graph
+    // (heuristic vs. semantic decomposition), so assert on the structural
+    // markers every task section carries, not a specific id shape.
+    expect(inspection).toContain('Assignments');
     expect(inspection).toContain('Intent normalized');
     expect(inspection).toContain('investigation');
   });
