@@ -8,67 +8,66 @@ export interface SelectedAgentAssignment {
   degraded?: boolean;
 }
 
+export interface AgentSelectionOptions {
+  /** Agents that must not be considered for this selection attempt (e.g. failed providers). */
+  excludeAgentIds?: Iterable<string>;
+}
+
 export class AgentSelector {
   constructor(private registry: AgentRegistry) {}
 
-  async selectAgents(roleRequests: RoleRequest[]): Promise<SelectedAgentAssignment[]> {
-    const availableAdapters = this.registry.list();
+  async selectAgentForRole(
+    roleRequest: RoleRequest,
+    options: AgentSelectionOptions = {},
+  ): Promise<SelectedAgentAssignment | undefined> {
+    const selected = await this.selectAgents([roleRequest], options);
+    return selected[0];
+  }
+
+  async selectAgents(
+    roleRequests: RoleRequest[],
+    options: AgentSelectionOptions = {},
+  ): Promise<SelectedAgentAssignment[]> {
+    const excluded = new Set(options.excludeAgentIds ?? []);
+    const availableAdapters = this.registry.list().filter((a) => !excluded.has(a.id));
     const results: SelectedAgentAssignment[] = [];
     const usedAgentIds = new Set<string>();
     const quotaTracker = AgentQuotaTracker.getInstance();
 
+    const eligible = async (candidate: AgentAdapter, req: RoleRequest): Promise<boolean> => {
+      if (excluded.has(candidate.id)) return false;
+      if (!(await candidate.detect())) return false;
+      if (!quotaTracker.isAvailable(candidate.id)) return false;
+
+      const caps = await candidate.capabilities();
+      return req.requiredCapabilities.every((cap) => {
+        if (cap === 'canWrite') return caps.canWrite;
+        if (cap === 'canRead') return caps.canRead;
+        if (cap === 'canExecute') return caps.canExecute;
+        // Unknown capability names remain advisory for backward compatibility.
+        return true;
+      });
+    };
+
     for (const req of roleRequests) {
       let chosen: AgentAdapter | undefined;
 
-      // 1. Try preferredAgent if ready, quota is available, and not yet used
+      // 1. Preferred agent, but only if it is actually available and capable.
       if (req.preferredAgent) {
         const candidate = this.registry.get(req.preferredAgent);
-        if (candidate && !usedAgentIds.has(candidate.id)) {
-          const isReady = await candidate.detect();
-          const hasQuota = quotaTracker.isAvailable(candidate.id);
-          if (isReady && hasQuota) {
-            chosen = candidate;
-          }
+        if (
+          candidate &&
+          !usedAgentIds.has(candidate.id) &&
+          (await eligible(candidate, req))
+        ) {
+          chosen = candidate;
         }
       }
 
-      // 2. Try role-based heuristics if no preferred or preferred has no quota
-      if (!chosen) {
-        const candidates = availableAdapters.filter((a) => !usedAgentIds.has(a.id));
-        for (const candidate of candidates) {
-          const isReady = await candidate.detect();
-          if (!isReady) continue;
-          if (!quotaTracker.isAvailable(candidate.id)) continue;
-
-          const caps = await candidate.capabilities();
-          const meetsCaps = req.requiredCapabilities.every((cap) => {
-            if (cap === 'canWrite') return caps.canWrite;
-            if (cap === 'canRead') return caps.canRead;
-            if (cap === 'canExecute') return caps.canExecute;
-            return true;
-          });
-
-          if (meetsCaps) {
-            chosen = candidate;
-            break;
-          }
-        }
-      }
-
-      // 3. Fallback to any ready, unused agent with available quota
+      // 2. Prefer an unused, healthy, capability-compatible agent.
       if (!chosen) {
         for (const candidate of availableAdapters.filter((a) => !usedAgentIds.has(a.id))) {
-          if ((await candidate.detect()) && quotaTracker.isAvailable(candidate.id)) {
-            chosen = candidate;
-            break;
-          }
-        }
-      }
-
-      // 4. Last-ditch fallback to any detected, unused agent
-      if (!chosen) {
-        for (const candidate of availableAdapters.filter((a) => !usedAgentIds.has(a.id))) {
-          if (await candidate.detect()) {
+          if (await eligible(candidate, req)) {
             chosen = candidate;
             break;
           }
@@ -77,14 +76,13 @@ export class AgentSelector {
 
       let degraded = false;
 
-      // 5. Degraded fallback: only reached when no unused agent is available at all.
-      // Reusing an agent already staffed on another role is made explicit via
-      // `degraded: true` rather than silently duplicating it.
+      // 3. Degraded fallback: reuse a healthy agent already covering another role.
+      // Never resurrect an agent that quota/auth tracking has marked unavailable.
       if (!chosen) {
         for (const candidate of availableAdapters) {
-          if (await candidate.detect()) {
+          if (await eligible(candidate, req)) {
             chosen = candidate;
-            degraded = true;
+            degraded = usedAgentIds.has(candidate.id);
             break;
           }
         }
