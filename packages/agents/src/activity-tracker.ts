@@ -29,11 +29,7 @@ export class AgentActivityTracker {
 
   public setAttention(
     assignmentId: string,
-    attention: {
-      type: 'permission' | 'question' | 'auth';
-      prompt: string;
-      resource?: string;
-    },
+    attention: NonNullable<ActiveAgentState['attentionRequired']>,
   ): void {
     const existing = this.activeMap.get(assignmentId);
     if (existing) {
@@ -48,6 +44,29 @@ export class AgentActivityTracker {
     if (existing) {
       existing.attentionRequired = undefined;
       existing.lastActiveAt = new Date();
+      this.notify();
+    }
+  }
+
+  public markRecovered(
+    assignmentId: string,
+    recovery: {
+      failedAgentId: string;
+      failedAgentName: string;
+      reason?: string;
+      resetAt?: string;
+    },
+    ttlMs = 8000,
+  ): void {
+    const existing = this.activeMap.get(assignmentId);
+    if (existing) {
+      const recoveredAt = new Date();
+      existing.recovery = {
+        ...recovery,
+        recoveredAt,
+        recoveredUntil: new Date(recoveredAt.getTime() + ttlMs),
+      };
+      existing.lastActiveAt = recoveredAt;
       this.notify();
     }
   }
