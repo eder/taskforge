@@ -5,9 +5,10 @@ import {
   TaskForgeDatabase,
   AssignmentRepository,
   EventRepository,
+  TaskRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
-import { FakeAgent, AgentRegistry } from '@taskforge/agents';
+import { FakeAgent, AgentRegistry, AgentQuotaTracker } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { NegotiationManager, AgentPreflightEvaluator } from '@taskforge/negotiation';
 import { RoutingProvider } from '@taskforge/router';
@@ -703,5 +704,388 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
     expect(leadAssignment?.status).not.toBe('completed');
 
     db.close();
+  });
+
+  it('recovers a quota-exhausted investigator role by reassigning it to a distinct healthy agent', async () => {
+    AgentQuotaTracker.resetInstance();
+    const db = new TaskForgeDatabase(':memory:');
+    const assignmentRepo = new AssignmentRepository(db);
+    const eventRepo = new EventRepository(db);
+    const taskRepo = new TaskRepository(db);
+    const registry = new AgentRegistry(false);
+
+    const quotaInvestigator = new FakeAgent('quota-investigator', 'Quota Investigator', [
+      {
+        shouldFail: true,
+        failMessage: 'Google Antigravity rate-limited/quota exceeded: Resets in 59h6m1s.',
+        failCompletionReason: 'PROVIDER_QUOTA_EXCEEDED',
+      },
+    ]);
+    // Registered so it exists as a healthy candidate, but never given a role
+    // by the router -- only reachable through runtime role-recovery.
+    const spareAgent = new FakeAgent('spare-agent', 'Spare Agent', [
+      {
+        writeFile: { path: 'investigation.txt', content: 'Root cause found.\n' },
+        gitCommitMessage: 'docs: investigation notes',
+      },
+    ]);
+    const implementerAgent = new FakeAgent('implementer-agent-3', 'Implementer Agent 3', [
+      {
+        writeFile: { path: 'feature.ts', content: 'export const feature = true;\n' },
+        gitCommitMessage: 'feat: implement feature',
+      },
+    ]);
+
+    registry.register(quotaInvestigator);
+    registry.register(spareAgent);
+    registry.register(implementerAgent);
+
+    const parallelRouter: RoutingProvider = {
+      id: 'mock-parallel-router-quota',
+      route: async () => ({
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'high',
+        teamSize: 2,
+        investigationPolicy: 'all_required',
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement fix',
+            preferredAgent: 'implementer-agent-3',
+          },
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: 'Investigate root cause (quota-exhausted)',
+            preferredAgent: 'quota-investigator',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Parallel investigation required before implementation',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.collaboration.maxAgentsPerTask = 3;
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: parallelRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-PARALLEL-RECOVER',
+      title: 'Fix flaky test',
+      description: 'Investigate then implement a fix for a flaky test',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-PARALLEL-RECOVER',
+        objective: 'Fix flaky test',
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Test passes reliably'],
+      },
+    };
+    graph.addTask(task);
+
+    const result = await orchestrator.run('Fix flaky test', {
+      preplannedGraph: graph,
+    });
+
+    // Without recovery, 'researcher' would be the ONLY investigator and its
+    // quota failure would produce zero investigation output under
+    // 'all_required' -- so implementer running at all proves the role was
+    // actually recovered, not just excused.
+    expect(result.tasksCompleted).toBe(1);
+    expect(implementerAgent.executedAssignments.length).toBe(1);
+    expect(spareAgent.executedAssignments.length).toBe(1);
+
+    // Both attempts remain persisted, each with its own assignment ID, and
+    // the replacement kept the same role rather than becoming an implementer.
+    const assignments = assignmentRepo.listByTask('TASK-PARALLEL-RECOVER');
+    const failedOriginal = assignments.find(
+      (a) => a.agentId === 'quota-investigator' && a.status === 'failed',
+    );
+    const replacement = assignments.find(
+      (a) => a.agentId === 'spare-agent' && a.status === 'completed',
+    );
+    expect(failedOriginal).toBeDefined();
+    expect(failedOriginal?.completionReason).toBe('PROVIDER_QUOTA_EXCEEDED');
+    expect(replacement).toBeDefined();
+    expect(replacement?.role).toBe('researcher');
+    expect(replacement?.id).not.toBe(failedOriginal?.id);
+
+    // A provider/capacity failure is not task rework.
+    expect(taskRepo.get('TASK-PARALLEL-RECOVER')?.reworkCount).toBe(0);
+
+    // Telemetry records the failure and the successful reassignment.
+    const events = eventRepo.listByRun(result.runId);
+    const failedEvent = events.find((e) => e.type === 'INVESTIGATOR_FAILED');
+    const reassignedEvent = events.find((e) => e.type === 'INVESTIGATOR_REASSIGNED');
+    expect(failedEvent?.payload?.role).toBe('researcher');
+    expect(failedEvent?.payload?.failureReason).toBe('PROVIDER_QUOTA_EXCEEDED');
+    expect(reassignedEvent?.payload?.role).toBe('researcher');
+    expect(reassignedEvent?.payload?.replacementAgentId).toBe('spare-agent');
+
+    db.close();
+  });
+
+  it('fails the investigation under all_required when a quota-exhausted role has no healthy replacement left', async () => {
+    AgentQuotaTracker.resetInstance();
+    const db = new TaskForgeDatabase(':memory:');
+    const assignmentRepo = new AssignmentRepository(db);
+    const eventRepo = new EventRepository(db);
+    const registry = new AgentRegistry(false);
+
+    const quotaInvestigator = new FakeAgent('quota-investigator-2', 'Quota Investigator 2', [
+      {
+        shouldFail: true,
+        failMessage: 'Individual quota reached. Resets in 59h6m1s.',
+        failCompletionReason: 'PROVIDER_QUOTA_EXCEEDED',
+      },
+    ]);
+    const implementerAgent = new FakeAgent('implementer-agent-4', 'Implementer Agent 4', [
+      {
+        writeFile: { path: 'feature.ts', content: 'export const feature = true;\n' },
+        gitCommitMessage: 'feat: implement feature',
+      },
+    ]);
+
+    registry.register(quotaInvestigator);
+    registry.register(implementerAgent);
+
+    const parallelRouter: RoutingProvider = {
+      id: 'mock-parallel-router-quota-exhausted',
+      route: async () => ({
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'high',
+        teamSize: 2,
+        investigationPolicy: 'all_required',
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement fix',
+            preferredAgent: 'implementer-agent-4',
+          },
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: 'Investigate root cause',
+            preferredAgent: 'quota-investigator-2',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Parallel investigation required before implementation',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.collaboration.maxAgentsPerTask = 3;
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: parallelRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-PARALLEL-EXHAUSTED',
+      title: 'Fix flaky test',
+      description: 'Investigate then implement a fix for a flaky test',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-PARALLEL-EXHAUSTED',
+        objective: 'Fix flaky test',
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Test passes reliably'],
+      },
+    };
+    graph.addTask(task);
+
+    // The only other registered agent (the implementer) is deliberately made
+    // unavailable at the exact moment recovery would look for a replacement
+    // -- deterministically reproducing "no healthy eligible agents remain"
+    // without racing real timers or CLIs.
+    const result = await orchestrator.run('Fix flaky test', {
+      preplannedGraph: graph,
+      onProgress: (m) => {
+        if (m.includes('unavailable for researcher')) {
+          AgentQuotaTracker.getInstance().setManualStatus(
+            'implementer-agent-4',
+            'quota_exhausted',
+            'busy elsewhere',
+          );
+        }
+      },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(implementerAgent.executedAssignments.length).toBe(0);
+
+    const assignments = assignmentRepo.listByTask('TASK-PARALLEL-EXHAUSTED');
+    expect(
+      assignments.some((a) => a.agentId === 'quota-investigator-2' && a.status === 'failed'),
+    ).toBe(true);
+
+    const events = eventRepo.listByRun(result.runId);
+    const exhaustedEvent = events.find((e) => e.type === 'INVESTIGATOR_CAPACITY_EXHAUSTED');
+    expect(exhaustedEvent?.payload?.role).toBe('researcher');
+    // Every eligible agent was tried exactly once for this role, then it gave up.
+    expect(exhaustedEvent?.payload?.triedAgentIds).toEqual(['quota-investigator-2']);
+
+    AgentQuotaTracker.resetInstance();
+    db.close();
+  });
+
+  it('evaluates quorum on final role coverage after a successful recovery, not on the first-attempt failure', async () => {
+    AgentQuotaTracker.resetInstance();
+    const db = new TaskForgeDatabase(':memory:');
+    const registry = new AgentRegistry(false);
+
+    const quotaInvestigator = new FakeAgent('quota-investigator-3', 'Quota Investigator 3', [
+      { shouldFail: true, failMessage: 'quota exceeded', failCompletionReason: 'PROVIDER_QUOTA_EXCEEDED' },
+    ]);
+    const reproEngineer = new FakeAgent('repro-engineer', 'Repro Engineer', [
+      { writeFile: { path: 'repro.txt', content: 'Reproduced.\n' }, gitCommitMessage: 'docs: repro' },
+    ]);
+    const archReviewer = new FakeAgent('arch-reviewer', 'Arch Reviewer', [
+      { writeFile: { path: 'arch.txt', content: 'Reviewed.\n' }, gitCommitMessage: 'docs: arch review' },
+    ]);
+    const spareAgent = new FakeAgent('spare-agent-2', 'Spare Agent 2', [
+      { writeFile: { path: 'recovered.txt', content: 'Recovered research.\n' }, gitCommitMessage: 'docs: recovered' },
+    ]);
+    const implementerAgent = new FakeAgent('implementer-agent-5', 'Implementer Agent 5', [
+      { writeFile: { path: 'feature.ts', content: 'export const feature = true;\n' }, gitCommitMessage: 'feat: implement' },
+    ]);
+
+    registry.register(quotaInvestigator);
+    registry.register(reproEngineer);
+    registry.register(archReviewer);
+    registry.register(spareAgent);
+    registry.register(implementerAgent);
+
+    const parallelRouter: RoutingProvider = {
+      id: 'mock-parallel-router-quorum',
+      route: async () => ({
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'high',
+        teamSize: 4,
+        investigationPolicy: 'quorum',
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement fix',
+            preferredAgent: 'implementer-agent-5',
+          },
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: 'Investigate root cause',
+            preferredAgent: 'quota-investigator-3',
+          },
+          {
+            role: 'reproduction_engineer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Reproduce the bug',
+            preferredAgent: 'repro-engineer',
+          },
+          {
+            role: 'architecture_reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Review architecture impact',
+            preferredAgent: 'arch-reviewer',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Parallel investigation with quorum policy',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.collaboration.maxAgentsPerTask = 4;
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: parallelRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-QUORUM-RECOVER',
+      title: 'Fix flaky test',
+      description: 'Investigate then implement a fix for a flaky test',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-QUORUM-RECOVER',
+        objective: 'Fix flaky test',
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Test passes reliably'],
+      },
+    };
+    graph.addTask(task);
+
+    const result = await orchestrator.run('Fix flaky test', { preplannedGraph: graph });
+
+    // All 3 investigator roles end up satisfied (researcher via recovery) --
+    // quorum sees 0/3 unsatisfied, not the raw "1 attempt failed" signal.
+    expect(result.tasksCompleted).toBe(1);
+    expect(implementerAgent.executedAssignments.length).toBe(1);
+
+    db.close();
+    AgentQuotaTracker.resetInstance();
   });
 });
