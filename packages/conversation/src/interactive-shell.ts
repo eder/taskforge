@@ -2200,6 +2200,8 @@ export class InteractiveShell {
     }
     this.focusUnsubscribe?.();
     this.focusUnsubscribe = undefined;
+    this.cockpitUnsubscribe?.();
+    this.cockpitUnsubscribe = undefined;
     try {
       this.db.close();
     } catch {
