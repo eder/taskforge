@@ -3,7 +3,7 @@ import { AgentAssignment, VerificationResult, ReviewFinding } from '@taskforge/s
 import { Task, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter } from '@taskforge/agents';
 import { AssignmentGraph, SynthesisCoordinator } from '@taskforge/collaboration';
-import { RoutingDecision, SelectedAgentAssignment } from '@taskforge/router';
+import { AgentSelector, RoutingDecision, SelectedAgentAssignment } from '@taskforge/router';
 import { executeGovernedAssignment } from './governed-assignment.js';
 import { SchedulerContext } from './deterministic-scheduler.js';
 import { TeamMemberReservation } from './concurrency-manager.js';
@@ -531,8 +531,9 @@ async function runConcurrentTeam(
 
   const completed = new Set<string>();
   const outputs: Array<{ role: string; agentId: string; output: string }> = [];
-  const failedInvestigators: string[] = [];
+  const unresolvedInvestigators: string[] = [];
   const failedDetails: Array<{ id: string; agentId: string; role: string; reason: string }> = [];
+  const selector = new AgentSelector(ctx.agentRegistry);
 
   const runnable = asgnGraph.getRunnableAssignments(completed);
   if (ctx.concurrency && runnable.length > 0) {
@@ -546,44 +547,190 @@ async function runConcurrentTeam(
   }
 
   await Promise.all(
-    runnable.map(async (asgn) => {
-      const agent = ctx.agentRegistry.get(asgn.agentId)!;
-      const res = await executeGovernedAssignment(
-        buildGovernedCtx(task, ctx, asgn, agent, headCommit, { detached: true }),
-      );
-      completed.add(asgn.id);
+    runnable.map(async (slotAssignment) => {
+      const originalSelection =
+        investigators.find(
+          (inv) =>
+            inv.agent.id === slotAssignment.agentId &&
+            inv.roleRequest.role === slotAssignment.role,
+        ) ??
+        investigators.find((inv) => inv.roleRequest.role === slotAssignment.role);
 
-      // Clean up investigator's temporary worktree immediately
-      await ctx.worktreeManager.removeWorktree(task.id, asgn.id, true, true).catch(() => {});
+      const roleRequest = originalSelection?.roleRequest ?? {
+        role: slotAssignment.role,
+        requiredCapabilities: ['canRead'],
+        objective: slotAssignment.objective,
+      };
 
-      if (res.success) {
-        outputs.push({ role: asgn.role, agentId: asgn.agentId, output: res.output ?? 'Done' });
-        if (ctx.communicationBus) {
-          await ctx.communicationBus
-            .sendMessage({
+      const attemptedAgentIds = new Set<string>();
+      let currentAssignment = slotAssignment;
+      let currentAgent = ctx.agentRegistry.get(currentAssignment.agentId);
+      let lastReason = 'Execution failed';
+
+      while (currentAgent && !attemptedAgentIds.has(currentAgent.id)) {
+        attemptedAgentIds.add(currentAgent.id);
+
+        const res = await executeGovernedAssignment(
+          buildGovernedCtx(task, ctx, currentAssignment, currentAgent, headCommit, {
+            detached: true,
+          }),
+        );
+
+        // Every attempt owns a temporary detached worktree.
+        await ctx.worktreeManager
+          .removeWorktree(task.id, currentAssignment.id, true, true)
+          .catch(() => {});
+
+        if (res.success) {
+          // The assignment graph represents logical investigation slots. Once a
+          // replacement satisfies the slot, mark the ORIGINAL graph node complete
+          // so synthesis can become runnable while keeping the failed attempt
+          // persisted as failed for auditability.
+          completed.add(slotAssignment.id);
+          outputs.push({
+            role: slotAssignment.role,
+            agentId: currentAgent.id,
+            output: res.output ?? 'Done',
+          });
+
+          if (currentAssignment.id !== slotAssignment.id) {
+            ctx.onProgress?.(
+              `[${task.id}] ✓ Investigator role '${slotAssignment.role}' recovered with ${currentAgent.name}.`,
+            );
+            ctx.eventRepo.append({
+              id: `evt-${randomUUID()}`,
               runId: ctx.runId,
               taskId: task.id,
-              fromAssignmentId: asgn.id,
-              toAssignmentId: undefined,
-              type: 'evidence',
-              body: `[${asgn.role} by ${asgn.agentId}]: ${res.output ?? 'Done'}`,
-            })
-            .catch(() => {});
+              type: 'INVESTIGATOR_REASSIGNED',
+              payload: {
+                role: slotAssignment.role,
+                replacementAgentId: currentAgent.id,
+                replacementAssignmentId: currentAssignment.id,
+                originalAssignmentId: slotAssignment.id,
+                investigationPolicy: policy,
+                attempt: attemptedAgentIds.size,
+              },
+              timestamp: new Date(),
+            });
+          }
+
+          if (ctx.communicationBus) {
+            await ctx.communicationBus
+              .sendMessage({
+                runId: ctx.runId,
+                taskId: task.id,
+                fromAssignmentId: currentAssignment.id,
+                toAssignmentId: undefined,
+                type: 'evidence',
+                body: `[${slotAssignment.role} by ${currentAgent.id}]: ${res.output ?? 'Done'}`,
+              })
+              .catch(() => {});
+          }
+          return;
         }
-      } else {
-        failedInvestigators.push(asgn.id);
-        const reason = res.message || res.output || 'Execution failed';
-        failedDetails.push({ id: asgn.id, agentId: asgn.agentId, role: asgn.role, reason });
+
+        lastReason = res.message || res.output || 'Execution failed';
+        const recoverableProviderFailure = res.completionReason === 'PROVIDER_QUOTA_EXCEEDED';
+
+        ctx.eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId: ctx.runId,
+          taskId: task.id,
+          type: 'INVESTIGATOR_FAILED',
+          payload: {
+            role: slotAssignment.role,
+            agentId: currentAgent.id,
+            assignmentId: currentAssignment.id,
+            failureReason: res.completionReason ?? 'UNKNOWN',
+            message: lastReason,
+            recoverableProviderFailure,
+            investigationPolicy: policy,
+            attempt: attemptedAgentIds.size,
+          },
+          timestamp: new Date(),
+        });
+
+        if (!recoverableProviderFailure) {
+          // Semantic/task failures remain subject to the configured investigation
+          // policy; do not hide them behind blind provider failover.
+          break;
+        }
+
+        ctx.onProgress?.(
+          `[${task.id}] ⚠ ${currentAgent.name} unavailable for ${slotAssignment.role}: ${lastReason}`,
+        );
+
+        const replacement = await selector.selectAgentForRole(roleRequest, {
+          excludeAgentIds: attemptedAgentIds,
+        });
+
+        if (!replacement) {
+          ctx.eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId: ctx.runId,
+            taskId: task.id,
+            type: 'INVESTIGATOR_CAPACITY_EXHAUSTED',
+            payload: {
+              role: slotAssignment.role,
+              attemptedAgentIds: [...attemptedAgentIds],
+              investigationPolicy: policy,
+              reason: lastReason,
+            },
+            timestamp: new Date(),
+          });
+          break;
+        }
+
+        const replacementAssignment = buildAssignment(
+          task,
+          replacement,
+          roleRequest.objective || slotAssignment.objective,
+        );
+        ctx.assignmentRepo.create(replacementAssignment, ctx.runId);
+
+        ctx.onProgress?.(
+          `[${task.id}] ↻ Reassigning ${slotAssignment.role}: ${currentAgent.name} → ${replacement.agent.name}`,
+        );
+        ctx.eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId: ctx.runId,
+          taskId: task.id,
+          type: 'INVESTIGATOR_REASSIGNMENT',
+          payload: {
+            role: slotAssignment.role,
+            failedAgentId: currentAgent.id,
+            failedAssignmentId: currentAssignment.id,
+            replacementAgentId: replacement.agent.id,
+            replacementAssignmentId: replacementAssignment.id,
+            failureReason: res.completionReason,
+            investigationPolicy: policy,
+            attempt: attemptedAgentIds.size + 1,
+          },
+          timestamp: new Date(),
+        });
+
+        currentAssignment = replacementAssignment;
+        currentAgent = replacement.agent;
       }
+
+      unresolvedInvestigators.push(slotAssignment.id);
+      failedDetails.push({
+        id: slotAssignment.id,
+        agentId: currentAgent?.id ?? slotAssignment.agentId,
+        role: slotAssignment.role,
+        reason: lastReason,
+      });
+      completed.add(slotAssignment.id);
     }),
   );
 
   const investigatorCount = runnable.length;
-  const failureRatio = investigatorCount > 0 ? failedInvestigators.length / investigatorCount : 0;
+  const unresolvedRatio =
+    investigatorCount > 0 ? unresolvedInvestigators.length / investigatorCount : 0;
 
   const policyViolated =
-    failedInvestigators.length > 0 &&
-    (policy === 'all_required' || (policy === 'quorum' && failureRatio >= 0.5));
+    unresolvedInvestigators.length > 0 &&
+    (policy === 'all_required' || (policy === 'quorum' && unresolvedRatio >= 0.5));
 
   if (policyViolated) {
     const detailMsg =
@@ -591,12 +738,18 @@ async function runConcurrentTeam(
         ? ` Reason: ${failedDetails.map((d) => `${d.agentId} (${d.role}): ${d.reason}`).join('; ')}`
         : '';
     ctx.onProgress?.(
-      `[${task.id}] Investigation phase failed under '${policy}' policy: ${failedInvestigators.length}/${investigatorCount} investigators failed.${detailMsg}`,
+      `[${task.id}] Investigation phase failed under '${policy}' policy: ${unresolvedInvestigators.length}/${investigatorCount} roles unsatisfied.${detailMsg}`,
     );
     return {
       success: false,
-      output: `Investigation phase failed under '${policy}' policy (${failedInvestigators.length}/${investigatorCount} failed)${detailMsg}`,
+      output: `Investigation phase failed under '${policy}' policy (${unresolvedInvestigators.length}/${investigatorCount} roles unsatisfied)${detailMsg}`,
     };
+  }
+
+  if (unresolvedInvestigators.length > 0) {
+    ctx.onProgress?.(
+      `[${task.id}] ⚠ Investigation continuing under '${policy}' with ${unresolvedInvestigators.length}/${investigatorCount} role(s) unsatisfied.`,
+    );
   }
 
   const synthesisNodes = asgnGraph.getRunnableAssignments(completed);
