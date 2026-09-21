@@ -84,6 +84,17 @@ export interface AttentionEvent extends AgentStreamEventBase {
   resource?: string;
 }
 
+export interface InvestigatorFailoverEvent extends AgentStreamEventBase {
+  type: 'investigator_failover';
+  stage: 'provider_failed' | 'reassigning' | 'recovered';
+  failedAgentId: string;
+  failedAgentName: string;
+  replacementAgentId?: string;
+  replacementAgentName?: string;
+  reason?: string;
+  resetAt?: string;
+}
+
 export interface CompletedEvent extends AgentStreamEventBase {
   type: 'completed';
   success: boolean;
@@ -103,4 +114,5 @@ export type AgentStreamEvent =
   | WarningEvent
   | ErrorEvent
   | AttentionEvent
+  | InvestigatorFailoverEvent
   | CompletedEvent;
