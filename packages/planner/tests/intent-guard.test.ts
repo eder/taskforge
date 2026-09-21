@@ -56,7 +56,7 @@ describe('normalizeGraphForExecutionIntent', () => {
     expect(graph.getAllTasks()[0].contract.allowedScope).toEqual(['*']);
   });
 
-  it('propagates scoped no-modification constraints into every planned task without downgrading implementation', async () => {
+  it('propagates scoped no-modification constraints into every planned task without changing task type or scope', async () => {
     const planner = new HeuristicPlanner();
     const goal: Goal = {
       id: 'goal-3',
@@ -68,6 +68,11 @@ describe('normalizeGraphForExecutionIntent', () => {
     };
 
     const graph = await planner.plan(goal);
+    const before = graph.getAllTasks().map((task) => ({
+      id: task.id,
+      type: task.type,
+      allowedScope: [...task.contract.allowedScope],
+    }));
     const intent = detectExecutionIntent(goal.description);
 
     expect(intent.intent).toBe('IMPLEMENTATION');
@@ -77,13 +82,16 @@ describe('normalizeGraphForExecutionIntent', () => {
     const tasks = graph.getAllTasks();
 
     expect(normalizations).toHaveLength(tasks.length);
-    expect(tasks.every((task) => task.type !== 'investigation' || task.title !== 'Core Implementation')).toBe(
-      true,
-    );
+    expect(
+      tasks.map((task) => ({
+        id: task.id,
+        type: task.type,
+        allowedScope: task.contract.allowedScope,
+      })),
+    ).toEqual(before);
     expect(tasks.every((task) => task.contract.forbiddenChanges.includes('Delivery Gate'))).toBe(
       true,
     );
-    expect(tasks.every((task) => task.contract.allowedScope.includes('*'))).toBe(true);
   });
 
   it('merges run-level scoped restrictions with planner-provided forbidden changes', async () => {
