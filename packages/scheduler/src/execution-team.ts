@@ -7,7 +7,7 @@ import { RoutingDecision, SelectedAgentAssignment, AgentSelector, RoleRequest } 
 import { executeGovernedAssignment } from './governed-assignment.js';
 import { SchedulerContext } from './deterministic-scheduler.js';
 import { TeamMemberReservation } from './concurrency-manager.js';
-import { CompletionGate } from './completion-gate.js';
+import { CompletionGate, resolveCompletionPolicy } from './completion-gate.js';
 import { classifyTeamMemberFailure } from './failure-classification.js';
 
 export interface TeamExecutionResult {
@@ -447,7 +447,7 @@ async function runReviewTeam(
 
   if (anyReviewerFailed || criticalOrMajor.length > 0) {
     if (criticalOrMajor.length > 0 && ctx.activityTracker) {
-      ctx.activityTracker.setCriticalFindings(task.id, criticalOrMajor);
+      ctx.activityTracker.setCriticalFindings(leadAssignment.id, criticalOrMajor);
     }
 
     const findingSummary =
@@ -494,8 +494,45 @@ async function runConcurrentTeam(
   const policy = routing.investigationPolicy ?? 'all_required';
   const maxAgents = ctx.config.collaboration?.maxAgentsPerTask ?? 3;
 
-  const implementer = selected.find((s) => s.roleRequest.role === 'implementer') ?? selected[0];
-  const investigators = selected.filter((s) => s !== implementer);
+  // A task only needs a mutating "implementer" step if its completion policy
+  // actually requires a code change (see resolveCompletionPolicy). Investigation
+  // and report-only tasks must never silently gain an implementation step just
+  // because a 'parallel' team was staffed without an explicit implementer role.
+  const requiresCodeChange = resolveCompletionPolicy(task).requirement === 'code_change_required';
+  const explicitImplementer = selected.find((s) => s.roleRequest.role === 'implementer');
+
+  if (requiresCodeChange && !explicitImplementer) {
+    ctx.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId: ctx.runId,
+      taskId: task.id,
+      type: 'ROUTING_INVALID_FOR_TASK',
+      payload: {
+        taskId: task.id,
+        reason: 'Task requires a code change but routing did not staff an implementer role.',
+        staffedRoles: selected.map((s) => s.roleRequest.role),
+      },
+      timestamp: new Date(),
+    });
+    ctx.onProgress?.(
+      `[${task.id}] ✕ Routing invalid: task requires implementation but no 'implementer' role was staffed (staffed: ${
+        selected.map((s) => s.roleRequest.role).join(', ') || 'none'
+      }).`,
+    );
+    return {
+      success: false,
+      output: `Routing invalid for task: implementation is required but no implementer role was staffed by routing (staffed roles: ${
+        selected.map((s) => s.roleRequest.role).join(', ') || 'none'
+      }).`,
+    };
+  }
+
+  // For investigation-only tasks nobody is "promoted" to implementer: every
+  // selected agent investigates, and the synthesis-graph bookkeeping identity
+  // (never executed as a mutating assignment below) borrows the first agent's
+  // id purely to label the synthesis node.
+  const implementer = requiresCodeChange ? explicitImplementer! : (explicitImplementer ?? selected[0]);
+  const investigators = requiresCodeChange ? selected.filter((s) => s !== implementer) : selected;
 
   const asgnGraph = AssignmentGraph.buildParallelInvestigationGraph(
     task.id,
@@ -800,6 +837,24 @@ async function runConcurrentTeam(
     completed.add(synthesisNodes[0].id);
   }
 
+  if (!requiresCodeChange) {
+    // Investigation/report-only task: the synthesis node is bookkeeping only.
+    // Never execute a mutating governed assignment for it -- the repository
+    // must stay untouched, and the task's result is the synthesized report.
+    for (const node of asgnGraph.getRunnableAssignments(completed)) {
+      ctx.assignmentRepo.updateStatus(node.id, 'cancelled');
+      completed.add(node.id);
+    }
+    const report =
+      outputs.length > 0
+        ? outputs.map((o) => `[${o.role} - ${o.agentId}]\n${o.output}`).join('\n\n')
+        : 'Investigation produced no substantive findings.';
+    return {
+      success: true,
+      output: report,
+    };
+  }
+
   const implNodes = asgnGraph.getRunnableAssignments(completed);
   if (implNodes.length === 0) {
     return { success: false, output: 'No implementation assignment available after synthesis' };
@@ -1018,6 +1073,7 @@ function buildGovernedCtx(
     eventRepo: ctx.eventRepo,
     interactionGateway: ctx.interactionGateway,
     activityTracker: ctx.activityTracker,
+    streamBus: ctx.streamBus,
     concurrency: ctx.concurrency,
     graph: ctx.graph,
     priority: computeTaskPriority(task, ctx.graph),

@@ -35,7 +35,11 @@ export type EventType =
   | 'DELIVERY_CONFLICT'
   | 'COMPLETION_GATE_ACCEPTED'
   | 'COMPLETION_GATE_REJECTED'
-  | 'PLAN_REVISED';
+  | 'PLAN_REVISED'
+  | 'PLAN_INTENT_NORMALIZED'
+  | 'ROUTING_INVALID_FOR_TASK'
+  | 'MUTATION_BLOCKED'
+  | 'OPERATOR_MESSAGE_SENT';
 
 export interface TaskForgeEvent {
   id: string;

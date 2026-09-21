@@ -6,6 +6,9 @@ import {
   CollaborationMode,
   CollaborationProposal,
   generateRunId,
+  detectExecutionIntent,
+  ExecutionIntentDecision,
+  AgentStreamBus,
 } from '@taskforge/shared';
 import {
   TaskForgeDatabase,
@@ -22,7 +25,7 @@ import {
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, FakeAgent, AgentActivityTracker } from '@taskforge/agents';
 import { TaskGraph, Goal, Task } from '@taskforge/core';
-import { HeuristicPlanner } from '@taskforge/planner';
+import { HeuristicPlanner, normalizeGraphForExecutionIntent } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
 import {
   StaticRoutingProvider,
@@ -63,6 +66,7 @@ export interface OrchestratorOptions {
   githubWorkflowService?: GitHubWorkflowService;
   interactionGateway?: InteractionGateway;
   activityTracker?: AgentActivityTracker;
+  streamBus?: AgentStreamBus;
   communicationBus?: CommunicationBus;
   sessionRegistry?: SessionRegistry;
   escalationHandler?: EscalationHandler;
@@ -76,6 +80,7 @@ export interface RunOptions {
   onProgress?: (message: string) => void;
   abortSignal?: AbortSignal;
   activityTracker?: AgentActivityTracker;
+  streamBus?: AgentStreamBus;
 }
 
 export interface OrchestrationResult {
@@ -90,6 +95,7 @@ export interface OrchestrationResult {
   graph: TaskGraph;
   error?: string;
   schedulerResult: SchedulerResult;
+  executionIntent: ExecutionIntentDecision;
 }
 
 const REVIEWER_ROLES: ReadonlySet<AgentRole> = new Set([
@@ -146,11 +152,13 @@ export class RunOrchestrator {
   private sessionRegistry: SessionRegistry;
   private escalationHandler: EscalationHandler;
   private activityTracker?: AgentActivityTracker;
+  private streamBus?: AgentStreamBus;
   private workflowSuggestionShown = false;
 
   constructor(options: OrchestratorOptions) {
     this.repoRoot = options.repoRoot;
     this.activityTracker = options.activityTracker;
+    this.streamBus = options.streamBus;
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
 
@@ -261,6 +269,30 @@ export class RunOrchestrator {
     // 4. Preflight Negotiation
     options.onProgress?.('Executing preflight contract negotiation...');
     const graph = await this.negotiator.negotiateGraph(rawGraph, runId);
+
+    // 4b. Execution intent: determined once from the raw goal text, before
+    // anything downstream runs. This is authoritative over whatever the
+    // planner, router, agent selector or an agent itself decides afterward
+    // -- in particular, a READ_ONLY_ANALYSIS intent can never be relaxed by
+    // a task that the planner mis-classified as implementation.
+    const executionIntent: ExecutionIntentDecision = detectExecutionIntent(goalDescription);
+    options.onProgress?.(
+      `Execution intent: ${executionIntent.intent} (mutation ${executionIntent.mutationAllowed ? 'allowed' : 'disabled'})`,
+    );
+    const intentNormalizations = normalizeGraphForExecutionIntent(graph, executionIntent);
+    for (const normalization of intentNormalizations) {
+      this.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: normalization.taskId,
+        type: 'PLAN_INTENT_NORMALIZED',
+        payload: { ...normalization },
+        timestamp: new Date(),
+      });
+      options.onProgress?.(
+        `[${normalization.taskId}] Plan intent normalized: ${normalization.originalTaskType} → ${normalization.normalizedTaskType} (${normalization.reason})`,
+      );
+    }
 
     // Persist all tasks in DB
     for (const task of graph.getAllTasks()) {
@@ -454,6 +486,7 @@ export class RunOrchestrator {
       sessionRegistry: this.sessionRegistry,
       escalationHandler: this.escalationHandler,
       activityTracker: options.activityTracker ?? this.activityTracker,
+      streamBus: options.streamBus ?? this.streamBus,
       onProgress: options.onProgress,
       abortSignal: options.abortSignal,
     });
@@ -463,8 +496,14 @@ export class RunOrchestrator {
     // 7. Cleanup transient worktrees
     await this.worktreeManager.prune().catch(() => {});
 
-    // 8. Delivery gate: mark the run ready to apply, and honor the configured delivery mode
-    if (schedulerResult.status === 'completed' && schedulerResult.integrationBranch) {
+    // 8. Delivery gate: mark the run ready to apply, and honor the configured delivery mode.
+    // A READ_ONLY_ANALYSIS run must never be offered for delivery, regardless
+    // of what the scheduler produced.
+    if (
+      executionIntent.deliveryAllowed &&
+      schedulerResult.status === 'completed' &&
+      schedulerResult.integrationBranch
+    ) {
       if (!this.workflowSuggestionShown) {
         this.workflowSuggestionShown = true;
         if (this.config.git.workflow === 'trunk') {
@@ -536,6 +575,7 @@ export class RunOrchestrator {
       graph,
       error: schedulerResult.error,
       schedulerResult,
+      executionIntent,
     };
   }
 }

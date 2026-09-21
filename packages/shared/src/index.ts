@@ -3,3 +3,6 @@ export * from './types.js';
 export * from './events.js';
 export * from './config.js';
 export * from './logger.js';
+export * from './execution-intent.js';
+export * from './agent-stream-event.js';
+export * from './agent-stream-bus.js';

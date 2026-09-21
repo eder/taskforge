@@ -1,7 +1,20 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
-import { TaskForgeConfig, loadConfig, DeliveryError, ConversationState, generateRunId, PlannerProvenance, resolveOpenAIApiKey } from '@taskforge/shared';
+import { randomUUID } from 'node:crypto';
+import {
+  TaskForgeConfig,
+  loadConfig,
+  DeliveryError,
+  ConversationState,
+  generateRunId,
+  PlannerProvenance,
+  resolveOpenAIApiKey,
+  AgentStreamBus,
+  AgentMessage,
+  ActiveAgentState,
+} from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, AgentActivityTracker } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
@@ -17,10 +30,21 @@ import {
 } from '@taskforge/router';
 import { TaskGraph, Goal } from '@taskforge/core';
 import { RunOrchestrator, OrchestrationResult, sanitizeTaskOutput } from '@taskforge/scheduler';
-import { TaskForgeDatabase, DatabaseHealthReport, InteractionRepository, RunRepository, GoalRepository } from '@taskforge/persistence';
+import {
+  TaskForgeDatabase,
+  DatabaseHealthReport,
+  InteractionRepository,
+  RunRepository,
+  GoalRepository,
+  EventRepository,
+  TaskRepository,
+  AssignmentRepository,
+  AuditService,
+} from '@taskforge/persistence';
 import { TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
+import { SessionRegistry } from '@taskforge/collaboration';
 import { TuiDashboard } from './tui-dashboard.js';
 import { theme, colors } from './theme.js';
 import { TerminalViewport } from './terminal-viewport.js';
@@ -35,6 +59,7 @@ export interface ShellOptions {
   output?: Writable;
   database?: TaskForgeDatabase;
   activityTracker?: AgentActivityTracker;
+  streamBus?: AgentStreamBus;
   asyncExecution?: boolean;
   interactive?: boolean;
 }
@@ -81,6 +106,14 @@ export class InteractiveShell {
   public viewport: TerminalViewport;
   public slashMenu: SlashMenu;
   public activityTracker: AgentActivityTracker;
+  public streamBus: AgentStreamBus;
+  private sessionRegistry: SessionRegistry;
+  private eventRepo: EventRepository;
+  private taskRepo: TaskRepository;
+  private assignmentRepo: AssignmentRepository;
+  /** The assignment the cockpit is currently focused on, if any (Focus Mode). */
+  private focusedAssignmentId?: string;
+  private focusUnsubscribe?: () => void;
   public activeExecutionController?: AbortController;
   private tickerTimer?: NodeJS.Timeout;
   private tickerFrameIndex = 0;
@@ -94,8 +127,13 @@ export class InteractiveShell {
     });
     this.slashMenu = new SlashMenu(this.outStream);
     this.activityTracker = options.activityTracker ?? new AgentActivityTracker();
+    this.streamBus = options.streamBus ?? new AgentStreamBus();
+    this.sessionRegistry = new SessionRegistry();
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
+    this.eventRepo = new EventRepository(this.db);
+    this.taskRepo = new TaskRepository(this.db);
+    this.assignmentRepo = new AssignmentRepository(this.db);
     this.telemetry = new TelemetryCollector(this.db);
     this.operator = new OperatorAgent();
     this.agentRegistry = new AgentRegistry();
@@ -169,12 +207,345 @@ export class InteractiveShell {
     this.viewport.drawFooter('', lines);
   }
 
+  /**
+   * Focus Mode: subscribes live to one assignment's AgentStreamEvents so new
+   * tool calls/messages append to the scrollback as they happen -- not just
+   * at the moment `/stream` was typed -- mirroring how the ticker footer
+   * already updates live via activityTracker.subscribe(). The persistent
+   * prompt is untouched; typing plain text while focused sends it to this
+   * assignment's agent instead of starting a new task (see handleInput).
+   */
+  private enterFocusMode(assignmentId: string, allActive: ActiveAgentState[]): string {
+    this.focusUnsubscribe?.();
+    this.focusedAssignmentId = assignmentId;
+    this.focusUnsubscribe = this.streamBus.subscribeAssignment(assignmentId, (event) => {
+      const line = StreamViewer.formatStreamEvent(event);
+      if (line) this.viewport.writeUpper(`${line}\n`);
+    });
+
+    const activeAgent = allActive.find((a) => a.assignmentId === assignmentId) ?? allActive[0];
+    return StreamViewer.renderAssignmentFocusView({
+      activeAgent,
+      allActive,
+      streamEvents: this.streamBus.history(assignmentId),
+    });
+  }
+
+  private exitFocusMode(): string {
+    this.focusUnsubscribe?.();
+    this.focusUnsubscribe = undefined;
+    this.focusedAssignmentId = undefined;
+    return `${colors.dim}Back to overview. REPL is ready.${colors.reset}`;
+  }
+
+  private switchFocus(indexOneBased: number): string {
+    const { active: pool, target } = this.resolveFocusPoolTarget(indexOneBased);
+    if (pool.length === 0) {
+      return 'No active agent tasks to focus on.';
+    }
+    if (!target) {
+      return `No agent at position ${indexOneBased}. There ${pool.length === 1 ? 'is' : 'are'} ${pool.length} active agent(s) to switch between.`;
+    }
+    return this.enterFocusMode(target.assignmentId, pool);
+  }
+
+  private async sendMessageToFocusedAgent(text: string): Promise<string> {
+    if (!this.focusedAssignmentId) {
+      return 'No agent is focused. Use /stream <task> or /focus <n> first.';
+    }
+    const registered = this.sessionRegistry.getByAssignment(this.focusedAssignmentId);
+    if (!registered || !registered.adapter.send) {
+      return `${colors.dim}(${this.focusedAssignmentId} has no active session to message right now)${colors.reset}`;
+    }
+
+    const message: AgentMessage = {
+      id: `msg-${randomUUID()}`,
+      runId: registered.runId,
+      taskId: registered.taskId,
+      fromAssignmentId: 'operator',
+      toAssignmentId: registered.assignmentId,
+      type: 'context_request',
+      body: text,
+      createdAt: new Date(),
+    };
+
+    try {
+      await registered.adapter.send(registered.sessionId, message);
+    } catch (err) {
+      return `Failed to deliver message to ${registered.adapter.name}: ${(err as Error).message}`;
+    }
+
+    this.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId: registered.runId,
+      taskId: registered.taskId,
+      type: 'OPERATOR_MESSAGE_SENT',
+      payload: { assignmentId: registered.assignmentId, agentId: registered.adapter.id, message: text },
+      timestamp: new Date(),
+    });
+
+    return `${colors.dim}→ sent to ${registered.adapter.name}${colors.reset}`;
+  }
+
+  /** Resolves an index within the current focus pool (or all active assignments if unfocused). */
+  private resolveFocusPoolTarget(indexOneBased: number): { active: ActiveAgentState[]; target?: ActiveAgentState } {
+    const active = this.activityTracker.getActive();
+    const current = this.focusedAssignmentId
+      ? active.find((a) => a.assignmentId === this.focusedAssignmentId)
+      : undefined;
+    const pool = current ? active.filter((a) => a.taskId === current.taskId) : active;
+    return { active: pool, target: pool[indexOneBased - 1] };
+  }
+
+  private async cancelAssignmentByIndex(indexOneBased: number): Promise<string> {
+    const { active: pool, target } = this.resolveFocusPoolTarget(indexOneBased);
+    if (pool.length === 0) {
+      return 'No active agent tasks to cancel.';
+    }
+    if (!target) {
+      return `No agent at position ${indexOneBased}. There ${pool.length === 1 ? 'is' : 'are'} ${pool.length} active agent(s).`;
+    }
+
+    const registered = this.sessionRegistry.getByAssignment(target.assignmentId);
+    if (!registered || !registered.adapter.cancel) {
+      return `${colors.dim}(${target.agentName} has no cancellable session right now)${colors.reset}`;
+    }
+
+    try {
+      await registered.adapter.cancel(registered.sessionId);
+    } catch (err) {
+      return `Failed to cancel ${registered.adapter.name}: ${(err as Error).message}`;
+    }
+
+    this.activityTracker.updateStatus(target.assignmentId, 'Cancelled by operator');
+    return `${colors.yellow}⊘ Cancelled ${target.agentName}${colors.reset} ${colors.dim}(${target.role})${colors.reset}`;
+  }
+
+  private showRawLog(indexOneBased?: number): string {
+    const { active: pool, target: explicitTarget } = this.resolveFocusPoolTarget(indexOneBased ?? 1);
+    const target =
+      indexOneBased !== undefined
+        ? explicitTarget
+        : (pool.find((a) => a.assignmentId === this.focusedAssignmentId) ?? pool[0]);
+
+    if (!target) {
+      return 'No active agent to inspect. Use /stream <task> first, or /raw <n>.';
+    }
+    if (!target.logPath || !fs.existsSync(target.logPath)) {
+      return `${colors.dim}No raw log recorded yet for ${target.agentName} (${target.assignmentId}).${colors.reset}`;
+    }
+
+    const MAX_RAW_LINES = 500;
+    let raw: string;
+    try {
+      raw = fs.readFileSync(target.logPath, 'utf8');
+    } catch (err) {
+      return `Could not read log for ${target.agentName}: ${(err as Error).message}`;
+    }
+    const lines = raw.split('\n');
+    const truncated = lines.length > MAX_RAW_LINES;
+    const shown = truncated ? lines.slice(-MAX_RAW_LINES) : lines;
+
+    const header = `  ${colors.brand}✦ Raw log — ${target.agentName} (${target.assignmentId})${colors.reset}`;
+    const notice = truncated
+      ? `  ${colors.dim}(showing last ${MAX_RAW_LINES} of ${lines.length} lines)${colors.reset}\n`
+      : '';
+    return [header, notice, shown.join('\n')].filter(Boolean).join('\n');
+  }
+
+  /**
+   * Live /tasks view (Part 21): every active assignment grouped by task,
+   * showing agent, role, running duration and current activity -- the same
+   * identity model the activity tracker and cockpit tabs use, so this stays
+   * consistent with /stream and the ticker rather than a third data source.
+   */
+  private formatActiveTasksView(active: ActiveAgentState[], filterTaskId?: string): string {
+    const scoped = filterTaskId
+      ? active.filter((a) => a.taskId.toLowerCase() === filterTaskId.toLowerCase())
+      : active;
+    if (scoped.length === 0) {
+      return `No active agents for task ${filterTaskId}.`;
+    }
+
+    const byTask = new Map<string, ActiveAgentState[]>();
+    for (const a of scoped) {
+      const list = byTask.get(a.taskId) ?? [];
+      list.push(a);
+      byTask.set(a.taskId, list);
+    }
+
+    const lines: string[] = [`${colors.brand}✦ ${colors.bold}Active Tasks${colors.reset}`, ''];
+    for (const [taskId, assignments] of byTask) {
+      lines.push(`${colors.bold}${taskId}${colors.reset}  ${assignments[0].taskTitle}`, '');
+      for (const [idx, a] of assignments.entries()) {
+        const agentColor = LiveTicker.getAgentColor(a.agentId);
+        const duration = LiveTicker.formatDuration(a.startedAt);
+        const statusIcon = a.attentionRequired
+          ? `${colors.yellow}▲${colors.reset}`
+          : `${colors.green}●${colors.reset}`;
+        lines.push(
+          `  ${colors.dim}[${idx + 1}]${colors.reset} ${agentColor}${a.agentName}${colors.reset}`,
+          `      ${colors.dim}${a.role}${colors.reset}`,
+          `      ${statusIcon} Running · ${duration}`,
+          `      ${a.status}`,
+          '',
+        );
+      }
+    }
+    return lines.join('\n').trimEnd();
+  }
+
+  /**
+   * Completed-run review (Parts 14/22): the full Run -> Task -> Assignment
+   * hierarchy, including intent normalization, routing-invalid and
+   * mutation-blocked events that happened along the way -- the "what
+   * actually happened" view once /stream's live agents are gone.
+   */
+  private formatRunInspection(runIdArg?: string): string {
+    const runId = runIdArg ?? this.activeRunId ?? new RunRepository(this.db).listAll()[0]?.id;
+    if (!runId) {
+      return 'No runs recorded yet.';
+    }
+
+    const goalRepo = new GoalRepository(this.db);
+    const audit = new AuditService(new RunRepository(this.db), goalRepo, this.taskRepo, this.eventRepo).reconstructRun(
+      runId,
+    );
+    if (!audit) {
+      return `No run found with id ${runId}. Use /runs to see recorded runs.`;
+    }
+
+    const { run, goal, tasks, events } = audit;
+    const assignments = this.assignmentRepo.listByRun(runId);
+    const delivery = this.deliveryService.getDelivery(runId);
+
+    const lines: string[] = [
+      `${colors.brand}✦ ${colors.bold}RUN ${run.id}${colors.reset}`,
+      `  ${colors.dim}Status:${colors.reset} ${theme.statusBadge(run.status)}`,
+    ];
+    if (goal) {
+      lines.push(`  ${colors.dim}Goal:${colors.reset}   ${goal.description}`);
+    }
+    if (delivery) {
+      lines.push(`  ${colors.dim}Delivery:${colors.reset} ${delivery.status.toUpperCase()}`);
+    }
+    lines.push('');
+
+    const normalizationEvents = events.filter((e) => e.type === 'PLAN_INTENT_NORMALIZED');
+    const routingInvalidEvents = events.filter((e) => e.type === 'ROUTING_INVALID_FOR_TASK');
+    const mutationBlockedEvents = events.filter((e) => e.type === 'MUTATION_BLOCKED');
+    const reassignmentEvents = events.filter(
+      (e) => e.type === 'INVESTIGATOR_REASSIGNED' || e.type === 'INVESTIGATOR_FAILED',
+    );
+
+    for (const task of tasks) {
+      lines.push(`${colors.bold}${task.id}${colors.reset}  ${task.title}`);
+      lines.push(`  ${colors.dim}Type:${colors.reset} ${task.type}   ${theme.statusBadge(task.status)}`);
+
+      const taskNormalizations = normalizationEvents.filter((e) => e.taskId === task.id);
+      for (const e of taskNormalizations) {
+        const p = e.payload as { originalTaskType?: string; normalizedTaskType?: string; reason?: string };
+        lines.push(
+          `  ${colors.yellow}⚠ Intent normalized:${colors.reset} ${p.originalTaskType} → ${p.normalizedTaskType}`,
+        );
+      }
+      for (const e of routingInvalidEvents.filter((ev) => ev.taskId === task.id)) {
+        const p = e.payload as { reason?: string };
+        lines.push(`  ${colors.red}✕ Routing invalid:${colors.reset} ${p.reason ?? ''}`);
+      }
+      for (const e of mutationBlockedEvents.filter((ev) => ev.taskId === task.id)) {
+        const p = e.payload as { uncommittedFiles?: string[]; blockedCommit?: string };
+        const detail = p.blockedCommit
+          ? `reverted commit ${p.blockedCommit.slice(0, 7)}`
+          : `reverted ${p.uncommittedFiles?.length ?? 'an'} unauthorized change(s)`;
+        lines.push(`  ${colors.yellow}▲ Mutation blocked:${colors.reset} ${detail}`);
+      }
+      for (const e of reassignmentEvents.filter((ev) => ev.taskId === task.id)) {
+        const p = e.payload as { role?: string; failedAgentId?: string; replacementAgentId?: string };
+        if (e.type === 'INVESTIGATOR_REASSIGNED' && p.replacementAgentId) {
+          lines.push(`  ${colors.cyan}↻ Reassigned${colors.reset} ${p.role}: ${p.failedAgentId} → ${p.replacementAgentId}`);
+        } else if (e.type === 'INVESTIGATOR_FAILED') {
+          lines.push(`  ${colors.yellow}⚠ Provider unavailable${colors.reset} for ${p.role} (${p.failedAgentId})`);
+        }
+      }
+
+      const taskAssignments = assignments.filter((a) => a.taskId === task.id);
+      if (taskAssignments.length > 0) {
+        lines.push(`  ${colors.dim}Assignments${colors.reset}`);
+        for (const a of taskAssignments) {
+          const agentName = this.agentRegistry.get(a.agentId)?.name ?? a.agentId;
+          const badge = theme.statusBadge(a.status);
+          const reason = a.completionReason ? ` ${colors.dim}(${a.completionReason})${colors.reset}` : '';
+          lines.push(`    ${colors.dim}${a.id}${colors.reset}  ${agentName}  ${a.role}  ${badge}${reason}`);
+        }
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n').trimEnd();
+  }
+
   private resolveDeliveryRunId(explicit?: string): string | undefined {
     if (explicit) return explicit;
     return this.deliveryService.findLatestReady()?.runId;
   }
 
-  private formatRunSummary(result: OrchestrationResult): string {
+  /**
+   * Summary-first diff view (Part 20): total files/insertions/deletions up
+   * top, then a per-file M/A/D list. Never dumps a full unified diff
+   * automatically -- that stays an explicit, separate escape hatch.
+   */
+  private async formatRunDiff(runId: string): Promise<string> {
+    const delivery = this.deliveryService.getDelivery(runId);
+    if (!delivery) {
+      return `Run ${runId} has no delivery information.`;
+    }
+
+    const stat = await this.deliveryService.diff(runId);
+    if (!stat.trim()) {
+      return `${colors.brand}✦ ${colors.bold}Run Diff${colors.reset}\n\n  No changes to show.`;
+    }
+
+    const summaryMatch = stat.match(
+      /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/,
+    );
+    const filesChanged = summaryMatch?.[1] ?? '0';
+    const insertions = summaryMatch?.[2] ?? '0';
+    const deletions = summaryMatch?.[3] ?? '0';
+
+    let fileLines: string[] = [];
+    try {
+      const nameStatus = await this.gitService.exec(
+        ['diff', '--name-status', `${delivery.targetBranch}...${delivery.branch}`],
+        this.repoRoot,
+      );
+      fileLines = nameStatus
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => {
+          const [status, ...rest] = l.split(/\s+/);
+          return `  ${status[0]} ${rest.join(' ')}`;
+        });
+    } catch {
+      // fall back to the --stat file list (no M/A/D prefix) if name-status fails
+      fileLines = stat
+        .split('\n')
+        .filter((l) => l.includes('|'))
+        .map((l) => `  ${l.split('|')[0].trim()}`);
+    }
+
+    return [
+      `${colors.brand}✦ ${colors.bold}Run Diff${colors.reset}`,
+      '',
+      `  ${colors.bold}${filesChanged}${colors.reset} file${filesChanged === '1' ? '' : 's'} changed`,
+      `  ${colors.green}+${insertions}${colors.reset}  ${colors.red}-${deletions}${colors.reset}`,
+      '',
+      ...fileLines,
+    ].join('\n');
+  }
+
+  private async formatRunSummary(result: OrchestrationResult): Promise<string> {
     const statusColor =
       result.status === 'completed'
         ? colors.green
@@ -197,24 +568,68 @@ export class InteractiveShell {
 
     const isSuccess = result.status === 'completed';
     const isCancelled = result.status === 'cancelled';
-    const title = isSuccess
-      ? 'Plan executed successfully!'
-      : isCancelled
-        ? 'Plan execution cancelled by user'
-        : 'Plan execution encountered issues';
-    const titleIcon = isSuccess
-      ? `${colors.green}✔${colors.reset}`
-      : isCancelled
-        ? `${colors.yellow}⊘${colors.reset}`
-        : `${colors.red}✖${colors.reset}`;
+    // READ_ONLY_ANALYSIS runs get a distinct result screen: no delivery
+    // block is ever offered (mutation is disabled for the entire run, see
+    // RunOrchestrator's delivery gate), and success is framed as goal
+    // success ("did we produce a substantive answer with zero repository
+    // mutation?"), not "did we produce a mergeable change?".
+    const isReadOnly = result.executionIntent?.intent === 'READ_ONLY_ANALYSIS';
+    const hasSubstantiveOutput = Object.values(result.taskOutputs ?? {}).some(
+      (text) => text && text.trim().length > 0,
+    );
+
+    const title = isReadOnly
+      ? isSuccess
+        ? hasSubstantiveOutput
+          ? 'Analysis complete'
+          : 'Analysis completed without a substantive answer'
+        : isCancelled
+          ? 'Analysis cancelled by user'
+          : 'Analysis encountered issues'
+      : isSuccess
+        ? 'Plan executed successfully!'
+        : isCancelled
+          ? 'Plan execution cancelled by user'
+          : 'Plan execution encountered issues';
+    const titleIcon =
+      isSuccess && (!isReadOnly || hasSubstantiveOutput)
+        ? `${colors.green}✔${colors.reset}`
+        : isCancelled
+          ? `${colors.yellow}⊘${colors.reset}`
+          : `${colors.red}✖${colors.reset}`;
 
     const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
 
-    const delivery = isSuccess ? this.deliveryService.getDelivery(result.runId) : undefined;
+    const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
     let deliveryBlock = '';
-    if (delivery?.status === 'ready_to_apply') {
+    let repositoryBlock = '';
+
+    if (isReadOnly) {
+      if (isSuccess) {
+        repositoryBlock = [
+          `    ${colors.dim}Repository:${colors.reset}`,
+          `      ${colors.green}✓${colors.reset} Read-only policy respected`,
+          `      ${colors.green}✓${colors.reset} Files changed: 0`,
+        ].join('\n');
+      }
+      // deliveryBlock intentionally stays empty: a READ_ONLY_ANALYSIS run is
+      // never offered /apply, /diff or /pr, regardless of scheduler status.
+    } else if (delivery?.status === 'ready_to_apply') {
+      let changedBlock = '';
+      try {
+        const diffStat = (await this.deliveryService.diff(result.runId)).trim();
+        if (diffStat) {
+          changedBlock = `\n${diffStat
+            .split('\n')
+            .map((l) => `      ${l}`)
+            .join('\n')}`;
+        }
+      } catch {
+        // best-effort; delivery block still renders without the diff stat
+      }
       deliveryBlock = [
         `    ${colors.dim}Branch:${colors.reset}             ${colors.cyan}${delivery.branch}${colors.reset}`,
+        `    ${colors.dim}Changed:${colors.reset}${changedBlock}`,
         `    ${colors.dim}Delivery:${colors.reset}           ${colors.yellow}● READY TO APPLY${colors.reset}`,
         '',
         `    ${colors.dim}/apply${colors.reset}    apply to ${delivery.targetBranch}`,
@@ -229,12 +644,13 @@ export class InteractiveShell {
 
     return [
       outputPrefix,
-      `  ${colors.brand}✦ ${colors.bold}Run Summary${colors.reset}`,
+      `  ${colors.brand}✦ ${colors.bold}${isReadOnly ? 'Analysis Summary' : 'Run Summary'}${colors.reset}`,
       `  ${divider}`,
       `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
       '',
       `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
       `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
+      repositoryBlock,
       deliveryBlock,
       result.error
         ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
@@ -332,6 +748,52 @@ export class InteractiveShell {
       );
       const deletedBranches = await worktreeManager.cleanOrphanedWorktreesAndBranches();
       return `Cleaned up orphaned worktrees and ${deletedBranches} temporary branch(es).`;
+    }
+
+    // Focus Mode navigation. Recognized as literal commands (not routed
+    // through the operator's NLU intent parser) precisely so they work the
+    // same way whether or not the cockpit is currently focused.
+    if (text === '/back' || text === '/overview' || text === 'q') {
+      if (this.focusedAssignmentId) {
+        return this.exitFocusMode();
+      }
+      // 'q' with nothing focused is not a recognized overview command --
+      // fall through to normal intent handling below.
+    }
+
+    const focusMatch = text.match(/^\/(?:focus|agent)\s+(\d+)$/i);
+    if (focusMatch) {
+      return this.switchFocus(parseInt(focusMatch[1], 10));
+    }
+
+    // Per-assignment cancel: /cancel <n> targets one agent in the current
+    // focus pool. Bare /cancel (no index) keeps its existing whole-run
+    // meaning via cancel_and_reassign below -- this must never change.
+    const cancelOneMatch = text.match(/^\/cancel\s+(\d+)$/i);
+    if (cancelOneMatch) {
+      return this.cancelAssignmentByIndex(parseInt(cancelOneMatch[1], 10));
+    }
+
+    // /raw <n> dumps the full persisted log for one assignment, unformatted
+    // -- the escape hatch when the normalized event view isn't enough.
+    const rawMatch = text.match(/^\/raw(?:\s+(\d+))?$/i);
+    if (rawMatch) {
+      return this.showRawLog(rawMatch[1] ? parseInt(rawMatch[1], 10) : undefined);
+    }
+
+    // /inspect [run] reviews a completed (or in-progress) run's full
+    // Run -> Task -> Assignment hierarchy, including intent normalization,
+    // routing and mutation-guard events -- the "what actually happened"
+    // view /stream doesn't cover once agents have finished.
+    const inspectMatch = text.match(/^\/inspect(?:\s+(\S+))?$/i);
+    if (inspectMatch) {
+      return this.formatRunInspection(inspectMatch[1]);
+    }
+
+    // Focus Mode messaging: plain text (not a /command) while an assignment
+    // is focused talks to that agent instead of being parsed as a new goal.
+    if (this.focusedAssignmentId && !text.startsWith('/')) {
+      return this.sendMessageToFocusedAgent(text);
     }
 
     const intent = this.operator.parseIntent(text, {
@@ -452,6 +914,10 @@ export class InteractiveShell {
       }
 
       case 'inspect_tasks': {
+        const active = this.activityTracker.getActive();
+        if (active.length > 0) {
+          return this.formatActiveTasksView(active, intent.taskId);
+        }
         const tasks = this.currentGraph
           ? this.currentGraph.getAllTasks().map((t) => ({
               id: t.id,
@@ -528,22 +994,42 @@ export class InteractiveShell {
           return `Run ${targetRunId} has no delivery information.`;
         }
         const before = await this.gitService.getStatus().catch(() => undefined);
+        // Capture the file list BEFORE applying: once merged, targetBranch
+        // already contains everything from the integration branch, so a
+        // diff taken afterward would show nothing useful.
+        const preApplyDiff = await this.deliveryService.diff(targetRunId).catch(() => '');
         try {
           const result = await this.deliveryService.apply(targetRunId);
           if (result.alreadyApplied) {
             return `${colors.green}✔${colors.reset} ${targetRunId} was already applied to ${delivery.targetBranch}${delivery.appliedCommit ? ` (${delivery.appliedCommit.slice(0, 7)})` : ''}.`;
           }
           const beforeShort = before?.headCommit ? before.headCommit.slice(0, 7) : '?';
-          return [
-            `${colors.brand}✦ ${colors.bold}Applying ${targetRunId}${colors.reset}`,
-            '',
-            `  ${colors.dim}Target branch..........${colors.reset} ${delivery.targetBranch}`,
-            `  ${colors.dim}Integration branch.....${colors.reset} ${delivery.branch}`,
-            '',
-            `${colors.green}✔ Changes applied successfully.${colors.reset}`,
-            '',
-            `  ${delivery.targetBranch}  ${beforeShort} → ${result.commit.slice(0, 7)}`,
-          ].join('\n');
+          const afterShort = result.commit.slice(0, 7);
+
+          const fileLines = preApplyDiff
+            .split('\n')
+            .filter((l) => l.includes('|'))
+            .map((l) => `  ${colors.dim}M${colors.reset} ${l.split('|')[0].trim()}`);
+
+          let commitSubject = '';
+          try {
+            commitSubject = (
+              await this.gitService.exec(['log', '-1', '--pretty=%s', result.commit], this.repoRoot)
+            ).trim();
+          } catch {
+            // best-effort
+          }
+
+          const sections: string[][] = [
+            [`${colors.brand}✦ ${colors.bold}Applied successfully${colors.reset}`],
+            [`  ${delivery.targetBranch}`, `  ${beforeShort} → ${afterShort}`],
+          ];
+          if (fileLines.length > 0) {
+            sections.push([`  ${colors.dim}Files${colors.reset}`, ...fileLines]);
+          }
+          sections.push([`  ${colors.dim}Commit${colors.reset}`, `  ${afterShort}  ${commitSubject}`]);
+
+          return sections.map((s) => s.join('\n')).join('\n\n');
         } catch (err) {
           const conflictingFiles =
             err instanceof DeliveryError
@@ -571,8 +1057,7 @@ export class InteractiveShell {
           return 'No run is ready to inspect. Use /runs to see past runs.';
         }
         try {
-          const stat = await this.deliveryService.diff(targetRunId);
-          return stat.trim().length > 0 ? stat : 'No changes to show.';
+          return await this.formatRunDiff(targetRunId);
         } catch (err) {
           return `${colors.red}✖ ${(err as Error).message}${colors.reset}`;
         }
@@ -878,14 +1363,15 @@ export class InteractiveShell {
         if (active.length === 0) {
           return 'No active agent tasks currently streaming. Describe a goal or run a task to start streaming.';
         }
-        const target = intent.taskId
-          ? active.find((a) => a.taskId.toLowerCase() === intent.taskId!.toLowerCase()) ?? active[0]
-          : active[0];
+        // All active assignments for the requested task (or every active
+        // assignment, task unspecified) -- several agents can legitimately
+        // share one taskId, so this is never collapsed to a single match.
+        const scoped = intent.taskId
+          ? active.filter((a) => a.taskId.toLowerCase() === intent.taskId!.toLowerCase())
+          : active;
+        const pool = scoped.length > 0 ? scoped : active;
 
-        return StreamViewer.getStreamSnapshot({
-          activeAgent: target,
-          allActive: active,
-        });
+        return this.enterFocusMode(pool[0].assignmentId, pool);
       }
 
       case 'approve_plan': {
@@ -919,6 +1405,8 @@ export class InteractiveShell {
           gitService: this.gitService,
           interactionGateway: this.interactionGateway,
           activityTracker: this.activityTracker,
+          streamBus: this.streamBus,
+          sessionRegistry: this.sessionRegistry,
         });
 
         const isBackground =
@@ -946,7 +1434,7 @@ export class InteractiveShell {
                 this.viewport.writeUpper(theme.formatProgressMessage(msg));
               },
             })
-            .then((result) => {
+            .then(async (result) => {
               this.activeExecutionController = undefined;
               this.conversationState =
                 result.status === 'completed' &&
@@ -964,7 +1452,7 @@ export class InteractiveShell {
                 escalationsCount: 0,
               });
 
-              const summary = this.formatRunSummary(result);
+              const summary = await this.formatRunSummary(result);
               this.viewport.writeUpper(`\n${summary}\n`);
               this.viewport.drawFooter('');
             })
@@ -1019,7 +1507,7 @@ export class InteractiveShell {
             escalationsCount: 0,
           });
 
-          return this.formatRunSummary(result);
+          return await this.formatRunSummary(result);
         } catch (err) {
           this.conversationState = 'IDLE';
           return `${colors.red}✕ Error during plan execution: ${(err as Error).message}${colors.reset}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
@@ -1666,6 +2154,8 @@ export class InteractiveShell {
       clearInterval(this.tickerTimer);
       this.tickerTimer = undefined;
     }
+    this.focusUnsubscribe?.();
+    this.focusUnsubscribe = undefined;
     try {
       this.db.close();
     } catch {
