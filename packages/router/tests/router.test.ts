@@ -119,6 +119,29 @@ describe('Router and AgentSelector', () => {
     expect(selected[0].agent.id).toBe('claude');
   });
 
+  it('AgentSelector never resurrects an unavailable agent in fallback paths', async () => {
+    const { AgentQuotaTracker } = await import('@taskforge/agents');
+    AgentQuotaTracker.resetInstance();
+    const tracker = AgentQuotaTracker.getInstance();
+    tracker.setManualStatus('only-agent', 'quota_exhausted', 'provider quota exhausted');
+
+    const registry = new AgentRegistry(false);
+    registry.register(new FakeAgent('only-agent', 'Only Agent'));
+
+    const selector = new AgentSelector(registry);
+    const selected = await selector.selectAgents([
+      {
+        role: 'researcher',
+        requiredCapabilities: ['canRead'],
+        objective: 'Investigate the issue',
+        preferredAgent: 'only-agent',
+      },
+    ]);
+
+    expect(selected).toHaveLength(0);
+    AgentQuotaTracker.resetInstance();
+  });
+
   it('AgentSelector marks staffing as degraded instead of silently duplicating an agent across roles', async () => {
     const registry = new AgentRegistry(false);
     const onlyAgent = new FakeAgent('solo-agent', 'Solo Agent');
