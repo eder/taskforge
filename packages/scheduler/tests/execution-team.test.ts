@@ -602,6 +602,123 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
   });
 
 
+  it('recovers an all_required investigator role after provider quota exhaustion', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const assignmentRepo = new AssignmentRepository(db);
+    const eventRepo = new EventRepository(db);
+    const registry = new AgentRegistry(false);
+
+    const quotaLimitedResearcher = new FakeAgent('agy-researcher', 'Google Antigravity', [
+      {
+        shouldFail: true,
+        failMessage: 'Individual quota reached. Resets in 59h.',
+        failCompletionReason: 'PROVIDER_QUOTA_EXCEEDED',
+      },
+    ]);
+    const replacementResearcher = new FakeAgent('codex-replacement', 'Codex Replacement', [{}]);
+    const implementer = new FakeAgent('claude-implementer', 'Claude Implementer', [
+      {
+        writeFile: { path: 'feature.ts', content: 'export const recovered = true;\n' },
+        gitCommitMessage: 'fix: implement after recovered investigation',
+      },
+    ]);
+
+    // Registry order matters only for the runtime replacement fallback:
+    // preferred agents still win initial staffing.
+    registry.register(quotaLimitedResearcher);
+    registry.register(replacementResearcher);
+    registry.register(implementer);
+
+    const parallelRouter: RoutingProvider = {
+      id: 'mock-parallel-router-quota-recovery',
+      route: async () => ({
+        strategy: 'parallel',
+        source: 'static',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'high',
+        teamSize: 2,
+        investigationPolicy: 'all_required',
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement the fix after investigation',
+            preferredAgent: 'claude-implementer',
+          },
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: 'Investigate root cause',
+            preferredAgent: 'agy-researcher',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Provider failure should trigger role recovery, not task failure',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: parallelRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const graph = new TaskGraph();
+    const task: Task = {
+      id: 'TASK-PARALLEL-QUOTA-RECOVERY',
+      title: 'Recover investigator after provider quota exhaustion',
+      description: 'Investigation should continue with a healthy replacement',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-PARALLEL-QUOTA-RECOVERY',
+        objective: 'Investigate and implement the fix',
+        allowedScope: ['*'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Implementation completes after investigation recovery'],
+      },
+    };
+    graph.addTask(task);
+
+    const result = await orchestrator.run('Recover quota-limited investigator', {
+      preplannedGraph: graph,
+    });
+
+    expect(result.status, result.error).toBe('completed');
+    expect(quotaLimitedResearcher.executedAssignments).toHaveLength(1);
+    expect(replacementResearcher.executedAssignments).toHaveLength(1);
+    expect(implementer.executedAssignments).toHaveLength(1);
+
+    const assignments = assignmentRepo.listByTask(task.id);
+    const failedOriginal = assignments.find((a) => a.agentId === 'agy-researcher');
+    const recovered = assignments.find((a) => a.agentId === 'codex-replacement');
+    expect(failedOriginal?.status).toBe('failed');
+    expect(failedOriginal?.completionReason).toBe('PROVIDER_QUOTA_EXCEEDED');
+    expect(recovered?.status).toBe('completed');
+    expect(recovered?.role).toBe('researcher');
+
+    const events = eventRepo.listByTask(task.id);
+    expect(events.some((e) => e.type === 'INVESTIGATOR_REASSIGNMENT')).toBe(true);
+    expect(events.some((e) => e.type === 'INVESTIGATOR_REASSIGNED')).toBe(true);
+
+    db.close();
+  });
+
   it('aborts before synthesis when an investigator fails under the default all_required policy', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const assignmentRepo = new AssignmentRepository(db);
