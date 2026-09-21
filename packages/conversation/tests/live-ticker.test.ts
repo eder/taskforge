@@ -90,6 +90,35 @@ describe('LiveTicker', () => {
     expect(joined).toContain('... and 2 more agent(s) working concurrently');
   });
 
+  it('shows a short-lived recovered indicator after reassignment', () => {
+    const active: ActiveAgentState[] = [
+      {
+        taskId: 'TASK-RECOVER',
+        assignmentId: 'asgn-recover',
+        taskTitle: 'Investigate provider issue',
+        agentId: 'claude',
+        agentName: 'Claude Code',
+        role: 'researcher',
+        status: 'Continuing investigation',
+        startedAt: new Date(),
+        lastActiveAt: new Date(),
+        recovery: {
+          failedAgentId: 'agy',
+          failedAgentName: 'Google Antigravity',
+          reason: 'Quota exhausted',
+          recoveredAt: new Date(),
+          recoveredUntil: new Date(Date.now() + 5000),
+        },
+      },
+    ];
+
+    const joined = LiveTicker.render({ activeAgents: active }).join('\n');
+
+    expect(joined).toContain('↻ recovered');
+    expect(joined).toContain('Claude Code');
+    expect(joined).toContain('Continuing investigation');
+  });
+
   it('highlights critical review findings inline with file and line references', () => {
     const active: ActiveAgentState[] = [
       {
