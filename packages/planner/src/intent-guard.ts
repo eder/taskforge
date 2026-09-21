@@ -7,19 +7,20 @@ export interface PlanIntentNormalization {
   normalizedTaskType: string;
   executionIntent: ExecutionIntentDecision['intent'];
   reason: string;
+  originalForbiddenChanges?: string[];
+  normalizedForbiddenChanges?: string[];
 }
 
 /**
  * Second barrier for execution intent (the first is detectExecutionIntent,
- * applied before planning). Even with intent detection in place, a planner
- * (heuristic or semantic) can still produce a task that is inconsistent with
- * the run's authoritative execution intent -- e.g. an 'implementation' task
- * with an open allowedScope under a READ_ONLY_ANALYSIS run. Rather than trust
- * the planner's output, this deterministically corrects any task that
- * disagrees with a READ_ONLY_ANALYSIS intent: downgraded to 'investigation',
- * scope closed, all changes forbidden. Mutates the graph's tasks in place
- * (TaskGraph.getAllTasks() returns live references) and returns a record of
- * every correction made, for PLAN_INTENT_NORMALIZED telemetry.
+ * applied before planning).
+ *
+ * READ_ONLY_ANALYSIS is authoritative and closes every task scope.
+ *
+ * IMPLEMENTATION can still carry run-level scoped restrictions such as
+ * "do not modify the Delivery Gate". Those restrictions are merged into each
+ * task contract deterministically so a planner cannot accidentally drop them
+ * while decomposing the goal.
  */
 export function normalizeGraphForExecutionIntent(
   graph: TaskGraph,
@@ -27,32 +28,64 @@ export function normalizeGraphForExecutionIntent(
 ): PlanIntentNormalization[] {
   const normalizations: PlanIntentNormalization[] = [];
 
-  if (intent.intent !== 'READ_ONLY_ANALYSIS') {
+  if (intent.intent === 'READ_ONLY_ANALYSIS') {
+    for (const task of graph.getAllTasks()) {
+      const forbidsWildcard = task.contract.forbiddenChanges?.includes('*') ?? false;
+      const scopeIsClosed =
+        !task.contract.allowedScope ||
+        task.contract.allowedScope.length === 0 ||
+        task.contract.allowedScope.every((s) => s === '');
+      const isMutatingType = task.type === 'implementation' || task.type === 'refactoring';
+
+      if (isMutatingType || !forbidsWildcard || !scopeIsClosed) {
+        const originalTaskType = task.type;
+        const originalForbiddenChanges = [...(task.contract.forbiddenChanges ?? [])];
+        task.type = 'investigation';
+        task.contract.allowedScope = [];
+        task.contract.forbiddenChanges = ['*'];
+
+        normalizations.push({
+          taskId: task.id,
+          originalTaskType,
+          normalizedTaskType: 'investigation',
+          executionIntent: intent.intent,
+          originalForbiddenChanges,
+          normalizedForbiddenChanges: ['*'],
+          reason: `Execution intent is READ_ONLY_ANALYSIS (${intent.reason}) but task was planned as '${originalTaskType}' with a mutable scope; normalized to a read-only investigation.`,
+        });
+      }
+    }
+
+    return normalizations;
+  }
+
+  if (intent.forbiddenChanges.length === 0) {
     return normalizations;
   }
 
   for (const task of graph.getAllTasks()) {
-    const forbidsWildcard = task.contract.forbiddenChanges?.includes('*') ?? false;
-    const scopeIsClosed =
-      !task.contract.allowedScope ||
-      task.contract.allowedScope.length === 0 ||
-      task.contract.allowedScope.every((s) => s === '');
-    const isMutatingType = task.type === 'implementation' || task.type === 'refactoring';
+    const originalForbiddenChanges = [...(task.contract.forbiddenChanges ?? [])];
+    const mergedForbiddenChanges = Array.from(
+      new Set([...originalForbiddenChanges, ...intent.forbiddenChanges]),
+    );
 
-    if (isMutatingType || !forbidsWildcard || !scopeIsClosed) {
-      const originalTaskType = task.type;
-      task.type = 'investigation';
-      task.contract.allowedScope = [];
-      task.contract.forbiddenChanges = ['*'];
+    const changed =
+      mergedForbiddenChanges.length !== originalForbiddenChanges.length ||
+      mergedForbiddenChanges.some((entry, index) => entry !== originalForbiddenChanges[index]);
 
-      normalizations.push({
-        taskId: task.id,
-        originalTaskType,
-        normalizedTaskType: 'investigation',
-        executionIntent: intent.intent,
-        reason: `Execution intent is READ_ONLY_ANALYSIS (${intent.reason}) but task was planned as '${originalTaskType}' with a mutable scope; normalized to a read-only investigation.`,
-      });
-    }
+    if (!changed) continue;
+
+    task.contract.forbiddenChanges = mergedForbiddenChanges;
+
+    normalizations.push({
+      taskId: task.id,
+      originalTaskType: task.type,
+      normalizedTaskType: task.type,
+      executionIntent: intent.intent,
+      originalForbiddenChanges,
+      normalizedForbiddenChanges: mergedForbiddenChanges,
+      reason: `Applied run-level scoped no-modification constraints to task contract: ${intent.forbiddenChanges.join(', ')}.`,
+    });
   }
 
   return normalizations;
