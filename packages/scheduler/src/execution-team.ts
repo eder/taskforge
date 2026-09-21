@@ -607,6 +607,9 @@ async function runConcurrentTeam(
       let attempt = 1;
       let currentAssignment: AgentAssignment = asgn;
       let currentAgent = ctx.agentRegistry.get(asgn.agentId)!;
+      let lastFailure:
+        | { agentId: string; agentName: string; reason?: string; resetAt?: string }
+        | undefined;
 
       for (;;) {
         const res = await executeGovernedAssignment(
@@ -625,6 +628,32 @@ async function runConcurrentTeam(
 
           if (attempt > 1) {
             ctx.onProgress?.(`[${task.id}] ✓ ${asgn.role} role recovered with ${currentAgent.name}`);
+            const failed = lastFailure ?? {
+              agentId: asgn.agentId,
+              agentName: asgn.agentId,
+            };
+            ctx.activityTracker?.markRecovered(currentAssignment.id, {
+              failedAgentId: failed.agentId,
+              failedAgentName: failed.agentName,
+              reason: failed.reason,
+              resetAt: failed.resetAt,
+            });
+            ctx.streamBus?.publish({
+              type: 'investigator_failover',
+              stage: 'recovered',
+              timestamp: new Date(),
+              runId: ctx.runId,
+              taskId: task.id,
+              assignmentId: currentAssignment.id,
+              agentId: currentAgent.id,
+              role: asgn.role,
+              failedAgentId: failed.agentId,
+              failedAgentName: failed.agentName,
+              replacementAgentId: currentAgent.id,
+              replacementAgentName: currentAgent.name,
+              reason: failed.reason,
+              resetAt: failed.resetAt,
+            });
             ctx.eventRepo.append({
               id: `evt-${randomUUID()}`,
               runId: ctx.runId,
@@ -633,8 +662,12 @@ async function runConcurrentTeam(
               payload: {
                 taskId: task.id,
                 role: asgn.role,
-                failedAgentId: asgn.agentId,
+                failedAgentId: failed.agentId,
+                failedAgentName: failed.agentName,
                 replacementAgentId: currentAgent.id,
+                replacementAgentName: currentAgent.name,
+                reason: failed.reason,
+                resetAt: failed.resetAt,
                 attempt,
                 investigationPolicy: policy,
               },
@@ -677,7 +710,30 @@ async function runConcurrentTeam(
         const quotaNote = quotaInfo.reason
           ? `${quotaInfo.reason}${quotaInfo.resetAt ? ` (resets ${quotaInfo.resetAt.toISOString()})` : ''}`
           : reason;
+        const failedAgentId = currentAgent.id;
+        const failedAgentName = currentAgent.name;
+        const resetAt = quotaInfo.resetAt?.toISOString();
+        lastFailure = {
+          agentId: failedAgentId,
+          agentName: failedAgentName,
+          reason: quotaNote,
+          resetAt,
+        };
         ctx.onProgress?.(`[${task.id}] ⚠ ${currentAgent.name} unavailable for ${asgn.role}: ${quotaNote}`);
+        ctx.streamBus?.publish({
+          type: 'investigator_failover',
+          stage: 'provider_failed',
+          timestamp: new Date(),
+          runId: ctx.runId,
+          taskId: task.id,
+          assignmentId: currentAssignment.id,
+          agentId: currentAgent.id,
+          role: asgn.role,
+          failedAgentId,
+          failedAgentName,
+          reason: quotaNote,
+          resetAt,
+        });
         ctx.eventRepo.append({
           id: `evt-${randomUUID()}`,
           runId: ctx.runId,
@@ -686,10 +742,11 @@ async function runConcurrentTeam(
           payload: {
             taskId: task.id,
             role: asgn.role,
-            failedAgentId: currentAgent.id,
+            failedAgentId,
+            failedAgentName,
             failureReason: res.completionReason ?? 'UNKNOWN',
             reason: quotaNote,
-            resetAt: quotaInfo.resetAt?.toISOString(),
+            resetAt,
             attempt,
             investigationPolicy: policy,
           },
@@ -733,6 +790,22 @@ async function runConcurrentTeam(
         }
 
         ctx.onProgress?.(`[${task.id}] ↻ Reassigning ${asgn.role} → ${replacement.agent.name}`);
+        ctx.streamBus?.publish({
+          type: 'investigator_failover',
+          stage: 'reassigning',
+          timestamp: new Date(),
+          runId: ctx.runId,
+          taskId: task.id,
+          assignmentId: currentAssignment.id,
+          agentId: currentAgent.id,
+          role: asgn.role,
+          failedAgentId,
+          failedAgentName,
+          replacementAgentId: replacement.agent.id,
+          replacementAgentName: replacement.agent.name,
+          reason: quotaNote,
+          resetAt,
+        });
 
         triedAgentIds.add(replacement.agent.id);
         attempt += 1;

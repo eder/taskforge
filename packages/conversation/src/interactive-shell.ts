@@ -51,6 +51,7 @@ import { TerminalViewport } from './terminal-viewport.js';
 import { SlashMenu } from './slash-menu.js';
 import { LiveTicker } from './live-ticker.js';
 import { StreamViewer } from './stream-viewer.js';
+import { CockpitPanels } from './cockpit-panels.js';
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -114,6 +115,8 @@ export class InteractiveShell {
   /** The assignment the cockpit is currently focused on, if any (Focus Mode). */
   private focusedAssignmentId?: string;
   private focusUnsubscribe?: () => void;
+  private cockpitUnsubscribe?: () => void;
+  private surfacedAttentionByAssignment = new Map<string, string>();
   public activeExecutionController?: AbortController;
   private tickerTimer?: NodeJS.Timeout;
   private tickerFrameIndex = 0;
@@ -170,10 +173,12 @@ export class InteractiveShell {
     );
     this.githubWorkflowService = new GitHubWorkflowService(this.db, this.repoRoot);
     this.setupActivitySubscription();
+    this.setupCockpitEventSubscription();
   }
 
   private setupActivitySubscription(): void {
     this.activityTracker.subscribe((active) => {
+      this.surfaceAttentionPanels(active);
       if (active.length > 0) {
         if (!this.tickerTimer) {
           this.tickerTimer = setInterval(() => {
@@ -189,6 +194,43 @@ export class InteractiveShell {
         }
         this.viewport.drawFooter('', []);
       }
+    });
+  }
+
+  private surfaceAttentionPanels(active: ActiveAgentState[]): void {
+    const attentionAssignments = new Set<string>();
+
+    for (const state of active) {
+      const attention = state.attentionRequired;
+      if (!attention) continue;
+
+      attentionAssignments.add(state.assignmentId);
+      const key =
+        attention.requestId ??
+        [attention.type, attention.operation, attention.resource, attention.prompt].filter(Boolean).join(':');
+
+      if (this.surfacedAttentionByAssignment.get(state.assignmentId) === key) {
+        continue;
+      }
+
+      this.surfacedAttentionByAssignment.set(state.assignmentId, key);
+      const panel = CockpitPanels.actionRequired(state);
+      if (panel) {
+        this.viewport.writeUpper('\n' + panel + '\n');
+      }
+    }
+
+    for (const assignmentId of this.surfacedAttentionByAssignment.keys()) {
+      if (!attentionAssignments.has(assignmentId)) {
+        this.surfacedAttentionByAssignment.delete(assignmentId);
+      }
+    }
+  }
+
+  private setupCockpitEventSubscription(): void {
+    this.cockpitUnsubscribe = this.streamBus.subscribeAll((event) => {
+      if (event.type !== 'investigator_failover') return;
+      this.viewport.writeUpper('\n' + CockpitPanels.failover(event) + '\n');
     });
   }
 
@@ -1336,7 +1378,7 @@ export class InteractiveShell {
 
         const scope = intent.scope ?? 'task';
         this.interactionGateway.resolve(target.id, 'allow', undefined, scope);
-        return `✓ allowed for ${target.taskId || target.id} (scope: ${scope})\nAgent ${target.agentId} resumed work.`;
+        return CockpitPanels.interactionResolved(target, 'allow', scope);
       }
 
       case 'deny_interaction': {
@@ -1350,7 +1392,7 @@ export class InteractiveShell {
         }
 
         this.interactionGateway.resolve(target.id, 'deny', intent.reason, 'once');
-        return `✕ Operation denied for ${target.taskId || target.id}. Agent notified.`;
+        return CockpitPanels.interactionResolved(target, 'deny', 'once');
       }
 
       case 'inspect_pending_interactions': {
@@ -1380,7 +1422,7 @@ export class InteractiveShell {
         if (pending.length > 0) {
           const target = pending[0];
           this.interactionGateway.resolve(target.id, 'allow', undefined, 'task');
-          return `✓ allowed for ${target.taskId || target.id} (scope: task)\nAgent ${target.agentId} resumed work.`;
+          return CockpitPanels.interactionResolved(target, 'allow', 'task');
         }
 
         if (!this.currentGraph) {
@@ -1519,7 +1561,7 @@ export class InteractiveShell {
         if (pending.length > 0) {
           const target = pending[0];
           this.interactionGateway.resolve(target.id, 'deny', intent.feedback, 'once');
-          return `✕ Operation denied for ${target.taskId || target.id}. Agent notified.`;
+          return CockpitPanels.interactionResolved(target, 'deny', 'once');
         }
         this.currentGraph = undefined;
         this.lastGoalDescription = undefined;
@@ -1677,6 +1719,8 @@ export class InteractiveShell {
       process.removeListener('SIGINT', cleanup);
       process.removeListener('exit', cleanup);
       this.slashMenu.close();
+      this.cockpitUnsubscribe?.();
+      this.cockpitUnsubscribe = undefined;
       if (this.tickerTimer) {
         clearInterval(this.tickerTimer);
         this.tickerTimer = undefined;
@@ -2156,6 +2200,8 @@ export class InteractiveShell {
     }
     this.focusUnsubscribe?.();
     this.focusUnsubscribe = undefined;
+    this.cockpitUnsubscribe?.();
+    this.cockpitUnsubscribe = undefined;
     try {
       this.db.close();
     } catch {

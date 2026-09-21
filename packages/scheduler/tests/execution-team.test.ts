@@ -8,12 +8,12 @@ import {
   TaskRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
-import { FakeAgent, AgentRegistry, AgentQuotaTracker } from '@taskforge/agents';
+import { FakeAgent, AgentRegistry, AgentQuotaTracker, AgentActivityTracker } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { NegotiationManager, AgentPreflightEvaluator } from '@taskforge/negotiation';
 import { RoutingProvider } from '@taskforge/router';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
-import { getDefaultConfig } from '@taskforge/shared';
+import { AgentStreamBus, InvestigatorFailoverEvent, getDefaultConfig } from '@taskforge/shared';
 
 describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
   const testRepoRoot = path.resolve(__dirname, '../test-sandbox-team');
@@ -778,6 +778,13 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
     config.verification.lint = false;
     config.verification.typecheck = false;
 
+    const streamBus = new AgentStreamBus();
+    const activityTracker = new AgentActivityTracker();
+    const failoverEvents: InvestigatorFailoverEvent[] = [];
+    streamBus.subscribeAll((event) => {
+      if (event.type === 'investigator_failover') failoverEvents.push(event);
+    });
+
     const orchestrator = new RunOrchestrator({
       repoRoot: testRepoRoot,
       config,
@@ -786,6 +793,8 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       router: parallelRouter,
       gitService,
       worktreeManager,
+      streamBus,
+      activityTracker,
     });
 
     const graph = new TaskGraph();
@@ -844,6 +853,19 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
     expect(failedEvent?.payload?.failureReason).toBe('PROVIDER_QUOTA_EXCEEDED');
     expect(reassignedEvent?.payload?.role).toBe('researcher');
     expect(reassignedEvent?.payload?.replacementAgentId).toBe('spare-agent');
+    expect(reassignedEvent?.payload?.failedAgentName).toBe('Quota Investigator');
+    expect(reassignedEvent?.payload?.replacementAgentName).toBe('Spare Agent');
+    expect(reassignedEvent?.payload?.reason).toContain('quota');
+
+    expect(failoverEvents.map((e) => e.stage)).toEqual([
+      'provider_failed',
+      'reassigning',
+      'recovered',
+    ]);
+    expect(failoverEvents[0].failedAgentName).toBe('Quota Investigator');
+    expect(failoverEvents[0].reason).toContain('quota');
+    expect(failoverEvents[1].replacementAgentName).toBe('Spare Agent');
+    expect(failoverEvents[2].replacementAgentName).toBe('Spare Agent');
 
     db.close();
   });

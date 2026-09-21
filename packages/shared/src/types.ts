@@ -240,6 +240,17 @@ export interface ActiveAgentState {
     type: 'permission' | 'question' | 'auth';
     prompt: string;
     resource?: string;
+    operation?: string;
+    category?: string;
+    requestId?: string;
+  };
+  recovery?: {
+    failedAgentId: string;
+    failedAgentName: string;
+    reason?: string;
+    resetAt?: string;
+    recoveredAt: Date;
+    recoveredUntil: Date;
   };
   criticalFindings?: ReviewFinding[];
 }
