@@ -74,9 +74,26 @@ export class AgentQuotaTracker {
     let reason = isUsageLimit ? 'quota limit reached' : 'rate limited';
 
     const atTimeMatch = output.match(/try again at\s+([0-9]{1,2}:[0-9]{2}(?:\s*[AaPp][Mm])?)/i);
+    // Google Antigravity/Gemini's own format: "Resets in 59h30m58s." (hours/minutes/seconds,
+    // any subset present). Must be checked before the generic "try again in N seconds/minutes"
+    // patterns below, since a bare "Xh" cooldown would otherwise fall through to the 30-minute
+    // default and TaskForge would re-select the agent hours before its quota actually resets.
+    const resetsInMatch = output.match(
+      /resets?\s+in\s+(?:([0-9]+)\s*h)?(?:([0-9]+)\s*m)?(?:([0-9]+)\s*s)?/i,
+    );
+    const hasResetsInDuration =
+      resetsInMatch && (resetsInMatch[1] || resetsInMatch[2] || resetsInMatch[3]);
+
     if (atTimeMatch) {
       reason = `cooldown until ${atTimeMatch[1].trim()}`;
       resetAt = this.parseTimeTodayOrTomorrow(atTimeMatch[1].trim());
+    } else if (hasResetsInDuration) {
+      const hours = parseInt(resetsInMatch![1] || '0', 10);
+      const minutes = parseInt(resetsInMatch![2] || '0', 10);
+      const seconds = parseInt(resetsInMatch![3] || '0', 10);
+      const totalMs = ((hours * 60 + minutes) * 60 + seconds) * 1000;
+      reason = `resets in ${resetsInMatch![0].replace(/resets?\s+in\s+/i, '').trim()}`;
+      resetAt = Date.now() + totalMs;
     } else {
       const inSecondsMatch = output.match(/try again in\s+([0-9]+)\s*(s|sec|seconds?)/i);
       if (inSecondsMatch) {

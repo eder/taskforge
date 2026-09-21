@@ -535,46 +535,13 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       AgentQuotaTracker.getInstance().recordFailure(this.id, result.stderr || result.stdout);
     }
 
-    let message: string;
-    let completionReason: import('@taskforge/shared').CompletionFailureReason | undefined;
-
-    if (hasDeniedRequiredActions) {
-      const deniedList = outcome.deniedActions.map((a) => a.action).join(', ');
-      const detail = outcome.deniedActions
-        .map((a) => a.reason || a.action)
-        .filter(Boolean)
-        .join('; ');
-      message = detail
-        ? `${this.name} required action denied: ${detail}`
-        : `${this.name} required action denied: ${deniedList}`;
-      completionReason = 'REQUIRED_ACTION_DENIED';
-    } else if (result.exitCode === 0) {
-      message = `${this.name} completed successfully`;
-    } else {
-      const isAuthError =
-        outcome.errors.some((e) =>
-          /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i.test(e),
-        ) ||
-        /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i.test(
-          result.stderr || result.stdout,
-        );
-      if (isAuthError) {
-        const authErr = (
-          outcome.errors.find((e) =>
-            /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i.test(e),
-          ) ||
-          result.stderr ||
-          result.stdout
-        )
-          .trim()
-          .split('\n')[0];
-        message = `${this.name} authentication failed: ${authErr}`;
-        completionReason = 'HARNESS_FAILED';
-      } else {
-        message = `${this.name} exited with code ${result.exitCode}`;
-        completionReason = 'HARNESS_FAILED';
-      }
-    }
+    const { message, completionReason } = this.classifyExecutionFailure(
+      outcome,
+      result.exitCode,
+      result.stdout,
+      result.stderr,
+      hasDeniedRequiredActions,
+    );
 
     return {
       success: isExecutionSuccessful,
@@ -584,6 +551,87 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       durationMs: Date.now() - startTime,
       normalizedOutcome: outcome,
       completionReason,
+    };
+  }
+
+  /**
+   * Turns a finished (non-cancelled) CLI execution into a human-readable
+   * message and a typed CompletionFailureReason. Kept as a standalone, public
+   * method (like normalizeOutcome) so the classification of a given
+   * stdout/stderr blob is directly unit-testable without spawning a process.
+   */
+  public classifyExecutionFailure(
+    outcome: import('@taskforge/shared').ProviderExecutionOutcome,
+    exitCode: number,
+    rawStdout: string,
+    rawStderr: string,
+    hasDeniedRequiredActions: boolean,
+  ): {
+    message: string;
+    completionReason?: import('@taskforge/shared').CompletionFailureReason;
+  } {
+    if (hasDeniedRequiredActions) {
+      const deniedList = outcome.deniedActions.map((a) => a.action).join(', ');
+      const detail = outcome.deniedActions
+        .map((a) => a.reason || a.action)
+        .filter(Boolean)
+        .join('; ');
+      const message = detail
+        ? `${this.name} required action denied: ${detail}`
+        : `${this.name} required action denied: ${deniedList}`;
+      return { message, completionReason: 'REQUIRED_ACTION_DENIED' };
+    }
+
+    if (exitCode === 0) {
+      return { message: `${this.name} completed successfully` };
+    }
+
+    const quotaPattern =
+      /RESOURCE_EXHAUSTED|quota (?:reached|exceeded)|rate[ _-]?limit(?:ed)?|too many requests|\(code 429\)/i;
+    const isQuotaError =
+      outcome.errors.some((e) => quotaPattern.test(e)) || quotaPattern.test(rawStderr || rawStdout);
+
+    if (isQuotaError) {
+      // Search the FULL raw output (not just the last-N-lines fallback normalizeOutcome
+      // keeps in outcome.errors) for the specific line that actually names the quota
+      // failure, since it's often not the last line of output.
+      const combinedSource = [rawStderr, rawStdout, ...outcome.errors].filter(Boolean).join('\n');
+      const quotaLine =
+        combinedSource
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .find((l) => quotaPattern.test(l)) ?? '';
+      // Prefer the human-readable detail after "RESOURCE_EXHAUSTED (code N):", e.g.
+      // "Individual quota reached. ... Resets in 59h30m58s."; fall back to the whole
+      // matched line if that specific shape isn't present.
+      const detailMatch = quotaLine.match(/RESOURCE_EXHAUSTED[^:]*:\s*(.+)/i);
+      const detail = (detailMatch?.[1] ?? quotaLine).trim();
+      const message = `${this.name} rate-limited/quota exceeded: ${detail || 'provider quota exceeded'}`;
+      return { message, completionReason: 'PROVIDER_QUOTA_EXCEEDED' };
+    }
+
+    const authPattern = /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i;
+    const isAuthError =
+      outcome.errors.some((e) => authPattern.test(e)) || authPattern.test(rawStderr || rawStdout);
+
+    if (isAuthError) {
+      const authErr = (
+        outcome.errors.find((e) => authPattern.test(e)) ||
+        rawStderr ||
+        rawStdout
+      )
+        .trim()
+        .split('\n')[0];
+      return {
+        message: `${this.name} authentication failed: ${authErr}`,
+        completionReason: 'HARNESS_FAILED',
+      };
+    }
+
+    return {
+      message: `${this.name} exited with code ${exitCode}`,
+      completionReason: 'HARNESS_FAILED',
     };
   }
 }
