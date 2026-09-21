@@ -196,6 +196,9 @@ export async function executeGovernedAssignment(
                   type: 'permission',
                   prompt: (event as any).prompt || 'Permission approval required',
                   resource: (event as any).resource,
+                  operation: (event as any).operation,
+                  category: (event as any).category,
+                  requestId: (event as any).requestId,
                 });
               } else if (event.type === 'question') {
                 ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_input');
@@ -203,6 +206,7 @@ export async function executeGovernedAssignment(
                 ctx.activityTracker?.setAttention(assignment.id, {
                   type: 'question',
                   prompt: (event as any).prompt || 'Question answer required',
+                  requestId: (event as any).requestId,
                 });
               } else if (event.type === 'authentication_required') {
                 ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_auth');
@@ -210,6 +214,7 @@ export async function executeGovernedAssignment(
                 ctx.activityTracker?.setAttention(assignment.id, {
                   type: 'auth',
                   prompt: (event as any).prompt || 'Authentication required',
+                  requestId: (event as any).requestId,
                 });
               }
 
@@ -255,6 +260,9 @@ export async function executeGovernedAssignment(
               type: 'permission',
               prompt: (event as any).prompt || 'Permission approval required',
               resource: (event as any).resource,
+              operation: (event as any).operation,
+              category: (event as any).category,
+              requestId: (event as any).requestId,
             });
           }
           await ctx.interactionGateway.handleEvent(event, session, {
