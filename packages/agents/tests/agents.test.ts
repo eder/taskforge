@@ -297,5 +297,29 @@ describe('Agents - FakeAgent and Registry', () => {
     expect(outcome.providerStatus).toBe('FAILED');
     expect(outcome.errors.length).toBeGreaterThan(0);
   });
+
+  it('surfaces the real quota-exhaustion reason instead of a bare "exited with code N"', async () => {
+    const { AntigravityAdapter } = await import('../src/real-adapters.js');
+    const agy = new AntigravityAdapter();
+
+    // Real stderr tail observed from a live Antigravity run hitting its account quota.
+    const rawStderr = [
+      'E0921 02:07:54.752093     394 errorreport.go:224] agent executor error: generating and executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 59h30m58s.',
+      'E0921 02:07:54.767485       1 session.go:256] Print mode: run ended with error and no response: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 59h30m58s.',
+      'I0921 02:07:54.771381     386 server.go:1242] Stream goroutine exited for b736b229, sending completion signal',
+      'E0921 02:07:54.809855    3031 telemetry.go:82] error recording trajectory segment analytics: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:recordTrajectoryAnalytics": context canceled',
+    ].join('\n');
+
+    const outcome = agy.normalizeOutcome('', rawStderr, 3);
+    const { message, completionReason } = agy.classifyExecutionFailure(outcome, 3, '', rawStderr, false);
+
+    expect(completionReason).toBe('PROVIDER_QUOTA_EXCEEDED');
+    expect(message).toContain('rate-limited/quota exceeded');
+    expect(message).toContain('Individual quota reached');
+    expect(message).toContain('Resets in 59h30m58s');
+    // Regression guard: must not regress to the uninformative generic fallback that
+    // looked identical to every other unrelated crash and was previously shown to users.
+    expect(message).not.toBe(`${agy.name} exited with code 3`);
+  });
 });
 

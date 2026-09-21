@@ -177,7 +177,8 @@ export type CompletionFailureReason =
   | 'EMPTY_PROVIDER_RESULT'
   | 'VERIFICATION_FAILED'
   | 'ACCEPTANCE_NOT_MET'
-  | 'INVALID_PROVIDER_RESULT';
+  | 'INVALID_PROVIDER_RESULT'
+  | 'PROVIDER_QUOTA_EXCEEDED';
 
 export interface CompletionEvidence {
   diffProduced?: boolean;

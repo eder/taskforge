@@ -36,6 +36,27 @@ describe('AgentQuotaTracker and Quota-Aware Detection', () => {
     expect(tracker.isAvailable('claude')).toBe(false);
   });
 
+  it('parses Google Antigravity/Gemini "Resets in HhMmSs" quota format instead of falling back to the 30-minute default', () => {
+    const tracker = AgentQuotaTracker.getInstance();
+    const output =
+      'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 59h30m58s.';
+
+    const detected = tracker.recordFailure('agy', output);
+    expect(detected).toBe(true);
+
+    const status = tracker.getQuotaStatus('agy');
+    expect(status.status).toBe('quota_exhausted');
+    expect(status.reason).toContain('resets in 59h30m58s');
+    expect(status.resetAt).toBeInstanceOf(Date);
+
+    const expectedMs = (59 * 60 * 60 + 30 * 60 + 58) * 1000;
+    const actualMs = status.resetAt!.getTime() - Date.now();
+    // Allow a small tolerance for test execution time.
+    expect(Math.abs(actualMs - expectedMs)).toBeLessThan(5000);
+
+    expect(tracker.isAvailable('agy')).toBe(false);
+  });
+
   it('clears quota exhaustion on recordSuccess', () => {
     const tracker = AgentQuotaTracker.getInstance();
     tracker.setManualStatus('agy', 'quota_exhausted', 'limit hit');
