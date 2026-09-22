@@ -24,6 +24,16 @@ export interface CliAdapterOptions {
   env?: Record<string, string>;
 }
 
+/**
+ * Antigravity reports exhausted Gemini capacity in its stream before the CLI
+ * necessarily exits. Keep this deliberately narrow to avoid interpreting
+ * repository/test output that merely mentions HTTP 429 as provider state.
+ */
+export function isDefinitiveStreamingQuotaFailure(agentId: string, text: string): boolean {
+  if (agentId !== 'agy') return false;
+  return /RESOURCE_EXHAUSTED|individual quota reached|quota (?:reached|exceeded)/i.test(text);
+}
+
 function finiteTokenNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
   return Math.round(value);
@@ -643,6 +653,29 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     const caps = await this.capabilities();
     const closeStdinOnSpawn = caps.stdinMode === 'close_after_spawn';
 
+    let availabilityTail = '';
+    let liveQuotaDetected = false;
+    const inspectLiveAvailability = (chunk: string) => {
+      if (liveQuotaDetected) return;
+      availabilityTail = (availabilityTail + chunk).slice(-16_384);
+
+      // Only act on complete streamed lines. This gives the provider a chance
+      // to include its reset duration in the same structured error record.
+      const lastNewline = availabilityTail.lastIndexOf('\n');
+      if (lastNewline < 0) return;
+      const completeOutput = availabilityTail.slice(0, lastNewline + 1);
+      availabilityTail = availabilityTail.slice(lastNewline + 1);
+
+      if (!isDefinitiveStreamingQuotaFailure(this.id, completeOutput)) return;
+      if (!AgentQuotaTracker.getInstance().recordFailure(this.id, completeOutput)) return;
+
+      liveQuotaDetected = true;
+      context.onActivity?.('Provider quota exhausted — stopping this assignment immediately.');
+      if (session instanceof RealCliAgentSession) {
+        void session.cancel();
+      }
+    };
+
     const result = await ProcessRunner.run({
       command: this.commandBinary,
       args,
@@ -701,6 +734,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
         if (session instanceof RealCliAgentSession) {
           session.handleOutputChunk(chunk, 'stdout');
         }
+        inspectLiveAvailability(chunk);
         this.extractActivity(chunk, context.onActivity);
         this.publishStreamEvents(chunk, assignment, context);
       },
@@ -708,6 +742,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
         if (session instanceof RealCliAgentSession) {
           session.handleOutputChunk(chunk, 'stderr');
         }
+        inspectLiveAvailability(chunk);
         this.extractActivity(chunk, context.onActivity);
         this.publishStreamEvents(chunk, assignment, context);
       },
