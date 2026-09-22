@@ -44,6 +44,7 @@ import {
   AgentSelector,
   RoutingProvider,
   RoutingDecision,
+  RouterQualityGuard,
 } from '@taskforge/router';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService, DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
@@ -441,9 +442,14 @@ export class RunOrchestrator {
             reason: `Preflight recommended collaboration: ${collabReq.reason}`,
           };
         } else {
-          routing = await this.router.route({
+          const availableAgents = await this.agentSelector.listAvailableAgentIds();
+          const routingProposal = await this.router.route({
             task,
-            availableAgents: await this.agentSelector.listAvailableAgentIds(),
+            availableAgents,
+          });
+          routing = RouterQualityGuard.evaluate(routingProposal, {
+            task,
+            availableAgents,
           });
         }
 
