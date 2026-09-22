@@ -12,7 +12,7 @@ export class AdaptiveRoutingProvider implements RoutingProvider {
   constructor(
     private performanceEngine: PerformanceEngine,
     private fallbackProvider: RoutingProvider = new StaticRoutingProvider(),
-    private options: AdaptiveRoutingOptions = {},
+    _options: AdaptiveRoutingOptions = {},
   ) {}
 
   async healthCheck(): Promise<RouterHealthReport> {
@@ -54,4 +54,6 @@ export class AdaptiveRoutingProvider implements RoutingProvider {
       },
     };
 
+}
+  }
 }
