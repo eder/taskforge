@@ -316,6 +316,8 @@ export class SemanticPlanner implements Planner {
           allowedScope: t.contract.allowedScope,
           forbiddenChanges: t.contract.forbiddenChanges,
           acceptanceCriteria: t.contract.acceptanceCriteria,
+          completionMode: t.contract.completionMode,
+          verification: t.contract.verification ?? null,
         })),
       };
 
