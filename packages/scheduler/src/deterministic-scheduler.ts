@@ -85,6 +85,25 @@ function roleForTaskType(taskType: Task['type']): AgentAssignment['role'] {
       return 'implementer';
   }
 }
+function requiresAutomatedRepositoryVerification(task: Task): boolean {
+  switch (task.contract.completionMode) {
+    case 'mutation':
+    case 'verification':
+      return true;
+    case 'report':
+    case 'review':
+      return false;
+    case undefined:
+      return task.type === 'implementation' || task.type === 'refactoring' || task.type === 'testing';
+    default:
+      return true;
+  }
+}
+
+function isLightweightReadOnlyTask(task: Task): boolean {
+  return Boolean(task.contract.metadata?.lightweightReadOnlyInvariant);
+}
+
 
 export interface SchedulerResult {
   runId: string;
@@ -462,21 +481,35 @@ export class DeterministicScheduler {
           this.taskOutputs[task.id] = sanitizeTaskOutput(collabOutput);
         }
 
-        // Verification
+        // Verification. Report/review contracts are validated by CompletionGate
+        // and must not pay the cost of build/lint/test checks for a repository
+        // they were explicitly forbidden to modify.
         graph.updateTaskStatus(task.id, 'verification');
         taskRepo.updateStatus(task.id, 'verification');
-        this.ctx.activityTracker?.updateStatus(collabAsgnId, 'Running automated verification checks...');
-        this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
+        const runAutomatedVerification = requiresAutomatedRepositoryVerification(task);
+        if (runAutomatedVerification) {
+          this.ctx.activityTracker?.updateStatus(
+            collabAsgnId,
+            'Running automated verification checks...',
+          );
+          this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
+        } else {
+          this.ctx.onProgress?.(
+            `[${task.id}] Read-only report accepted; automated repository verification not applicable.`,
+          );
+        }
 
         const verResult =
           collabCompletionVerification ??
-          (await verificationRunner.verify({
-            taskId: task.id,
-            runId,
-            worktreePath: verifyPath,
-            config,
-            taskType: task.type,
-          }));
+          (runAutomatedVerification
+            ? await verificationRunner.verify({
+                taskId: task.id,
+                runId,
+                worktreePath: verifyPath,
+                config,
+                taskType: task.type,
+              })
+            : ({ passed: true, checks: [] } as VerificationResult));
 
 
         if (!verResult.passed) {
@@ -615,7 +648,23 @@ export class DeterministicScheduler {
         collaborationProposal: govResult.collaborationProposal,
       };
 
-      if (agentResult.collaborationProposal && this.ctx.escalationHandler) {
+      if (agentResult.collaborationProposal && isLightweightReadOnlyTask(task)) {
+        this.ctx.onProgress?.(
+          `[${task.id}] ℹ Collaboration request ignored: lightweight read-only overview is limited to one agent.`,
+        );
+        eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'COLLABORATION_REJECTED',
+          payload: {
+            taskId: task.id,
+            reason: 'lightweight read-only overview invariant requires one agent',
+            requestedRoles: agentResult.collaborationProposal.requestedRoles ?? [],
+          },
+          timestamp: new Date(),
+        });
+      } else if (agentResult.collaborationProposal && this.ctx.escalationHandler) {
         this.ctx.escalationHandler.handleEscalation({
           runId,
           taskId: task.id,
@@ -977,21 +1026,35 @@ export class DeterministicScheduler {
       timestamp: new Date(),
     });
 
-      // 4. Verification
+      // 4. Verification. CompletionGate is the authoritative evidence check
+      // for report/review tasks; build/lint/test are only meaningful when the
+      // task can mutate code or explicitly requests deterministic verification.
       graph.updateTaskStatus(task.id, 'verification');
       taskRepo.updateStatus(task.id, 'verification');
-      this.ctx.activityTracker?.updateStatus(assignmentId, 'Running automated verification checks...');
-      this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
+      const runAutomatedVerification = requiresAutomatedRepositoryVerification(task);
+      if (runAutomatedVerification) {
+        this.ctx.activityTracker?.updateStatus(
+          assignmentId,
+          'Running automated verification checks...',
+        );
+        this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
+      } else {
+        this.ctx.onProgress?.(
+          `[${task.id}] Read-only report accepted; automated repository verification not applicable.`,
+        );
+      }
 
       const verResult =
         completionVerification ??
-        (await verificationRunner.verify({
-          taskId: task.id,
-          runId,
-          worktreePath: wt.path,
-          config,
-          taskType: task.type,
-        }));
+        (runAutomatedVerification
+          ? await verificationRunner.verify({
+              taskId: task.id,
+              runId,
+              worktreePath: wt.path,
+              config,
+              taskType: task.type,
+            })
+          : ({ passed: true, checks: [] } as VerificationResult));
 
       if (!verResult.passed) {
         eventRepo.append({
