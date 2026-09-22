@@ -30,7 +30,7 @@ describe('provider-reported usage normalization', () => {
     const usage = adapter.extractReportedUsage(stdout, '');
 
     expect(usage).toEqual({
-      inputTokens: 1200,
+      inputTokens: 2000,
       cachedInputTokens: 800,
       outputTokens: 450,
       totalTokens: 2450,
@@ -48,7 +48,7 @@ describe('provider-reported usage normalization', () => {
           input_tokens: 1000,
           cached_input_tokens: 200,
           output_tokens: 100,
-          total_tokens: 1300,
+          total_tokens: 1100,
         },
       }),
       JSON.stringify({
@@ -58,7 +58,7 @@ describe('provider-reported usage normalization', () => {
           input_tokens: 2200,
           cached_input_tokens: 700,
           output_tokens: 500,
-          total_tokens: 3400,
+          total_tokens: 2700,
         },
       }),
     ].join('\n');
@@ -69,7 +69,7 @@ describe('provider-reported usage normalization', () => {
     expect(usage?.inputTokens).toBe(2200);
     expect(usage?.cachedInputTokens).toBe(700);
     expect(usage?.outputTokens).toBe(500);
-    expect(usage?.totalTokens).toBe(3400);
+    expect(usage?.totalTokens).toBe(2700);
   });
 
   it('normalizes Gemini/Antigravity usageMetadata shape', () => {
@@ -81,7 +81,7 @@ describe('provider-reported usage normalization', () => {
         promptTokenCount: 1800,
         cachedContentTokenCount: 400,
         candidatesTokenCount: 350,
-        totalTokenCount: 2550,
+        totalTokenCount: 2150,
       },
     });
 
@@ -91,10 +91,31 @@ describe('provider-reported usage normalization', () => {
       inputTokens: 1800,
       cachedInputTokens: 400,
       outputTokens: 350,
-      totalTokens: 2550,
+      totalTokens: 2150,
       modelName: 'gemini-test',
       source: 'provider_reported',
     });
+  });
+
+  it('repairs a malformed provider total that double-counts cached input', () => {
+    const adapter = new CodexAdapter();
+    const stdout = JSON.stringify({
+      type: 'turn.completed',
+      model: 'gpt-codex-test',
+      usage: {
+        input_tokens: 2200,
+        cached_input_tokens: 700,
+        output_tokens: 500,
+        total_tokens: 3400,
+      },
+    });
+
+    const usage = adapter.extractReportedUsage(stdout, '');
+
+    expect(usage?.inputTokens).toBe(2200);
+    expect(usage?.cachedInputTokens).toBe(700);
+    expect(usage?.outputTokens).toBe(500);
+    expect(usage?.totalTokens).toBe(2700);
   });
 
   it('does not scrape usage-looking JSON embedded inside assistant response text', () => {
