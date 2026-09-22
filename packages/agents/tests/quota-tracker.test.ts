@@ -131,6 +131,24 @@ describe('AgentQuotaTracker and Quota-Aware Detection', () => {
     expect(records.has('agy')).toBe(false);
   });
 
+  it('AgentDetector reports ready after resetAt has elapsed without restarting TaskForge', async () => {
+    const tracker = AgentQuotaTracker.getInstance();
+    const observedAt = Date.now() - 2 * 60 * 60 * 1000;
+
+    tracker.recordFailure(
+      'agy',
+      'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 1h0m0s.',
+      observedAt,
+    );
+
+    const fakeAgy = new FakeAgent('agy', 'Google Antigravity');
+    const reports = await AgentDetector.detect([fakeAgy]);
+
+    expect(reports[0].ready).toBe(true);
+    expect(reports[0].quotaStatus).toBe('ready');
+    expect(reports[0].resetAt).toBeUndefined();
+  });
+
   it('clears quota exhaustion on recordSuccess', () => {
     const tracker = AgentQuotaTracker.getInstance();
     tracker.setManualStatus('agy', 'quota_exhausted', 'limit hit');
