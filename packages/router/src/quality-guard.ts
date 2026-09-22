@@ -122,47 +122,116 @@ export class RouterQualityGuard {
       matchedReasons.push(`crosses multiple packages: ${packageMentions.join(', ')}`);
     }
 
-    // Only apply guardrail adjustment if significant cross-cutting signals are present
-    if (matchedReasons.length < 2) {
+    let guarded = proposal;
+
+    // Apply cross-cutting upgrade when the task spans multiple runtime concerns.
+    if (matchedReasons.length >= 2) {
+      const adjustedComplexity = 'high' as const;
+      const adjustedRisk = 'high' as const;
+      const changed =
+        adjustedComplexity !== proposal.complexity || adjustedRisk !== proposal.risk;
+
+      if (changed) {
+        const routerProposal: RouterProposal = {
+          strategy: proposal.strategy,
+          complexity: proposal.complexity,
+          risk: proposal.risk,
+        };
+
+        const policyAdjustment: PolicyAdjustment = {
+          originalComplexity: proposal.complexity,
+          adjustedComplexity,
+          originalRisk: proposal.risk,
+          adjustedRisk,
+          reasons: matchedReasons,
+          crossCuttingRuntimeUpgrade: true,
+        };
+
+        guarded = {
+          ...proposal,
+          complexity: adjustedComplexity,
+          risk: adjustedRisk,
+          routerProposal,
+          policyAdjustment,
+          provenance: {
+            ...(proposal.provenance ?? { source: proposal.source }),
+            routerProposal,
+            policyAdjustment,
+          },
+        };
+      }
+    }
+
+    return this.enforceFanOutAdmission(guarded);
+  }
+
+  /**
+   * Fan-out is not a feature by itself. Admit more than one role only when the
+   * proposed team has observable structural evidence for either:
+   *   - parallelizable, non-duplicate objectives; or
+   *   - an explicit specialist quality role paired with primary execution.
+   *
+   * Complexity alone is not sufficient. This prevents model/router enthusiasm
+   * from multiplying full-repository reads that do not improve time or quality.
+   */
+  private static enforceFanOutAdmission(proposal: RoutingDecision): RoutingDecision {
+    const requestedFanOut =
+      proposal.teamSize > 1 ||
+      proposal.roles.length > 1 ||
+      proposal.strategy !== 'single';
+
+    if (!requestedFanOut || proposal.roles.length <= 1) {
       return proposal;
     }
 
-    const adjustedComplexity = 'high' as const;
-    const adjustedRisk = 'high' as const;
+    const normalize = (value: string) =>
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+    const objectives = proposal.roles.map((role) => normalize(role.objective));
+    const distinctObjectives = new Set(objectives.filter(Boolean));
+    const distinctRoles = new Set(proposal.roles.map((role) => role.role));
+    const qualityRoles = new Set([
+      'reviewer',
+      'critic',
+      'tester',
+      'security_reviewer',
+      'architecture_reviewer',
+    ]);
 
-    const changed =
-      adjustedComplexity !== proposal.complexity || adjustedRisk !== proposal.risk;
+    const hasQualityRole = proposal.roles.some((role) => qualityRoles.has(role.role));
+    const hasPrimaryRole = proposal.roles.some((role) => !qualityRoles.has(role.role));
+    const hasDistinctWork =
+      distinctObjectives.size >= 2 &&
+      distinctObjectives.size >= Math.ceil(proposal.roles.length / 2);
 
-    if (!changed) {
+    const timeCase =
+      hasDistinctWork &&
+      ['parallel', 'partitioned', 'competitive', 'collaborative'].includes(proposal.strategy);
+    const qualityCase = hasQualityRole && hasPrimaryRole;
+    const complementaryHighRiskCase =
+      proposal.risk === 'high' &&
+      hasDistinctWork &&
+      distinctRoles.size >= 2;
+
+    if (timeCase || qualityCase || complementaryHighRiskCase) {
       return proposal;
     }
 
-    const routerProposal: RouterProposal = {
-      strategy: proposal.strategy,
-      complexity: proposal.complexity,
-      risk: proposal.risk,
-    };
-
-    const policyAdjustment: PolicyAdjustment = {
-      originalComplexity: proposal.complexity,
-      adjustedComplexity,
-      originalRisk: proposal.risk,
-      adjustedRisk,
-      reasons: matchedReasons,
-      crossCuttingRuntimeUpgrade: true,
-    };
-
+    const primary = proposal.roles[0];
     return {
       ...proposal,
-      complexity: adjustedComplexity,
-      risk: adjustedRisk,
-      routerProposal,
-      policyAdjustment,
-      provenance: {
-        ...(proposal.provenance ?? { source: proposal.source }),
-        routerProposal,
-        policyAdjustment,
+      strategy: 'single',
+      teamSize: 1,
+      roles: [primary],
+      communication: {
+        required: false,
+        initialAlignment: false,
+        synthesisBeforeImplementation: false,
       },
+      reason:
+        `Fan-out rejected by efficiency policy: proposed roles did not demonstrate distinct parallel work or a specialist quality guard. Original reason: ${proposal.reason}`,
     };
   }
 
