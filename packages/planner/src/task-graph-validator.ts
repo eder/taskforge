@@ -96,7 +96,7 @@ function inferCompletionMode(task: RawPlanTask, taskType: TaskType): CompletionM
 function inferVerificationCommands(task: RawPlanTask): string[] {
   const text = `${task.title ?? ''}\n${task.description ?? ''}\n${task.objective ?? ''}`;
   const commands = new Set<string>();
-  const packageCommands = text.match(/\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:typecheck|lint|build|test)(?:\s+[^\n,;]*)?/gi) ?? [];
+  const packageCommands = text.match(/\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:typecheck|lint|build|test)\b/gi) ?? [];
   for (const command of packageCommands) {
     commands.add(command.trim().replace(/[.]+$/, ''));
   }
@@ -107,7 +107,11 @@ function scopesOverlap(allowed: string, forbidden: string): boolean {
   const a = allowed.trim();
   const f = forbidden.trim();
   if (!a || !f) return false;
-  if (a === '*' || f === '*') return true;
+  // A wildcard forbidden scope conflicts with every writable scope. A wildcard
+  // allowed scope with a specific forbidden exception is valid: the exception
+  // simply narrows the writable set.
+  if (f === '*') return true;
+  if (a === '*') return false;
   return a === f;
 }
 
