@@ -72,7 +72,29 @@ export class StaticRoutingProvider implements RoutingProvider {
           'Task exhibits high uncertainty and potential financial or consistency risk: parallel investigation with multi-agent evidence synthesis selected.',
         source: 'static',
       };
-    } else if (isHighRisk || input.task.type === 'review') {
+    } else if (input.task.type === 'review') {
+      decision = {
+        strategy: 'single',
+        complexity: 'low',
+        risk: isHighRisk ? 'high' : 'medium',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: input.task.contract.objective,
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'Dedicated review task is read-only validation; no implementation role is required.',
+        source: 'static',
+      };
+    } else if (isHighRisk) {
       decision = {
         strategy: 'review',
         complexity: 'medium',
@@ -97,7 +119,7 @@ export class StaticRoutingProvider implements RoutingProvider {
           initialAlignment: false,
           synthesisBeforeImplementation: false,
         },
-        reason: 'Sensitive or high-risk component requires independent validation gate.',
+        reason: 'Sensitive or high-risk implementation requires independent validation gate.',
         source: 'static',
       };
     } else {
