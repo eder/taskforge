@@ -6,3 +6,4 @@ export * from './logger.js';
 export * from './execution-intent.js';
 export * from './agent-stream-event.js';
 export * from './agent-stream-bus.js';
+export * from './llm-provider.js';
