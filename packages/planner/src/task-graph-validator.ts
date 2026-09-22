@@ -33,7 +33,7 @@ export interface RawPlanTask {
   verification?: {
     commands: string[];
     expectation: string;
-  };
+  } | null;
 }
 
 export interface RawPlanOutput {
