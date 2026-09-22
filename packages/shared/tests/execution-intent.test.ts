@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { detectExecutionIntent } from '../src/execution-intent.js';
+import {
+  detectExecutionIntent,
+  isLightweightReadOnlyRequest,
+} from '../src/execution-intent.js';
 
 describe('detectExecutionIntent', () => {
   it('classifies "analysis only" as READ_ONLY_ANALYSIS', () => {
@@ -38,6 +41,20 @@ describe('detectExecutionIntent', () => {
     const decision = detectExecutionIntent('Please explain how the scheduler assigns agents to tasks.');
     expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
     expect(decision.mutationAllowed).toBe(false);
+  });
+
+  it('does not treat a real bug investigation as a lightweight summary', () => {
+    expect(
+      isLightweightReadOnlyRequest('Investigate the flaky scheduler deadlock and find the root cause'),
+    ).toBe(false);
+  });
+
+  it('classifies a Portuguese repository summary request as READ_ONLY_ANALYSIS', () => {
+    const decision = detectExecutionIntent('Resuma esse projeto para mim');
+    expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
+    expect(decision.mutationAllowed).toBe(false);
+    expect(decision.deliveryAllowed).toBe(false);
+    expect(decision.forbiddenChanges).toEqual(['*']);
   });
 
   it('classifies a plain-language Portuguese analysis request as READ_ONLY_ANALYSIS', () => {

@@ -55,7 +55,7 @@ const ACTION_VERB_PATTERN =
   /\b(create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify|crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b/i;
 
 const EXPLANATION_PATTERN =
-  /\b(explain|analyze|analyse|evaluate|assess|review|opinion|what do you think|recommend|investigate|understand|avalie|analise|explique|opini[ãa]o|investigue|entenda)\b/i;
+  /\b(explain|analyze|analyse|evaluate|assess|review|opinion|what do you think|recommend|investigate|understand|summari[sz]e|summary|overview|describe|tell me about|avalie|analise|explique|opini[ãa]o|investigue|entenda|resuma|resumir|resumo|descreva|vis[aã]o geral)\b/i;
 
 /**
  * Clause terminators deliberately treat "." as punctuation only when it is
@@ -127,6 +127,18 @@ function extractScopedNoMutationTargets(text: string): string[] {
   }
 
   return [...targets];
+}
+
+export function isLightweightReadOnlyRequest(text: string): boolean {
+  const positiveText = stripNegatedMutationClauses(text ?? '');
+  if (ACTION_VERB_PATTERN.test(positiveText)) return false;
+
+  return (
+    /\b(summari[sz]e|summary|overview|explain|describe|tell me about|resuma|resumir|resumo|explique|descreva|vis[aã]o geral)\b/i.test(
+      text ?? '',
+    ) ||
+    /\b(?:what (?:is|does)|how does|como funciona|o que (?:faz|é))\b/i.test(text ?? '')
+  );
 }
 
 function isExplanationOnlyHeuristic(text: string): boolean {

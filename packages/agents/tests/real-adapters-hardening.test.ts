@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { Writable } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import {
@@ -7,11 +10,40 @@ import {
   CodexAdapter,
   AntigravityAdapter,
 } from '../src/real-adapters.js';
+import { AgentQuotaTracker } from '../src/quota-tracker.js';
 import { RealCliAgentSession } from '../src/agent-session.js';
 import type { AgentAssignment, AgentContext, AgentRuntimeEvent } from '@taskforge/shared';
 import { InteractionGateway } from '@taskforge/execution';
 
 describe('Real-Agent Hardening - Safety & Adapters', () => {
+  it('recovers an active Antigravity quota block from its local CLI logs', () => {
+    AgentQuotaTracker.resetInstance();
+    const tracker = AgentQuotaTracker.getInstance();
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'taskforge-agy-quota-'));
+    const logDir = path.join(home, '.gemini', 'antigravity-cli', 'log');
+    fs.mkdirSync(logDir, { recursive: true });
+
+    const observedAt = Date.now() - 60_000;
+    const logPath = path.join(logDir, 'cli-legacy.log');
+    fs.writeFileSync(
+      logPath,
+      'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h0m0s.\n',
+      'utf8',
+    );
+    fs.utimesSync(logPath, observedAt / 1000, observedAt / 1000);
+
+    try {
+      expect(AntigravityAdapter.recoverQuotaFromRecentLogs(home)).toBe(true);
+      const status = tracker.getQuotaStatus('agy');
+      expect(status.status).toBe('quota_exhausted');
+      expect(status.reason).toContain('resets in 2h0m0s');
+      expect(status.resetAt!.getTime()).toBeGreaterThan(Date.now());
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      AgentQuotaTracker.resetInstance();
+    }
+  });
+
   it('adapters never include dangerous bypass flags by default', () => {
     const claude = new ClaudeCodeAdapter();
     const codex = new CodexAdapter();

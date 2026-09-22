@@ -181,9 +181,11 @@ export class RunOrchestrator {
     const availabilityDb =
       options.availabilityDatabase ??
       (options.database ? options.database : new TaskForgeDatabase(getGlobalStateDatabasePath()));
-    AgentQuotaTracker.getInstance().configureStore(
-      new AgentAvailabilityRepository(availabilityDb),
-    );
+    const globalAvailability = new AgentAvailabilityRepository(availabilityDb);
+    if (availabilityDb !== this.db) {
+      globalAvailability.mergeFrom(new AgentAvailabilityRepository(this.db));
+    }
+    AgentQuotaTracker.getInstance().configureStore(globalAvailability);
 
     this.runRepo = new RunRepository(this.db);
     this.goalRepo = new GoalRepository(this.db);

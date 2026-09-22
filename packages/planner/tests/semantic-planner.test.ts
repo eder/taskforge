@@ -247,6 +247,30 @@ describe('TaskGraphValidator', () => {
 });
 
 describe('SemanticPlanner', () => {
+  it('uses a one-task deterministic fast path for a simple repository summary', async () => {
+    const caller = vi.fn().mockRejectedValue(new Error('model should not be called'));
+    const planner = new SemanticPlanner({ customCaller: caller, model: 'gpt-5.6-luna' });
+    const goal: Goal = {
+      id: 'goal-summary',
+      description: 'Resuma esse projeto para mim',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    const tasks = graph.getAllTasks();
+
+    expect(caller).not.toHaveBeenCalled();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].type).toBe('investigation');
+    expect(tasks[0].contract.completionMode).toBe('report');
+    expect(tasks[0].contract.allowedScope).toEqual([]);
+    expect(tasks[0].contract.forbiddenChanges).toContain('*');
+    expect(graph.metadata?.planner?.fallbackReason).toBe('lightweight_read_only_fast_path');
+  });
+
   it('Requirement 6: decomposes complex goal into meaningful semantic TaskGraph', async () => {
     const planner = new SemanticPlanner();
     const goal: Goal = {

@@ -6,7 +6,7 @@ import {
   PlannerSource,
 } from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
-import { HeuristicPlanner } from './planner.js';
+import { HeuristicPlanner, isPureExplanationGoal } from './planner.js';
 import { TaskGraphValidator, RawPlanOutput } from './task-graph-validator.js';
 
 export type { PlanRevision, PlanRevisionType, PlannerProvenance, PlannerSource };
@@ -196,6 +196,28 @@ export class SemanticPlanner implements Planner {
     const timeoutMs = options.timeoutMs ?? this.timeoutMs;
 
     const { minTasks } = this.classifyGoal(goal);
+
+    // Simple repository summaries/explanations do not benefit from semantic
+    // decomposition. Bypass the model entirely so they stay one read-only task
+    // with low latency and predictable agent usage.
+    if (isPureExplanationGoal(goal.description)) {
+      const graph = await this.fallbackPlanner.plan(goal, profile);
+      const plannerProvenance: PlannerProvenance = {
+        source: 'deterministic_decomposition',
+        fallbackReason: 'lightweight_read_only_fast_path',
+        promptVersion: this.promptVersion,
+        schemaVersion: this.schemaVersion,
+      };
+      graph.metadata = {
+        ...(graph.metadata ?? {}),
+        planner: plannerProvenance,
+        source: 'deterministic_decomposition',
+        fallbackReason: 'lightweight_read_only_fast_path',
+        promptVersion: this.promptVersion,
+        schemaVersion: this.schemaVersion,
+      };
+      return graph;
+    }
 
     // 1. Try semantic planning with model caller if configured
     if (this.customCaller || apiKey) {

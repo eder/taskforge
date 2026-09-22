@@ -106,7 +106,7 @@ export class AgentQuotaTracker {
    * Evaluates agent execution output for rate limits, quota exhaustion, or auth failures.
    * Returns true if a quota, rate-limit, or auth issue was identified.
    */
-  recordFailure(agentId: string, output: string): boolean {
+  recordFailure(agentId: string, output: string, observedAt: number = Date.now()): boolean {
     if (!output || typeof output !== 'string') return false;
 
     const lower = output.toLowerCase();
@@ -124,7 +124,7 @@ export class AgentQuotaTracker {
         agentId,
         status: 'auth_failed',
         reason: 'authentication failed or session expired',
-        recordedAt: Date.now(),
+        recordedAt: observedAt,
         source: 'runtime',
       });
       return true;
@@ -137,6 +137,8 @@ export class AgentQuotaTracker {
       lower.includes('insufficient_quota') ||
       lower.includes('credit balance is too low') ||
       lower.includes('exceeded your current quota') ||
+      lower.includes('quota reached') ||
+      lower.includes('quota exceeded') ||
       lower.includes('resource_exhausted');
 
     const isRateLimit =
@@ -165,31 +167,31 @@ export class AgentQuotaTracker {
 
     if (atTimeMatch) {
       reason = `cooldown until ${atTimeMatch[1].trim()}`;
-      resetAt = this.parseTimeTodayOrTomorrow(atTimeMatch[1].trim());
+      resetAt = this.parseTimeTodayOrTomorrow(atTimeMatch[1].trim(), observedAt);
     } else if (hasResetsInDuration) {
       const hours = parseInt(resetsInMatch![1] || '0', 10);
       const minutes = parseInt(resetsInMatch![2] || '0', 10);
       const seconds = parseInt(resetsInMatch![3] || '0', 10);
       const totalMs = ((hours * 60 + minutes) * 60 + seconds) * 1000;
       reason = `resets in ${resetsInMatch![0].replace(/resets?\s+in\s+/i, '').trim()}`;
-      resetAt = Date.now() + totalMs;
+      resetAt = observedAt + totalMs;
     } else {
       const inSecondsMatch = output.match(/try again in\s+([0-9]+)\s*(s|sec|seconds?)/i);
       if (inSecondsMatch) {
         const secs = parseInt(inSecondsMatch[1], 10);
         reason = `retry in ${secs}s`;
-        resetAt = Date.now() + secs * 1000;
+        resetAt = observedAt + secs * 1000;
       } else {
         const inMinutesMatch = output.match(/try again in\s+([0-9]+)\s*(m|min|minutes?)/i);
         if (inMinutesMatch) {
           const mins = parseInt(inMinutesMatch[1], 10);
           reason = `retry in ${mins}m`;
-          resetAt = Date.now() + mins * 60 * 1000;
+          resetAt = observedAt + mins * 60 * 1000;
         } else {
           // Default cooldown: 30 minutes for usage limit, 5 minutes for rate limit
           const defaultMinutes = isUsageLimit ? 30 : 5;
           reason = isUsageLimit ? 'usage limit reached' : 'rate limit reached';
-          resetAt = Date.now() + defaultMinutes * 60 * 1000;
+          resetAt = observedAt + defaultMinutes * 60 * 1000;
         }
       }
     }
@@ -198,7 +200,7 @@ export class AgentQuotaTracker {
       agentId,
       status,
       reason,
-      recordedAt: Date.now(),
+      recordedAt: observedAt,
       resetAt,
       source: 'runtime',
     });
@@ -285,11 +287,11 @@ export class AgentQuotaTracker {
     }
   }
 
-  private parseTimeTodayOrTomorrow(timeStr: string): number {
-    const now = new Date();
+  private parseTimeTodayOrTomorrow(timeStr: string, observedAt: number = Date.now()): number {
+    const now = new Date(observedAt);
     const parts = timeStr.match(/([0-9]{1,2}):([0-9]{2})(?:\s*([AaPp][Mm]))?/);
     if (!parts) {
-      return Date.now() + 30 * 60 * 1000; // default 30 min
+      return observedAt + 30 * 60 * 1000; // default 30 min
     }
 
     let hours = parseInt(parts[1], 10);
