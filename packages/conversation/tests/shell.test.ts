@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TaskForgeDatabase } from '@taskforge/persistence';
 import { getDefaultConfig } from '@taskforge/shared';
 import { InteractiveShell } from '../src/interactive-shell.js';
+import { SLASH_COMMANDS } from '../src/slash-menu.js';
 
 describe('InteractiveShell (REPL)', () => {
   let tmpDir: string;
@@ -219,6 +220,20 @@ describe('InteractiveShell (REPL)', () => {
     const lastTask = graphAfterAdd.getAllTasks()[graphAfterAdd.getAllTasks().length - 1];
     expect(lastTask.type).toBe('testing');
     expect(lastTask.title).toContain('Comprehensive Verification');
+  });
+
+  it('/help renders the same complete public command catalog as the slash menu', async () => {
+    const shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    shellsToClean.push(shell);
+
+    const reply = await shell.handleInput('/help');
+
+    for (const command of SLASH_COMMANDS) {
+      expect(reply).toContain(command.cmd);
+    }
+    expect(reply).toContain('/inspect');
+    expect(reply).toContain('/focus');
+    expect(reply).toContain('/raw');
   });
 
   it('executes /health command and displays Router, agents, and local database status', async () => {
