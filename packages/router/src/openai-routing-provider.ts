@@ -129,7 +129,6 @@ export const ROUTING_DECISION_JSON_SCHEMA = {
 export class OpenAIRoutingProvider implements RoutingProvider {
   readonly id = 'openai';
   private fallbackProvider = new StaticRoutingProvider();
-  private performanceEngine?: PerformanceEngine;
   private failureCooldown?: { reason: RouterFallbackReason; until: number };
   private readonly failureCooldownMs = 30_000;
 
@@ -139,7 +138,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
     private timeoutMs: number = 15000,
     options: { performanceEngine?: PerformanceEngine } = {},
   ) {
-    this.performanceEngine = options.performanceEngine;
+    void options.performanceEngine; // retained for API compatibility; history is observational, not selection input.
     if (this.apiKey === undefined) {
       this.apiKey =
         process.env.TASKFORGE_OPENAI_API_KEY ||
@@ -256,32 +255,6 @@ export class OpenAIRoutingProvider implements RoutingProvider {
       const healthyAgents = input.availableAgents.filter((id) => quotaTracker.isAvailable(id));
       const agentsForRouting = healthyAgents.length > 0 ? healthyAgents : input.availableAgents;
 
-      // Extract historical performance if performanceEngine is configured
-      const historicalPerformance: Record<string, unknown> = {};
-      if (this.performanceEngine) {
-        for (const agentId of agentsForRouting) {
-          try {
-            const stats = this.performanceEngine.getAgentStats({
-              agentId,
-              role: 'implementer',
-              taskType: input.task.type,
-            });
-            historicalPerformance[agentId] = {
-              sampleSize: stats.sampleSize,
-              successRate: stats.successRate,
-              firstPassRate: stats.firstPassRate,
-              avgDurationMs: stats.averageDurationMs,
-              costPerSuccessfulTask: stats.costPerSuccessfulTask,
-              reworkRate: stats.reworkRate,
-              compositeScore: stats.compositeScore,
-              confidence: stats.confidence,
-            };
-          } catch {
-            // ignore telemetry query failure
-          }
-        }
-      }
-
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -294,7 +267,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
             {
               role: 'system',
               content:
-                'You are the TaskForge routing controller.\n\nYour only responsibility is deciding how an engineering task should be staffed and executed.\nYou do not implement code, change tasks, execute commands, or control Git.\n\nEvaluate complexity, uncertainty, risk, task size, change surface, dependency ambiguity, need for independent validation, available capabilities, historical performance, availability, and expected collaboration cost.\n\nChoose the minimum team required to safely complete the task.\nPrefer a single agent for straightforward work.\nEscalate collaboration only when the expected benefit justifies extra cost and coordination.\nReturn only the strict structured routing decision.',
+                'You are the TaskForge routing controller.\n\nYour only responsibility is deciding how an engineering task should be staffed and executed.\nYou do not implement code, change tasks, execute commands, or control Git.\n\nEvaluate complexity, uncertainty, risk, task size, change surface, dependency ambiguity, need for independent validation, available capabilities, availability, and expected collaboration cost. Agent identity should be chosen from the current task fit, never from cross-project historical averages.\n\nChoose the minimum team required to safely complete the task.\nPrefer a single agent for straightforward work.\nEscalate collaboration only when the expected benefit justifies extra cost and coordination.\nReturn only the strict structured routing decision.',
             },
             {
               role: 'user',
@@ -309,8 +282,6 @@ export class OpenAIRoutingProvider implements RoutingProvider {
                 repository: input.repository,
                 signals: input.signals,
                 availableAgents: agentsForRouting,
-                historicalPerformance:
-                  Object.keys(historicalPerformance).length > 0 ? historicalPerformance : undefined,
               }),
             },
           ],

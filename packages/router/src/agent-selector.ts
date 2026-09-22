@@ -1,11 +1,16 @@
 import { AgentRegistry, AgentAdapter, AgentQuotaTracker } from '@taskforge/agents';
 import { RoleRequest } from './router-types.js';
+import { AgentFitScorer } from './agent-fit.js';
 
 export interface SelectedAgentAssignment {
   roleRequest: RoleRequest;
   agent: AgentAdapter;
   /** True when this agent was already assigned to another role in the same selection call. */
   degraded?: boolean;
+  /** Why this harness was selected after availability/capability filtering. */
+  selectionReason?: string;
+  /** Deterministic task-agent fit score. Fairness is used only among equal top scores. */
+  fitScore?: number;
 }
 
 export interface AgentSelectionStats {
@@ -96,13 +101,14 @@ export class AgentSelector {
    * Explicit router preferences are authoritative when healthy. When no
    * preference is supplied, candidate ordering is NOT allowed to decide the
    * result. Eligible agents are ranked by persisted assignment history:
-   *   1. fewest assignments for this role
-   *   2. fewest assignments overall
-   *   3. least recently assigned
-   *   4. rendezvous hash for an exact deterministic tie
+   *   1. task-agent fit for the requested role/objective
+   *   2. fewest assignments for this role (fit tie only)
+   *   3. fewest assignments overall
+   *   4. least recently assigned
+   *   5. rendezvous hash for an exact deterministic tie
    *
-   * This prevents the registry's insertion order (Claude, Codex, Antigravity)
-   * from becoming an accidental routing policy.
+   * This prevents both registry insertion order and historical usage from
+   * becoming the primary routing policy. Fairness is only a tie-breaker.
    */
   private async selectForRole(
     req: RoleRequest,
@@ -113,22 +119,13 @@ export class AgentSelector {
     const availableAdapters = this.registry.list();
     const quotaTracker = AgentQuotaTracker.getInstance();
     let chosen: AgentAdapter | undefined;
+    let selectionReason: string | undefined;
+    let fitScore: number | undefined;
 
-    // 1. Respect an explicit router preference if it is actually usable.
-    if (req.preferredAgent) {
-      const candidate = this.registry.get(req.preferredAgent);
-      if (candidate && !exclude.has(candidate.id)) {
-        const isReady = await candidate.detect();
-        const hasQuota = quotaTracker.isAvailable(candidate.id);
-        if (isReady && hasQuota) {
-          chosen = candidate;
-        }
-      }
-    }
-
-    // 2. Rank capability-compatible candidates fairly instead of taking the
-    // first adapter in registry order.
-    if (!chosen) {
+    // Rank capability-compatible candidates by current-task fit. An explicit
+    // router preference is considered only among equally best-fit candidates;
+    // it cannot force a materially worse harness for the assignment.
+    {
       const capable: AgentAdapter[] = [];
       for (const candidate of availableAdapters.filter((a) => !exclude.has(a.id))) {
         const isReady = await candidate.detect();
@@ -144,7 +141,10 @@ export class AgentSelector {
 
         if (meetsCaps) capable.push(candidate);
       }
-      chosen = this.chooseFairCandidate(capable, req, context.selectionKey);
+      const fit = this.chooseBestFitCandidate(capable, req, context.selectionKey, req.preferredAgent);
+      chosen = fit?.agent;
+      selectionReason = fit?.reason;
+      fitScore = fit?.score;
     }
 
     // 3. Fallback to any healthy, non-excluded agent, still using fair ranking.
@@ -155,7 +155,10 @@ export class AgentSelector {
           healthy.push(candidate);
         }
       }
-      chosen = this.chooseFairCandidate(healthy, req, context.selectionKey);
+      const fit = this.chooseBestFitCandidate(healthy, req, context.selectionKey, req.preferredAgent);
+      chosen = fit?.agent;
+      selectionReason = fit?.reason;
+      fitScore = fit?.score;
     }
 
     let degraded = false;
@@ -170,7 +173,10 @@ export class AgentSelector {
           reusable.push(candidate);
         }
       }
-      chosen = this.chooseFairCandidate(reusable, req, context.selectionKey);
+      const fit = this.chooseBestFitCandidate(reusable, req, context.selectionKey, req.preferredAgent);
+      chosen = fit?.agent;
+      selectionReason = fit ? `degraded reuse; ${fit.reason}` : undefined;
+      fitScore = fit?.score;
       degraded = Boolean(chosen);
     }
 
@@ -180,6 +186,45 @@ export class AgentSelector {
       roleRequest: req,
       agent: chosen,
       degraded: degraded || undefined,
+      selectionReason,
+      fitScore,
+    };
+  }
+
+  private chooseBestFitCandidate(
+    candidates: AgentAdapter[],
+    req: RoleRequest,
+    selectionKey?: string,
+    preferredAgent?: string,
+  ): { agent: AgentAdapter; score: number; reason: string } | undefined {
+    if (candidates.length === 0) return undefined;
+
+    const assessed = candidates.map((agent) => ({
+      agent,
+      fit: AgentFitScorer.assess(agent.id, req),
+    }));
+    const bestScore = Math.max(...assessed.map((item) => item.fit.score));
+    const bestFit = assessed.filter((item) => item.fit.score === bestScore);
+
+    const preferredBestFit =
+      preferredAgent !== undefined
+        ? bestFit.find((item) => item.agent.id === preferredAgent)
+        : undefined;
+    const chosen =
+      preferredBestFit?.agent ??
+      this.chooseFairCandidate(
+        bestFit.map((item) => item.agent),
+        req,
+        selectionKey,
+      );
+    if (!chosen) return undefined;
+    const assessment = bestFit.find((item) => item.agent.id === chosen.id)!.fit;
+    return {
+      agent: chosen,
+      score: assessment.score,
+      reason: preferredBestFit
+        ? `best task fit; router preference broke an equal-fit tie: ${assessment.reason}`
+        : `best task fit: ${assessment.reason}`,
     };
   }
 

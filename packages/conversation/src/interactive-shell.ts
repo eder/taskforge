@@ -58,7 +58,6 @@ import {
 import {
   TelemetryCollector,
   PerformanceEngine,
-  ExecutionUsageEstimator,
   UsageCalibrationEngine,
 } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
@@ -155,7 +154,7 @@ function routerSourceLabel(
     return `OpenAI / ${model || 'gpt-5.6-luna'}`;
   }
   if (routing.source === 'adaptive') {
-    return 'Adaptive (historical performance)';
+    return 'Adaptive structure / deterministic agent fit';
   }
   if (lightweightFastPath) {
     return 'Deterministic routing (model call not required)';
@@ -804,20 +803,17 @@ export class InteractiveShell {
             ? `${colors.red}INEFFICIENT${colors.reset}`
             : `${colors.yellow}INCONCLUSIVE${colors.reset}`;
 
+    const exactTokens = (value: number) => Math.round(value).toLocaleString('en-US');
     const usageBlock =
       efficiency.providerReportedTokens > 0
         ? [
-            `    ${colors.dim}Provider footprint:${colors.reset} ${colors.bold}${formatApproxTokens(efficiency.providerReportedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`,
-            `    ${colors.dim}Fresh-work usage:${colors.reset}   ${formatApproxTokens(efficiency.freshWorkTokens)} tokens (${formatApproxTokens(efficiency.uncachedInputTokens)} uncached input + ${formatApproxTokens(efficiency.providerOutputTokens)} output)`,
+            `    ${colors.dim}Provider usage:${colors.reset}      ${usageAccuracy.observedAssignments} assignment(s)`,
+            `      ${colors.dim}Input:${colors.reset}            ${exactTokens(efficiency.providerInputTokens)} tokens`,
             efficiency.cachedInputTokens > 0
-              ? `    ${colors.dim}Cache reuse:${colors.reset}        ${formatApproxTokens(efficiency.cachedInputTokens)} cached input${efficiency.cacheHitRatio !== undefined ? ` (${pct(efficiency.cacheHitRatio)} of input)` : ''}`
+              ? `      ${colors.dim}Cached input:${colors.reset}     ${exactTokens(efficiency.cachedInputTokens)} tokens`
               : '',
-            usageAccuracy.plannedEstimatedTokens > 0
-              ? `    ${colors.dim}Planning baseline:${colors.reset}  ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} · fresh/baseline ${efficiency.freshWorkVarianceRatio?.toFixed(1) ?? '?'}× · confidence ${efficiency.tokenComparisonConfidence}`
-              : '',
-            efficiency.tokenVarianceRatio !== undefined && efficiency.tokenVarianceRatio > 3
-              ? `    ${colors.dim}Context note:${colors.reset}       total footprint is ${efficiency.tokenVarianceRatio.toFixed(1)}× baseline; cache/provider context makes this non-comparable as a direct efficiency ratio.`
-              : '',
+            `      ${colors.dim}Output:${colors.reset}           ${exactTokens(efficiency.providerOutputTokens)} tokens`,
+            `      ${colors.dim}Total:${colors.reset}            ${exactTokens(efficiency.providerReportedTokens)} tokens`,
           ]
             .filter(Boolean)
             .join('\n')
@@ -826,7 +822,6 @@ export class InteractiveShell {
     const efficiencyBlock = [
       `    ${colors.dim}Overall:${colors.reset}            ${overallBadge}`,
       `    ${colors.dim}Staffing:${colors.reset}           ${staffingLabel}`,
-      `    ${colors.dim}Token efficiency:${colors.reset}   ${dimensionBadge(efficiency.tokenEfficiency)}`,
       `    ${colors.dim}Quality:${colors.reset}            ${dimensionBadge(efficiency.qualityHealth)}`,
       `    ${colors.dim}Recovery:${colors.reset}           ${dimensionBadge(efficiency.recoveryHealth)}`,
       `    ${colors.dim}Assignments:${colors.reset}        ${efficiency.usefulAssignments} useful / ${efficiency.wastedAssignments} wasted across ${efficiency.uniqueAgents} agent(s)`,
@@ -1469,34 +1464,11 @@ export class InteractiveShell {
             : `Fan-out rationale: ${colors.yellow}rejected${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
           : '';
 
-        const primaryAssignmentCount = Math.max(
-          1,
-          selected.length || routing.teamSize || 1,
-        );
-        const calibrationByTaskType = this.usageCalibration.getTaskTypeCalibrations(
-          tasks.map((task) => task.type),
-        );
-        const usageEstimate = ExecutionUsageEstimator.estimateRun({
-          tasks,
-          originalUserRequest: intent.goal,
-          assignmentCounts: {
-            [primaryTask.id]: primaryAssignmentCount,
-          },
-          calibrationByTaskType,
-        });
-        const usageByTask = new Map(
-          usageEstimate.breakdown.map((estimate) => [estimate.taskId, estimate]),
-        );
-
         const taskFormattedList = tasks.map((t, idx) => {
           const icon = theme.taskTypeIcon(t.type);
           const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
           const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
-          const estimate = usageByTask.get(t.id);
-          const tokenTag = estimate
-            ? `${colors.dim}(~${formatApproxTokens(estimate.minTokens)}–${formatApproxTokens(estimate.maxTokens)} tokens, ${estimate.assignmentCount} baseline assignment${estimate.assignmentCount === 1 ? '' : 's'})${colors.reset}`
-            : '';
-          return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
+          return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled}`;
         });
 
         const plannerMeta = this.currentGraph.metadata?.planner as
@@ -1524,9 +1496,10 @@ export class InteractiveShell {
           `  ${colors.dim}Router:${colors.reset}   ${routerSource}${policyBadge}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
+          selected.length === 1 && selected[0].selectionReason
+            ? `Selection: ${selected[0].agent.name} — ${selected[0].selectionReason}.`
+            : '',
           fanOutRationale,
-          `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
-          `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
@@ -1597,43 +1570,21 @@ export class InteractiveShell {
             : `Fan-out rationale: ${colors.yellow}rejected${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
           : '';
 
-        const primaryAssignmentCount = Math.max(
-          1,
-          selected.length || routing.teamSize || 1,
-        );
-        const calibrationByTaskType = this.usageCalibration.getTaskTypeCalibrations(
-          tasks.map((task) => task.type),
-        );
-        const usageEstimate = ExecutionUsageEstimator.estimateRun({
-          tasks,
-          originalUserRequest: goal.description,
-          assignmentCounts: {
-            [primaryTask.id]: primaryAssignmentCount,
-          },
-          calibrationByTaskType,
-        });
-        const usageByTask = new Map(
-          usageEstimate.breakdown.map((estimate) => [estimate.taskId, estimate]),
-        );
-
         const taskFormattedList = tasks.map((t, idx) => {
           const icon = theme.taskTypeIcon(t.type);
           const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
           const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
-          const estimate = usageByTask.get(t.id);
-          const tokenTag = estimate
-            ? `${colors.dim}(~${formatApproxTokens(estimate.minTokens)}–${formatApproxTokens(estimate.maxTokens)} tokens, ${estimate.assignmentCount} baseline assignment${estimate.assignmentCount === 1 ? '' : 's'})${colors.reset}`
-            : '';
-          return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
+          return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled}`;
         });
 
         return [
           `${colors.brand}✦ Revised Plan${colors.reset} ${colors.dim}(Revision: ${intent.revision.details})${colors.reset}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
+          selected.length === 1 && selected[0].selectionReason
+            ? `Selection: ${selected[0].agent.name} — ${selected[0].selectionReason}.`
+            : '',
           fanOutRationale,
-          `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
-          `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',

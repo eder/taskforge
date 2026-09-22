@@ -26,7 +26,8 @@ describe('Router Health Checks', () => {
     expect(health.status).toBe('healthy');
     expect(health.provider).toBe('adaptive');
     expect(health.adaptive).toBe(true);
-    expect(health.details).toContain('Adaptive engine active');
+    expect(health.details).toContain('Adaptive structure active');
+    expect(health.details).toContain('deterministic task-agent fit');
   });
 
   it('AdaptiveRoutingProvider reports degraded when performance engine is missing', async () => {
