@@ -1,30 +1,13 @@
-import { RepositoryProfile, Constraint, PlannerProvenance } from '@taskforge/shared';
+import {
+  RepositoryProfile,
+  Constraint,
+  PlannerProvenance,
+  isLightweightReadOnlyRequest,
+} from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
 
 export function isPureExplanationGoal(description: string): boolean {
-  const desc = description
-    .toLowerCase()
-    .replace(/[?!.,;:]+/g, ' ')
-    .trim();
-
-  // Actionable verbs imply code modification
-  const hasActionVerb =
-    /\b(create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update)\b/i.test(
-      desc,
-    );
-  if (hasActionVerb) {
-    return false;
-  }
-
-  const explanationPatterns = [
-    /what\s+(does\s+|is\s+)?(this\s+|the\s+)?(project|repo|repository|codebase|app|application|system)?\s*(do|does|is|about)/i,
-    /what\s+(is|are)\s+(this\s+|the\s+)?(project|repo|repository|codebase|app|application|system)/i,
-    /what\s+does\s+it\s+do/i,
-    /how\s+(does\s+)?(this\s+|the\s+)?(project|repo|repository|codebase|app|system|it)\s+(work|works|operate|function)/i,
-    /(explain|describe|overview|tell\s+me\s+about)\s+(this\s+|the\s+)?(project|repo|repository|codebase|app|system|architecture)/i,
-  ];
-
-  return explanationPatterns.some((pattern) => pattern.test(desc));
+  return isLightweightReadOnlyRequest(description);
 }
 
 export function isLightweightGoal(description: string): boolean {
