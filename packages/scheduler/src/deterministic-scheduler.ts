@@ -24,6 +24,8 @@ export interface SchedulerContext {
   runId: string;
   baseCommit: string;
   repoRoot: string;
+  /** Verbatim request that started the run. */
+  originalUserRequest?: string;
   config: TaskForgeConfig;
   graph: TaskGraph;
   agentRegistry: AgentRegistry;
@@ -52,6 +54,23 @@ export interface SchedulerContext {
     string,
     (task: Task, ctx: SchedulerContext) => Promise<{ success: boolean; commitHash?: string }>
   >;
+}
+
+function roleForTaskType(taskType: Task['type']): AgentAssignment['role'] {
+  switch (taskType) {
+    case 'investigation':
+      return 'researcher';
+    case 'review':
+      return 'reviewer';
+    case 'testing':
+      return 'tester';
+    case 'architecture':
+      return 'architecture_reviewer';
+    case 'implementation':
+    case 'refactoring':
+    default:
+      return 'implementer';
+  }
 }
 
 export interface SchedulerResult {
@@ -449,7 +468,7 @@ export class DeterministicScheduler {
       id: assignmentId,
       taskId: task.id,
       agentId,
-      role: 'implementer',
+      role: roleForTaskType(task.type),
       objective: task.contract.objective || task.description,
       status: 'running',
     };
@@ -490,6 +509,7 @@ export class DeterministicScheduler {
         runId,
         baseCommit,
         repoRoot: this.ctx.repoRoot,
+        originalUserRequest: this.ctx.originalUserRequest,
         config,
         task,
         assignment,
@@ -645,6 +665,7 @@ export class DeterministicScheduler {
           runId,
           baseCommit: baseCommitForNew,
           repoRoot: this.ctx.repoRoot,
+          originalUserRequest: this.ctx.originalUserRequest,
           config,
           task,
           assignment: newAsgn,
