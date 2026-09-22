@@ -469,22 +469,37 @@ Useful cockpit commands:
 
 | Command | Purpose |
 | --- | --- |
-| `/plan` | Show the current plan |
-| `/tasks` | Show task and assignment status |
-| `/stream` | Follow live agent output |
+| `/help` | Show the complete command reference |
+| `/health` | Check Router, agents, provider quota, and local database health |
+| `/plan` | Show the current proposed or active plan |
+| `/runs` | List previous runs and delivery status |
+| `/inspect [run-id]` | Inspect run → task → assignment history |
+| `/tasks [task-id]` | Show task and assignment status |
+| `/status` | Open the full TUI dashboard |
+| `/agents` | Show detected agents and availability |
+| `/stream [task-id]` | Enter live agent output |
 | `/focus <n>` | Focus one active agent |
-| `/back` | Return from focus mode |
-| `/pending` | Show interactions waiting for you |
-| `/approve` | Approve a plan or pending interaction |
-| `/deny` | Deny a pending interaction |
-| `/cancel <n>` | Cancel one assignment |
-| `/inspect` | Inspect the run/task/assignment history |
-| `/health` | Check router, agents, and local database |
-| `/diff` | Inspect a completed run |
-| `/apply` | Apply a completed run |
-| `/pr` | Create a pull request |
-| `/discard` | Keep the run branch without applying it |
-| `/runs` | List previous runs |
+| `/back` | Leave Focus Mode and return to the overview |
+| `/raw [n]` | Show persisted raw provider output |
+| `/pending` | Show interactions waiting for human approval |
+| `/approve [request-id] [scope]` | Approve a plan or pending interaction |
+| `/deny [request-id]` | Deny a pending interaction |
+| `/reject [feedback]` | Reject the current plan with feedback |
+| `/constraint <text>` | Add a constraint to the current plan |
+| `/reassign <task> [agent]` | Reassign work to another healthy agent |
+| `/cancel [n]` | Cancel the active run or one active assignment |
+| `/pause` | Pause execution |
+| `/resume` | Resume execution |
+| `/cost` | Show token usage and cost information |
+| `/stats` | Show execution metrics for the current/recent run |
+| `/diff [run-id]` | Inspect changes from a completed run |
+| `/apply [run-id]` | Apply a completed run to its target branch |
+| `/pr [run-id]` | Create a pull request for a completed run |
+| `/discard [run-id]` | Discard delivery while keeping the integration branch |
+| `/clean` | Clean temporary worktrees and branches |
+| `/exit` | Exit the interactive session |
+
+The interactive `/` menu and `/help` are generated from the same public command catalog. CI also checks this README against that catalog so a new public command cannot be merged without being documented.
 
 Type `/` in the REPL to open the interactive command menu.
 
