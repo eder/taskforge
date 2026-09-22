@@ -700,7 +700,7 @@ export class InteractiveShell {
         ? `${colors.green}RIGHT-SIZED${colors.reset}`
         : efficiency.outcome === 'fan_out_justified'
           ? `${colors.green}FAN-OUT JUSTIFIED${colors.reset}`
-          : efficiency.outcome === 'fan_out_not_justified'
+          : efficiency.outcome === 'inefficient'
             ? `${colors.red}INEFFICIENT${colors.reset}`
             : `${colors.yellow}INCONCLUSIVE${colors.reset}`;
     const efficiencyBlock = [
