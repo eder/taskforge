@@ -144,10 +144,14 @@ export class TaskGraph {
         continue;
       }
 
-      // Every declared dependency must be verified or integrated
+      // Downstream tasks may only start once every dependency is fully
+      // integrated into the run's cumulative branch. "verified" is not
+      // sufficient: another scheduling cycle can observe that transient state
+      // while integration is still in progress, causing the dependent task to
+      // fork from a stale base that does not contain its dependency's code.
       const allDepsSatisfied = task.dependencies.every((depId) => {
         const dep = this.tasks.get(depId);
-        return dep && (dep.status === 'verified' || dep.status === 'integrated');
+        return dep?.status === 'integrated';
       });
 
       if (allDepsSatisfied) {
