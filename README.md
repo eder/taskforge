@@ -1,548 +1,574 @@
 # TaskForge
 
 <p align="center">
-  <strong>Autonomous Multi-Agent Coordination & Git-Worktree Engine for Software Engineering</strong>
+  <strong>One terminal. Multiple coding agents. One controlled engineering workflow.</strong>
 </p>
 
 <p align="center">
+  Open-source control plane for coordinating Claude Code, Codex CLI, and Google Antigravity with planning, isolated execution, live supervision, failover, verification, and Git delivery.
+</p>
+
+<p align="center">
+  <a href="https://github.com/eder/taskforge/actions/workflows/ci.yml"><img src="https://github.com/eder/taskforge/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg" alt="Node.js"></a>
-  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/typescript-v5.7-blue.svg" alt="TypeScript"></a>
-  <a href="https://pnpm.io/"><img src="https://img.shields.io/badge/monorepo-pnpm%20workspaces-orange.svg" alt="pnpm"></a>
-  <a href="https://sqlite.org/"><img src="https://img.shields.io/badge/persistence-SQLite%20(Node%20Native)-lightgrey.svg" alt="SQLite"></a>
-  <a href="#contributing--development"><img src="https://img.shields.io/badge/tests-229%20passed%20(100%25)-brightgreen.svg" alt="Tests: 229 passed"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node.js >= 22"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.x-blue.svg" alt="TypeScript"></a>
 </p>
 
 ---
 
-## Overview
+## Why TaskForge exists
 
-**TaskForge** is an open-source, conversational control plane that coordinates existing, best-of-breed AI coding agents—such as **Claude Code**, **OpenAI Codex CLI**, and **Google Antigravity**—into self-organizing, collaborative software engineering teams.
+Using one coding agent is easy.
 
-Rather than attempting to reinvent code-editing models or replace specialized developer harnesses, TaskForge acts as an authoritative, deterministic orchestration layer. Developers converse with an interactive terminal REPL, describing high-level engineering objectives. TaskForge decomposes those objectives into structured task graphs (DAGs), negotiates precise task contracts, spawns isolated Git worktree sandboxes, schedules agents based on capabilities and token quotas, verifies results through rigorous automated test gates, and integrates validated changes cleanly into the codebase.
+Using several agents on a real codebase is not.
 
-### The Core Architectural Invariant
+Once you have Claude Code, Codex, Antigravity, or other strong coding harnesses available, a new problem appears:
 
-> **AI interprets, proposes, negotiates, and reasons; deterministic software controls authoritative state, process lifecycles, and repository integrity.**
+- Which agent should handle this task?
+- Should one agent implement while another reviews?
+- Can investigations run in parallel without touching the same working tree?
+- What happens when a provider hits quota halfway through a run?
+- How do you see what every agent is doing without opening several terminals?
+- What happens when an agent needs a human decision?
+- How do you know that a process that exited successfully actually completed the engineering task?
+- Which changes are verified and safe to deliver?
 
----
+Without an orchestration layer, **you become the orchestration layer**.
 
-## Architectural Pillars
+TaskForge is designed to take that coordination work off your hands.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          TASKFORGE CONTROL PLANE                            │
-│                                                                             │
-│  ┌───────────────────────┐             ┌─────────────────────────────────┐  │
-│  │   Interactive REPL    │◄───────────►│       Operator Agent            │  │
-│  │  (Persistent Shell)   │             │   (Goal Clarification & Intent) │  │
-│  └──────────┬────────────┘             └────────────────┬────────────────┘  │
-│             │                                           │                   │
-│             ▼                                           ▼                   │
-│  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                     Router & Team Staffing Engine                     │  │
-│  │   - OpenAI Structured Outputs (Advisory Minimum Sufficient Team)     │  │
-│  │   - Token & Quota-Aware Routing (Cooldown & Rate-Limit Tracking)      │  │
-│  └──────────────────────────────────┬────────────────────────────────────┘  │
-│                                     │                                       │
-│                                     ▼                                       │
-│  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                     Deterministic Run Scheduler                       │  │
-│  │   - Task Graph (DAG) Resolution & Dependency Management               │  │
-│  │   - Preflight Contract Negotiation (Scopes, Invariants, Gates)        │  │
-│  │   - Reactive Failover & Worker Reassignment                           │  │
-│  └──────┬───────────────────────────┬───────────────────────────┬────────┘  │
-│         │                           │                           │           │
-│         ▼                           ▼                           ▼           │
-│  ┌──────────────┐            ┌──────────────┐            ┌──────────────┐   │
-│  │ Claude Code  │            │  Codex CLI   │            │ Google Antigr│   │
-│  │   Adapter    │            │   Adapter    │            │ Adapter(agy) │   │
-│  └──────┬───────┘            └──────┬───────┘            └──────┬───────┘   │
-│         │                           │                           │           │
-│         ▼                           ▼                           ▼           │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                 Ephemeral Git Worktrees (.taskforge/)                │   │
-│  │   - Branch-Per-Assignment Isolation (No working tree contamination)   │   │
-│  │   - Strict File-Scope Sandboxing & Boundary Enforcement              │   │
-│  └──────────────────────────────────┬───────────────────────────────────┘   │
-│                                     │                                       │
-│                                     ▼                                       │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                    Autonomous Verification Pipeline                  │   │
-│  │   - Deterministic Gates: Unit Tests, Linters, Typechecking           │   │
-│  │   - Contract Diff Validation & Audit Trail Invariants                │   │
-│  │   - Bounded Automated Rework Cycles                                  │   │
-│  └──────────────────────────────────┬───────────────────────────────────┘   │
-│                                     │                                       │
-│                                     ▼                                       │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                   Integration & Persistence Engine                   │   │
-│  │   - Atomic Squash & Merge to Integration Branch                      │   │
-│  │   - Audit Event Sourcing & Telemetry Store (SQLite)                  │   │
-│  │   - GitHub Workflow Service (Pull Request & Audit Evidence Creation) │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+> **TaskForge turns coding agents into an engineering team you can supervise.**
 
-1. **Harness Agnostic**: Zero vendor lock-in. Uses standard system binaries (`claude`, `codex`, `agy`) already authenticated on your machine.
-2. **True Git Worktree Sandboxing**: Every agent operates in an isolated worktree (`.taskforge/worktrees/<task-id>`) checked out to a temporary branch. The primary working copy is never mutated during execution.
-3. **Formal Preflight Contracts**: Tasks cannot execute until bounded by an explicit contract detailing objective, allowed files, forbidden patterns, and acceptance tests.
-4. **Minimum Sufficient Team**: An advisory Router Agent uses structured LLM outputs to staff only the necessary workers (single developer, parallel investigators, or independent reviewer gates).
-5. **Quota & Token Intelligence**: Telemetry monitors CLI outputs for usage limits and HTTP 429s in real time, auto-expiring cooldowns and skipping quota-exhausted models during routing.
-6. **Authoritative State & Persistence**: Backed by a high-throughput, native Node 22 SQLite database (`.taskforge/taskforge.db`) capturing runs, tasks, assignments, telemetry, and audit events.
+You describe the outcome you want. TaskForge plans the work, chooses the minimum team it needs, gives agents isolated Git workspaces, watches execution live, handles provider failures, asks you only when a real human decision is required, verifies the result, and prepares a clean delivery.
 
 ---
 
-## Monorepo Architecture
-
-TaskForge is engineered as a clean, highly modular TypeScript monorepo managed via `pnpm` workspaces:
-
-```
-taskforge/
-├── apps/
-│   └── cli/                  # Command-line interface and binary entrypoint (`tf`)
-└── packages/
-    ├── core/                 # Domain entities, TaskGraph DAG, contracts, and events
-    ├── agents/               # CLI agent adapters, harness registry, and quota tracker
-    ├── router/               # Team routing, OpenAI structured outputs, adaptive selector
-    ├── planner/              # Goal decomposition into executable task dependency graphs
-    ├── scheduler/            # Deterministic execution engine, DAG walker, and failover
-    ├── workspace/            # Git service, worktree sandbox manager, repository profiler
-    ├── verification/         # Automated test runners, linters, typechecks, diff auditors
-    ├── integration/          # Branch integration, conflict resolver, GitHub PR creation
-    ├── negotiation/          # Preflight contract negotiation and amendment protocol
-    ├── collaboration/        # Multi-agent peer messaging, review loops, and synthesis
-    ├── operator/             # Conversational intent router, goal clarification engine
-    ├── conversation/         # Terminal REPL, persistent bottom prompt, TUI dashboard
-    ├── persistence/          # Native SQLite schema, repositories, and event sourcing
-    ├── telemetry/            # Token consumption estimator, cost accounting, duration metrics
-    ├── execution/            # Sandboxed subprocess runner with timeout and stream buffering
-    ├── plugins/              # Extensible plugin system (e.g., Enterprise Compliance / ECC)
-    └── shared/               # Universal configuration, logger, error models, and schemas
-```
-
----
-
-## Installation & Prerequisites
-
-### Prerequisites
-
-- **Node.js**: `v22.0.0` or higher (uses native Node SQLite support).
-- **Git**: `v2.38.0` or higher (with native `git worktree` support).
-- **pnpm**: `v9.0.0` or higher.
-- **Agent Harnesses**: At least one supported CLI installed on your `$PATH`:
-  - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) (`claude`)
-  - [OpenAI Codex CLI](https://github.com/openai/codex) (`codex`)
-  - [Google Antigravity](https://antigravity.google/) (`agy`)
-
-### Setup
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/eder/taskforge.git
-cd taskforge
-
-# 2. Install dependencies
-pnpm install
-
-# 3. Build all workspace packages
-pnpm build
-
-# 4. Link CLI globally (optional)
-npm link apps/cli
-```
-
-### Environment & Credential Configuration
-
-TaskForge uses an OpenAI-compatible model for advisory routing, contract synthesis, and high-level goal decomposition. To protect your shell environment and prevent secret leakage into Git commits, credentials are resolved using a **strict 4-tier precedence order**:
-
-1. **`TASKFORGE_OPENAI_API_KEY` (Recommended for environment variables)**:
-   A dedicated environment variable that isolates TaskForge from your global `OPENAI_API_KEY`, preventing conflicts with other CLI tools or shell scripts:
-   ```bash
-   export TASKFORGE_OPENAI_API_KEY="sk-proj-..."
-   ```
-
-2. **Global User Configuration (`~/.taskforge/config.yaml`) (Recommended for persistence)**:
-   Stored outside any Git repository in your user home directory (`chmod 600`), ensuring your API keys and default preferences **never leak into git commits**:
-   ```yaml
-   # ~/.taskforge/config.yaml
-   router:
-     provider: openai
-     model: gpt-4o        # e.g., gpt-4o or gpt-4o-mini
-     apiKey: "sk-proj-..."
-   ```
-
-3. **Project-Level Configuration (`.taskforge/config.yaml`)**:
-   Local project configuration (gitignored by default) for per-repository overrides.
-
-4. **`OPENAI_API_KEY` (Global fallback)**:
-   Standard fallback for developer environments where a global key is already exported.
-
-> [!TIP]
-> **Deterministic Static Fallback**: If no API key is configured or the provided key is invalid (e.g., HTTP 401), TaskForge **does not crash or block execution**. It gracefully falls back to its deterministic rule-based static router, allowing you to run all planning, scheduling, and agent operations offline.
-
-#### Active Key Verification & Health Monitoring
-
-Unlike tools that only verify if a string is non-empty, TaskForge performs **real-time active key probes** (`GET https://api.openai.com/v1/models` cached for 60 seconds) during startup and when running `/health`:
-
-- `● ready (OpenAI <model>)` (Green): Key verified and accepted by OpenAI.
-- `○ invalid key (static fallback)` (Red): HTTP 401 / revoked key detected; automatically switches to static router.
-- `○ missing key (static fallback)` (Gray): No key configured; runs cleanly on deterministic static rules.
-- `○ degraded (static fallback)` (Yellow): HTTP 429 quota exhaustion or network timeout.
-
----
-
-## Quickstart
-
-### 1. Run Health Check (`tf doctor`)
-
-Verify your environment, detected agent harnesses, Git repository status, and SQLite support:
-
-```bash
-$ tf doctor
-
-  ✦ TaskForge Environment Doctor
-  System and harness diagnostic verification
-
-  Node.js Runtime:    v22.14.0 (>= 22.0.0 required) - ✔ OK
-  Git Repository:     ✔ OK (main • a716eb5 • clean)
-  SQLite Database:    ✔ OK
-  Workspace Profile:  Node.js (TypeScript) project with 42 source files
-
-  Agent Harness Detection:
-    ● Claude Code        [claude ] ready
-    ● Codex CLI          [codex  ] ready
-    ● Google Antigravity [agy    ] ready
-
-  ✔ Diagnostic complete. Everything ready!
-```
-
-### 2. Launch the Interactive REPL (`tf`) — Primary Experience
-
-The interactive terminal is the **flagship interface** of TaskForge. Instead of a one-shot CLI script, `tf` provides an interactive, full-duplex conversational terminal session where developers converse with the multi-agent control plane, review and approve task plans, monitor real-time worker execution across Git worktrees, and steer integration.
-
-#### Terminal Architecture & Layout
-
-The terminal operates with an advanced **split viewport layout**:
-
-- **Scroll Buffer (Top)**: Real-time agent outputs, structured task cards, verification progress, and conversational history stream upward cleanly without flickering.
-- **Persistent Bottom Prompt (`> `)**: The input prompt is always anchored to the bottom row of your terminal, remaining immediately accessible even when agents generate extensive test output or diffs.
-
-```bash
-$ tf
-```
-
----
-
-#### Complete Interactive Lifecycle Walkthrough
-
-##### Phase 1: Environment & Agent Readiness Detection
-
-Upon launching `tf`, TaskForge immediately profiles your workspace, analyzes the Git repository, and detects available coding-agent harnesses along with live quota and rate-limit health:
+## What TaskForge does
 
 ```text
- ╭─────────────────────────────────────────────────────────────────╮
- │  ✦ TaskForge Control Plane                              v0.1.0  │
- │  Autonomous multi-agent coordination & git-worktree engine      │
- ╰─────────────────────────────────────────────────────────────────╯
-
-  Repository  /Users/developer/projects/payments-service
-  Git Status  main (e89f10a) • clean
-
-  Agents
-    ● Claude Code        [claude ] ready
-    ● Codex CLI          [codex  ] ready
-    ● Google Antigravity [agy    ] ready
-
-  Router      OpenAI       ● ready (OpenAI gpt-4o)
-  ECC         ○ not detected
- ─────────────────────────────────────────────────────────────────
-
-> █
+You
+ │
+ │  "Fix the duplicate payment race condition and add regression tests"
+ ▼
+TaskForge
+ │
+ ├─ understands the objective
+ ├─ decomposes it into a task graph
+ ├─ chooses the minimum team needed
+ ├─ assigns isolated Git worktrees
+ │
+ ├─ Codex ───────────────► implementation
+ ├─ Claude Code ─────────► review
+ └─ Antigravity ─────────► investigation
+ │
+ ├─ streams execution into one cockpit
+ ├─ handles quota/failover and reassignment
+ ├─ pauses only when human input is actually required
+ ├─ runs completion and verification gates
+ └─ integrates verified work into a run branch
+                    │
+                    ▼
+             /diff  /apply  /pr
 ```
 
-> [!NOTE]
-> The `Router` line performs active validation. If your key is revoked or mistyped, it clearly warns `○ invalid key (static fallback)` in red. If no key is configured, it shows `○ missing key (static fallback)` and seamlessly uses deterministic offline routing.
+TaskForge does **not** replace coding agents.
 
-##### Phase 2: Natural Language Objective
+Claude Code, Codex, and Antigravity remain responsible for understanding and changing code. TaskForge sits above them and manages the engineering workflow around those agents:
 
-Type an objective in plain natural language. You can specify architectural goals, bug investigations, or refactoring constraints:
+- planning and task decomposition;
+- team selection and role assignment;
+- isolated Git worktrees;
+- concurrent and collaborative execution;
+- human-in-the-loop decisions;
+- quota awareness, failover, and reassignment;
+- independent review;
+- completion evidence and verification;
+- integration and delivery.
+
+Think of the coding agents as engineers and TaskForge as the control plane around the engineering team.
+
+---
+
+## A normal day with TaskForge
+
+Start TaskForge inside a repository:
+
+```bash
+tf
+```
+
+TaskForge detects the repository and the coding agents already installed on your machine:
 
 ```text
-> investigate race condition in Stripe webhook and ensure idempotency with redis tests
+╭─────────────────────────────────────────────────────────────────╮
+│  ✦ TaskForge Control Plane                              v0.1.0  │
+│  Multi-agent engineering control plane                         │
+╰─────────────────────────────────────────────────────────────────╯
+
+Repository  ~/projects/payments-service
+Git Status  main (e89f10a) • clean
+
+Agents
+  ● Claude Code        ready
+  ● Codex CLI          ready
+  ● Google Antigravity ready
+
+Router      OpenAI     ● ready
+─────────────────────────────────────────────────────────────────
+
+> fix the duplicate payment bug and add a regression test
 ```
 
-##### Phase 3: Advisory Plan Proposal & Negotiation
-
-The advisory Router synthesizes the request, computes the **minimum sufficient team**, estimates token footprints, and bounds the task with an explicit contract. You are presented with a structured plan before any files are modified:
+TaskForge proposes a plan before execution:
 
 ```text
 ✦ Plan Proposal
-Understood. Recommended strategy: PARALLEL (Complexity: high, Risk: high).
-Suggested team: Claude Code (architecture_reviewer), Codex CLI (reproduction_engineer), Google Antigravity (researcher).
-Estimated tokens: ~4,200 tokens.
-Total of 2 structured tasks:
-  1. 🛠 [FEATURE] Implement Redis-backed idempotency lock in Stripe webhook (~2,400 tokens)
-  2. 🧪 [TEST] Add concurrent integration tests reproducing duplicate charge (~1,800 tokens)
 
-  ● Do you want me to execute? (type "yes", "y" or "/approve" to start)
+Goal: fix the duplicate payment bug and add a regression test
 
+Strategy: PARALLEL
+Team:
+  Codex CLI          reproduction_engineer
+  Claude Code        architecture_reviewer
+
+Tasks:
+  1. Reproduce and isolate the duplicate-payment path
+  2. Implement the fix and regression test
+
+Execute? yes / revise
+```
+
+Approve it:
+
+```text
 > yes
 ```
 
-##### Phase 4: Live Multi-Agent Execution in Ephemeral Worktrees
-
-Once approved, the deterministic scheduler spawns isolated Git worktrees under `.taskforge/worktrees/`. Agents work strictly in isolation without clobbering each other or your main working copy. Live execution streams directly into the upper viewport:
+Then keep using the same terminal while the team works:
 
 ```text
-╭── ✦ TaskForge Execution ───────────────────────────────────────╮
-│  ✔ Plan approved. Starting execution...
-│  ℹ Starting TaskForge orchestrator run: run-1789831200000
-│  ⚡ Scheduling 2 tasks across worktrees...
-│
-│  ✦ [TASK-01] Assigned to Claude Code: "Implement Redis-backed idempotency lock"
-│    📁 Created isolated worktree (taskforge/TASK-01/asgn-TASK-01-43e83a0f)
-│    ⚡ Agent Claude Code executing...
-│    ✔ Agent Claude Code completed (status: success in 42.1s)
-│    🧪 Running verification checks (pnpm test, pnpm lint, tsc)...
-│    ✔ Verified successfully ✓
-│
-│  ✦ [TASK-02] Assigned to Codex CLI: "Add concurrent integration tests"
-│    📁 Created isolated worktree (taskforge/TASK-02/asgn-TASK-02-b8f90c12)
-│    ⚡ Agent Codex CLI executing...
-│    ✔ Agent Codex CLI completed (status: success in 28.4s)
-│    🧪 Running verification checks...
-│    ✔ Verified successfully ✓
-│
-│  ✔ Task completed successfully
-│
-│    Verification   ✔ passed
-│    Delivery       ● READY TO APPLY
-│
-│    /apply    apply to main       /diff   inspect changes
-│    /pr       create pull request /discard keep on branch only
-╰────────────────────────────────────────────────────────────────╯
+TASK-01  [Codex CLI]     reproducing concurrent webhook delivery
+TASK-01  [Claude Code]   reviewing payment/ledger boundaries
 
-> █
+Codex found concurrent processing before the idempotency guard.
+Claude confirmed the guard belongs before ledger mutation.
+
+TASK-02  [Codex CLI]     implementing fix and regression test
 ```
 
-##### Phase 5: Continuous Conversation & Follow-up
-
-The session remains active! You can ask follow-up questions, inspect metrics, or direct next steps:
+If a provider becomes unavailable, TaskForge can recover the role instead of immediately failing the run:
 
 ```text
-> create a pull request with the audit summary targeting main
+╭─ PROVIDER FAILOVER ─────────────────────────────────────────────╮
+│ ⚠ Provider unavailable                                         │
+│ Task:      TASK-01                                              │
+│ Role:      researcher                                           │
+│ Failed:    Google Antigravity                                   │
+│ Reason:    quota exhausted                                      │
+│                                                                │
+│ ↻ Searching for a healthy replacement...                       │
+╰─────────────────────────────────────────────────────────────────╯
+
+↻ Reassigning researcher → Claude Code
+
+╭─ PROVIDER RECOVERED ────────────────────────────────────────────╮
+│ Google Antigravity unavailable                                  │
+│ ↻ researcher reassigned → Claude Code                           │
+│ ✓ Recovered                                                     │
+╰─────────────────────────────────────────────────────────────────╯
 ```
 
-TaskForge generates the PR on GitHub complete with verified audit logs, test execution evidence, and token cost attribution.
+If an agent really needs you, the request becomes explicit instead of disappearing into logs:
+
+```text
+╭─ ACTION REQUIRED ───────────────────────────────────────────────╮
+│ ▲ Human decision needed                                        │
+│                                                                │
+│ Agent:     Codex CLI (implementer)                              │
+│ Task:      TASK-02 — Implement idempotency fix                  │
+│ Action:    install → ioredis                                    │
+│ Why:       required by the implementation                       │
+│                                                                │
+│ /approve req-42 once     allow once                             │
+│ /approve req-42 task     allow for this task                    │
+│ /deny req-42             deny                                   │
+│ /pending                 view context                           │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
+When the run finishes:
+
+```text
+✔ Implementation complete
+✔ Verification passed
+✔ Review passed
+
+Delivery    READY TO APPLY
+
+/diff       inspect changes
+/apply      apply to target branch
+/pr         create a pull request
+/discard    keep the run branch without applying
+```
+
+The key idea is simple: **agents can work autonomously inside TaskForge, but delivery remains explicit and inspectable.**
 
 ---
 
-#### Interactive Slash Commands & Live Autocomplete
+## Why not just use Claude Code or Codex directly?
 
-Type `/` at the prompt to trigger the **interactive command menu**. The palette automatically filters as you type (for example, typing `/e` instantly selects `/exit`), and you can navigate with the `Up`/`Down` arrow keys and press `Tab` or `Enter` to auto-complete:
+You should use them directly when one agent and one task are enough.
 
-```text
-  ┌─────────────────────────────────────────────────────────────┐
-  │  /exit       Exit interactive session                       │
-  │  /help       Display command reference and guide            │
-  │  /health     Inspect health of Router, agents, and local DB │
-  │  /runs       List past execution runs & integration branches│
-  │  /apply      Apply a completed run to its target branch     │
-  │  /diff       Inspect changes a completed run would apply    │
-  │  /pr         Create a pull request for a completed run      │
-  │  /discard    Discard a completed run without applying it    │
-  │  /plan       Inspect current proposed or active plan        │
-  │  /tasks      List status of all tasks in current run        │
-  │  /status     Open full visual TUI dashboard                 │
-  │  /agents     Inspect detected AI agent harnesses & quotas   │
-  │  /stream     Inspect live real-time output stream of agent  │
-  │  /cost       Show tokens and financial cost report          │
-  │  /stats      Show run execution metrics                     │
-  │  /clean      Clean temporary worktrees and branches         │
-  │  /pending    View interactions awaiting approval            │
-  │  /approve    Approve plan or pending interaction            │
-  │  /deny       Deny pending interaction                       │
-  │  /reject     Reject current plan with feedback              │
-  │  /reassign   Reassign task to another agent                 │
-  │  /cancel     Cancel active plan execution or running agent  │
-  │  /pause      Pause orchestrator execution                   │
-  │  /resume     Resume paused execution                        │
-  └─────────────────────────────────────────────────────────────┘
-> /█
-```
+TaskForge becomes useful when the engineering workflow is larger than one prompt:
 
-##### Command Reference
+| Direct coding agent | TaskForge |
+| --- | --- |
+| One agent session | Multiple agents and roles |
+| You choose who works | Router chooses a minimum sufficient team |
+| You manage parallel terminals | One live cockpit |
+| You manage branches/worktrees | Isolated workspaces are created automatically |
+| Provider failure interrupts you | Quota-aware failover can reassign work |
+| Permissions appear inside each harness | TaskForge surfaces human decisions centrally |
+| Exit code often means "process finished" | Completion Gate asks whether the engineering task was actually completed |
+| You manually combine results | Verified results are integrated into a run branch |
+| You decide how to deliver | `/diff`, `/apply`, `/pr`, `/discard` |
 
-| Slash Command        | Description                                                                           |
-| :------------------- | :------------------------------------------------------------------------------------ |
-| `/health`            | Inspect real-time health of Router (active key probe), agents, and local SQLite DB    |
-| `/runs`              | List past execution runs, their completion status, and delivery status               |
-| `/apply`             | Apply a completed run's changes to its target branch (also: `/apply run-<id>`)        |
-| `/diff`              | Inspect what a completed run would change before applying it                         |
-| `/pr`                | Create a GitHub pull request for a completed run with audit evidence                  |
-| `/discard`           | Mark a completed run as discarded without applying it (keeps the branch)              |
-| `/agents`            | View detected AI harnesses, binary paths, readiness, and real-time quota cooldowns    |
-| `/tasks`             | List all tasks in the current run DAG, dependencies, and execution status             |
-| `/status` / `/dash`  | Open the full-screen visual dashboard with repository, run, and agent metrics         |
-| `/stream`            | View real-time line-by-line streaming terminal output from an active agent worker     |
-| `/cost`              | Display detailed token consumption breakdown (input, output) and estimated USD costs  |
-| `/stats`             | View performance analytics, duration per agent, and verification cycle metrics        |
-| `/plan`              | Re-display the currently active or proposed task dependency graph                     |
-| `/approve`           | Confirm and launch the proposed execution plan or pending interaction                 |
-| `/reject`            | Reject the proposed plan and provide conversational steering feedback                 |
-| `/reassign`          | Reassign an in-progress or failed task to an alternative available agent              |
-| `/deny`              | Deny an agent's request for out-of-scope permissions or destructive commands          |
-| `/cancel`            | Safely cancel the active task execution and restore worktree state                    |
-| `/pause` / `/resume` | Pause and resume running agent workers on the fly                                     |
-| `/clean`             | Prune all orphaned Git worktrees and stale assignment branches                        |
-| `/help`              | Print complete interactive guide and keybindings                                      |
-| `/exit`              | Safely terminate the session, prune ephemeral resources, and close SQLite handles     |
-
-#### Terminal Navigation, Bracketed Paste & Keybindings
-
-- **`Up` / `Down`**: Navigate through previous command history (or move selection inside the `/` slash menu).
-- **`Left` / `Right`**: Move cursor inline for rapid prompt editing.
-- **`Backspace` / `Delete`**: Edit current prompt buffer.
-- **`Tab`**: Auto-complete matching slash command from the popup menu.
-- **Bracketed Paste Mode**: Pasting multiline text, large code blocks, or stack traces automatically folds into a clean `[Pasted text #1 +X lines]` chip in the prompt buffer without cluttering the screen. Pressing `Enter` expands and submits the full multiline content safely.
-- **`Ctrl + C`**: Interrupt and cancel currently running agent execution or plan; if idle, safely prompts to exit.
-- **`Esc`**: Dismiss the slash command autocomplete popup.
+TaskForge is intentionally harness-agnostic: it orchestrates existing tools instead of trying to become another coding model or editor.
 
 ---
 
-## Headless & Automation Mode
+## What TaskForge takes care of
 
-For CI/CD pipelines, scripted batch operations, or scheduled workflows, TaskForge provides non-interactive CLI commands:
+### Planning
 
-### Direct Autonomous Execution
+Natural-language goals are turned into structured task graphs with dependencies, contracts, acceptance criteria, and execution intent.
 
-```bash
-# Execute an objective with auto-confirmation and concurrency limits
-tf exec "Fix memory leak in websocket reconnection handler" --yes --concurrency 2
+TaskForge distinguishes requests such as:
 
-# Run full planning, scheduling, verification, and integration pipeline
-tf run "Migrate persistence layer from commonjs to ESM"
+```text
+"Analyze the scheduler. Do not modify anything."
 ```
 
-### Delivery Gate & GitHub Workflow Integration
+from:
 
-```bash
-# Apply the latest run that's ready to apply (or a specific one) to its target branch
-tf apply
-tf apply run-1789794456374
-
-# Import an existing GitHub issue and spawn a coordinated team to resolve it
-tf issue 42
-
-# Create a pull request containing automated audit evidence and verification logs
-tf pr create --base main
+```text
+"Fix the scheduler, but do not modify the database schema."
 ```
 
-### Run Inspection, History & Cost Auditing
+The first is read-only. The second is implementation with a scoped constraint.
+
+### Staffing
+
+The router recommends the minimum useful team for a task:
+
+- single-agent implementation;
+- parallel investigation;
+- implementer + reviewer;
+- collaborative/pair execution;
+- competitive candidates where appropriate.
+
+Routing is advisory. Deterministic code owns authoritative state.
+
+### Isolation
+
+Writable assignments run in isolated Git worktrees under `.taskforge/worktrees/`.
+
+Agents do not need to compete for your primary working directory, and a run does not write verified work directly into your target branch.
+
+### Live supervision
+
+The REPL acts as an agent cockpit:
+
+- `/tasks` shows current task and assignment state;
+- `/stream` enters live agent output;
+- `/focus <n>` switches to a specific active agent;
+- `/back` leaves focus mode;
+- `/cancel <n>` cancels one assignment;
+- `/raw` shows persisted provider output;
+- `/inspect` reviews run/task/assignment history.
+
+While focused on an agent, normal text is routed to that live session instead of accidentally starting a new goal.
+
+### Human-in-the-loop
+
+TaskForge does not ask for confirmation for every normal engineering action.
+
+It surfaces meaningful decisions when an agent reaches a permission/question/authentication boundary, using the existing Interaction Gateway.
+
+The design goal is:
+
+```text
+reversible + isolated work     → automatic
+material human decision        → ask
+external delivery              → explicit
+```
+
+### Failover
+
+Provider capacity is treated as an execution problem, not automatically as a task failure.
+
+For recoverable investigation failures such as quota exhaustion, TaskForge can:
+
+1. classify the provider failure;
+2. preserve the failed assignment in the audit trail;
+3. choose another healthy agent for the same role;
+4. continue the run;
+5. show the recovery in the cockpit.
+
+### Completion and verification
+
+A successful process is not automatically a successful engineering task.
+
+TaskForge separates:
+
+```text
+provider process finished
+          ↓
+normalized outcome
+          ↓
+Completion Gate
+          ↓
+verification
+          ↓
+integration
+```
+
+That prevents cases such as:
+
+```text
+exit code 0
++ required action denied
++ no repository changes
++ old tests still green
+≠
+implementation completed
+```
+
+Verification can include project tests, linting, typechecking, and review.
+
+### Delivery
+
+Verified task results are integrated into a run-specific branch.
+
+You then decide what happens next:
+
+```text
+/diff      inspect
+/apply     apply to target branch
+/pr        create pull request
+/discard   keep branch only
+```
+
+---
+
+## Autonomous, not uncontrolled
+
+TaskForge is designed around one architectural rule:
+
+> **AI interprets, proposes, negotiates, and reasons. Deterministic software controls authoritative state, process lifecycles, permissions, concurrency, Git state, verification, and repository integrity.**
+
+This is how TaskForge tries to combine useful autonomy with predictable engineering behavior.
+
+The user should not need to manually coordinate routine internal mechanics. Worktree isolation, assignment identity, concurrency accounting, provider lifecycle, failover, verification, and run state are control-plane responsibilities.
+
+Human attention is reserved for decisions that actually need human judgment.
+
+---
+
+## Get started
+
+### Requirements
+
+- Node.js 22+
+- Git
+- pnpm
+- at least one supported coding-agent CLI installed and authenticated:
+  - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) — `claude`
+  - [OpenAI Codex CLI](https://github.com/openai/codex) — `codex`
+  - [Google Antigravity](https://antigravity.google/) — `agy`
+
+### Install from source
 
 ```bash
-# List past execution runs, their git integration branches, and delivery status
+git clone https://github.com/eder/taskforge.git
+cd taskforge
+pnpm install
+pnpm build
+npm link apps/cli
+```
+
+Now enter any Git repository and run:
+
+```bash
+tf
+```
+
+That is the primary TaskForge experience.
+
+### Optional: AI router
+
+An OpenAI-backed router/planner can improve task decomposition and team selection, but it is not required to start.
+
+Recommended:
+
+```bash
+export TASKFORGE_OPENAI_API_KEY="..."
+```
+
+You can also store it in `~/.taskforge/config.yaml`.
+
+If no valid key is available, TaskForge falls back to deterministic routing instead of refusing to run.
+
+Check the current environment at any time:
+
+```bash
+tf doctor
+```
+
+or inside the REPL:
+
+```text
+/health
+```
+
+---
+
+## Daily workflow
+
+Most of the time, daily usage should look like this:
+
+```bash
+cd your-project
+tf
+```
+
+Then describe the work naturally:
+
+```text
+> investigate why checkout latency doubled after the cache migration
+
+> fix the race condition and add a regression test
+
+> refactor the retry policy, but do not touch the public API
+
+> review the payment changes without modifying the repository
+```
+
+You can revise a proposed plan conversationally before execution:
+
+```text
+> don't touch package.json
+
+> split the database migration from the API change
+
+> use an independent reviewer for the payment path
+```
+
+Useful cockpit commands:
+
+| Command | Purpose |
+| --- | --- |
+| `/plan` | Show the current plan |
+| `/tasks` | Show task and assignment status |
+| `/stream` | Follow live agent output |
+| `/focus <n>` | Focus one active agent |
+| `/back` | Return from focus mode |
+| `/pending` | Show interactions waiting for you |
+| `/approve` | Approve a plan or pending interaction |
+| `/deny` | Deny a pending interaction |
+| `/cancel <n>` | Cancel one assignment |
+| `/inspect` | Inspect the run/task/assignment history |
+| `/health` | Check router, agents, and local database |
+| `/diff` | Inspect a completed run |
+| `/apply` | Apply a completed run |
+| `/pr` | Create a pull request |
+| `/discard` | Keep the run branch without applying it |
+| `/runs` | List previous runs |
+
+Type `/` in the REPL to open the interactive command menu.
+
+Multiline prompts, code blocks, and stack traces can be pasted directly; TaskForge uses bracketed-paste handling so the entire paste is treated as one user turn.
+
+---
+
+## Headless usage
+
+The interactive REPL is the primary interface, but TaskForge also supports non-interactive workflows.
+
+```bash
+# Full run pipeline
+tf run "Fix memory leak in websocket reconnection"
+
+# Direct execution mode
+tf exec "Add regression coverage for checkout retries" --yes --concurrency 2
+
+# Inspect previous work
 tf runs
+tf inspect run-<id>
+tf inspect run-<id> --json
 
-# Inspect structured run state as human-readable report
-tf inspect run-1789794456374
+# Delivery
+tf apply run-<id>
+tf pr create --base main
 
-# Export run telemetry, tasks, and interaction events as JSON
-tf inspect run-1789794456374 --json
-
-# Display token usage and cost breakdown
-tf cost run-1789794456374
-```
-
-### Workspace Sanitation
-
-```bash
-# Clean up orphaned worktrees and stale assignment branches
+# Cleanup
 tf clean
 ```
 
 ---
 
-## Git Branch Lifecycle & Zero-Risk Integration Model
+## Git model
 
-> [!IMPORTANT]
-> **TaskForge will NEVER commit unverified code directly to your `main` branch.**
-> All multi-agent operations run inside ephemeral Git worktrees, and completed work is integrated into dedicated, reproducible integration branches.
+Every writable assignment executes in a temporary worktree/branch.
 
-### The 5-Step Lifecycle
+A normal run looks like:
 
-1. **Isolated Worktrees**: When a task is scheduled, TaskForge creates an isolated worktree under `.taskforge/worktrees/<task-id>/asgn-...` based on the latest base commit. Your active branch and working files are never dirtied.
-2. **Autonomous Task Commits**: Once the assigned agent finishes writing code, TaskForge stages and commits the worktree changes: `feat(<task-id>): completed by <agent-name>`.
-3. **Deterministic Verification Gate**: The test suite, linter, and typechecker run inside the worktree sandbox. Unverified changes trigger bounded rework cycles and are never integrated.
-4. **Integration Branch (`taskforge/run-<runId>`)**: Upon successful verification, TaskForge creates a run-specific integration branch:
-   ```text
-   taskforge/run-<runId>    (e.g., taskforge/run-1789852516195)
-   ```
-   Each verified task commit is cherry-picked onto this branch in dependency order.
-5. **The Delivery Gate**: When the run concludes, TaskForge does not just print a `git merge` command — it resolves the target branch via the **Git Workflow Policy** (below) and hands you a gate. You retain complete authority over your codebase:
-   ```text
-   Delivery       ● READY TO APPLY
-
-   /apply    apply to the target branch
-   /diff     inspect changes first
-   /pr       open a pull request with audit evidence
-   /discard  keep the branch, don't apply it
-   ```
-   or non-interactively: `tf apply [run-id]`, `tf pr create --base main`.
-
-### Git Workflow Policy: Which Branch Gets the Change?
-
-By default (`git.workflow: trunk`), the target is whatever branch you were on when the run started — nothing to configure. Three more strategies are available:
-
-```yaml
-git:
-  workflow: trunk        # trunk (default) | github-flow | gitflow | current-branch
-  branches:
-    production: main     # used by gitflow
-    development: develop # used by gitflow — hotfix-worded goals target production instead
+```text
+target branch
+    │
+    ├─ task worktree A
+    │      └─ agent result
+    │
+    ├─ task worktree B
+    │      └─ agent result
+    │
+    └─ verified results
+            ↓
+     taskforge/run-<runId>
+            ↓
+       Delivery Gate
+       /diff /apply /pr
 ```
 
-And `delivery.mode` controls what happens automatically once a run is `READY TO APPLY`:
+For sequential collaborative teams, TaskForge creates a cumulative integration artifact so the final integrated result represents the complete team state rather than only one member's last delta.
 
-```yaml
-delivery:
-  mode: ask_human   # ask_human (default) | auto_apply | pull_request | branch_only
-```
-`auto_apply` still requires `permissions.git.merge_main: allow` as an explicit second opt-in — unattended merges are never a config accident.
+By default, delivery is explicit. TaskForge prepares the work; you choose when it reaches the target branch.
 
-### Finding Lost or Background Branches
-
-If you close TaskForge, restart your machine, or switch terminal tabs, you never have to worry about where your code went:
-- **CLI**: Run `tf runs` to see all runs, completion statuses, branch names, and delivery status.
-- **REPL**: Type `/runs` inside the interactive shell.
-- **Git**: Run `git branch --list 'taskforge/*'` or `git log taskforge/run-<runId>`.
-
-*For an in-depth architecture deep-dive — including the Delivery Gate's merge preflight and every Git Workflow Policy strategy — see the [Git Branch Lifecycle & Hardening Guide](docs/git-branch-lifecycle-and-hardening.md).*
+For the detailed lifecycle, see [Git Branch Lifecycle & Hardening](docs/git-branch-lifecycle-and-hardening.md).
 
 ---
 
-## Configuration & Settings Hierarchy
+## Configuration
 
-TaskForge is pre-configured with robust defaults, but behavior can be customized globally or on a per-project basis. Configuration files are automatically merged with the following precedence:
+TaskForge is intended to work with useful defaults. Configuration is optional for normal use.
 
-1. **Local Repository Config**: `.taskforge/config.yaml` (or `.taskforge/config.json`, `taskforge.config.yaml`) in the repository root.
-2. **Global User Config**: `~/.taskforge/config.yaml` (or `~/.taskforge/config.json`) in the user's home directory.
-3. **Built-in Defaults**.
+Configuration precedence:
+
+1. project config: `.taskforge/config.yaml`
+2. global config: `~/.taskforge/config.yaml`
+3. built-in defaults
+
+Example:
 
 ```yaml
-# ~/.taskforge/config.yaml (Global machine defaults & secrets)
 router:
   provider: openai
-  model: gpt-4o         # e.g., gpt-4o, gpt-4o-mini
-  apiKey: "sk-proj-..." # Stored safely outside Git repositories
+  model: gpt-4o
 
 execution:
   maxParallelTasks: 3
   defaultTimeoutMinutes: 30
-  worktreesDir: .taskforge/worktrees
-  databasePath: .taskforge/taskforge.db
-  runsDir: .taskforge/runs
 
 collaboration:
   maxAgentsPerTask: 3
@@ -567,68 +593,143 @@ verification:
   review: true
   maxReworkCycles: 2
 
-# Which branch a run's Delivery Gate targets
 git:
-  workflow: trunk         # trunk (default) | github-flow | gitflow | current-branch
-  branches:
-    production: main      # used by gitflow
-    development: develop  # used by gitflow
+  workflow: trunk
 
-# What happens once a run is ready to deliver
 delivery:
-  mode: ask_human   # ask_human (default) | auto_apply | pull_request | branch_only
+  mode: ask_human
 ```
 
----
-
-## Security, Sandboxing & Real-Agent Hardening (v0.1)
-
-TaskForge coordinates real external coding CLIs without sacrificing system security or developer sanity:
-
-- **Safe Credential Management**: API keys are isolated via `TASKFORGE_OPENAI_API_KEY` or `~/.taskforge/config.yaml` (file mode `600`), preventing keys from being accidentally committed into version control or clashing with global shell configs.
-- **Harness Argument Preservation**: Real-agent adapters (`ClaudeCodeAdapter`, `CodexAdapter`, `AntigravityAdapter`) strictly preserve CLI serialization flags (such as Codex `exec --json` and Antigravity `--output-format stream-json`), ensuring structured streaming is never corrupted by option overrides.
-- **Headless Auto-Denial Detection**: Headless tool denials (such as Antigravity/Jetski tool auto-denials in non-interactive mode) are explicitly detected as `deniedActions` and reported as harness failures rather than false successes.
-- **No Silent CLI Bypass**: Dangerous bypass flags (such as `--dangerously-skip-permissions` or `--dangerously-bypass-approvals-and-sandbox`) are permanently eliminated from default configurations.
-- **Strict Environment Allowlist & Redaction**: Child processes do not inherit arbitrary environment variables. Only essential system paths (`PATH`, `HOME`, `USER`) and necessary API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) are passed. Variables matching `*PASSWORD*`, `*SECRET*`, or `*TOKEN*` (e.g. AWS/GitHub tokens) are strictly denied to prevent secret leakage.
-- **Bidirectional I/O Mediation (`RealCliAgentSession`)**: TaskForge intercepts child process `stdout`/`stderr` line-by-line, parses JSON permission/question events, detects interactive terminal prompts (`(y/n)`), and safely responds via `stdin` through the `InteractionGateway` and `PermissionEngine`.
-- **Preflight Contract Negotiation (`AgentPreflightEvaluator`)**: Validates tasks before dispatch. Unbounded or overly broad refactoring scopes automatically recommend collaborative multi-agent teams instead of uncontrolled single-worker execution.
-- **Mandatory Collaborative Verification**: Solutions produced by collaborative agent teams must pass `verificationRunner.verify()` prior to integration.
-- **Telemetry-Guided Routing & Zod Validation**: Advisory team routing incorporates live agent performance telemetry (success rates, sample size, composite scores) and validates LLM responses with runtime Zod schemas.
-- **Isolation Guarantee**: Agents execute exclusively inside isolated Git worktrees (`.taskforge/worktrees/`). Code modifications never touch the active working branch until all automated verification checks pass.
-- **Audit Trail**: Every interaction, contract amendment, agent stdout/stderr stream, and test result is immutably recorded in SQLite.
+Do not configure these just to get started. They exist for users who want to tune the control plane.
 
 ---
 
-## Contributing & Development
+## Architecture at a glance
 
-We welcome contributions! TaskForge is built with strict TypeScript typings and comprehensive test coverage.
+```text
+┌──────────────────────────────────────────────────────────────┐
+│                         TaskForge                            │
+│                                                              │
+│  Conversation / Operator                                    │
+│            │                                                 │
+│            ▼                                                 │
+│  Semantic Planner → TaskGraph → Intent/Contract Guard       │
+│            │                                                 │
+│            ▼                                                 │
+│  Router → Team / Roles / Execution Strategy                 │
+│            │                                                 │
+│            ▼                                                 │
+│  Deterministic Scheduler                                    │
+│      │             │              │                          │
+│      ▼             ▼              ▼                          │
+│   Claude         Codex        Antigravity                    │
+│      │             │              │                          │
+│      └──────── isolated Git worktrees ────────┐             │
+│                                               │             │
+│  AgentStreamBus / InteractionGateway / Failover             │
+│                                               │             │
+│                                               ▼             │
+│                                  Completion + Verification   │
+│                                               │             │
+│                                               ▼             │
+│                                      Integration Branch      │
+│                                               │             │
+│                                               ▼             │
+│                                         Delivery Gate        │
+└──────────────────────────────────────────────────────────────┘
+```
 
-### Development Workflow
+The monorepo separates the control plane into focused packages:
+
+```text
+apps/cli          CLI entrypoint
+packages/core     domain model and TaskGraph
+packages/planner  goal decomposition and intent guards
+packages/router   strategy, staffing, and agent selection
+packages/agents   harness adapters, activity, quota tracking
+packages/scheduler deterministic orchestration and team execution
+packages/execution process lifecycle and Interaction Gateway
+packages/conversation REPL, cockpit, streaming, HITL UI
+packages/workspace Git/worktree management
+packages/verification completion evidence and verification
+packages/integration run-branch integration
+packages/collaboration agent messaging and coordination
+packages/persistence SQLite state and audit trail
+packages/telemetry execution/token metrics
+packages/shared shared contracts, config, and stream events
+```
+
+For deeper implementation notes, see:
+
+- [Architecture phases 0–5](docs/architecture-phases-0-5.md)
+- [Architecture phases 6–13](docs/architecture-phases-6-13.md)
+- [Architecture phases 14–22](docs/architecture-phases-14-22.md)
+- [Interaction Gateway spec](docs/spec-v2-interaction-gateway.md)
+- [Git Branch Lifecycle & Hardening](docs/git-branch-lifecycle-and-hardening.md)
+
+---
+
+## Design principles
+
+TaskForge is built around a few product rules:
+
+**Use the agents people already like.**  
+Do not reinvent Claude Code, Codex, or Antigravity. Coordinate them.
+
+**Minimum sufficient team.**  
+More agents are not automatically better. Use the smallest team that makes the task safer or faster.
+
+**Isolation over permission fatigue.**  
+Routine, reversible work should happen automatically inside isolated worktrees. Human interruptions should be meaningful.
+
+**Failover over needless failure.**  
+A provider quota problem should not automatically become an engineering-task failure when another healthy agent can satisfy the same role.
+
+**Evidence over claims.**  
+"Done" is not enough. Completion and verification use repository state, provider outcome, artifacts, tests, and other evidence.
+
+**Delivery remains visible.**  
+TaskForge may automate internal execution, but users can inspect the result before it reaches their target branch.
+
+---
+
+## Current status
+
+TaskForge is actively evolving and is already being dogfooded on its own codebase.
+
+The current focus is making multi-agent engineering feel less like operating infrastructure and more like working with a team:
+
+- low-friction setup;
+- strong defaults;
+- live agent visibility;
+- automatic recovery where possible;
+- human attention only where useful;
+- deterministic repository and delivery control.
+
+The CI suite runs on Node 22 and Node 24.
+
+---
+
+## Contributing
 
 ```bash
-# Run monorepo typecheck
+pnpm install
+pnpm build
 pnpm typecheck
-
-# Run linter
 pnpm lint
-
-# Run all unit and integration test suites
 pnpm test
-
-# Run tests in watch mode
-pnpm test:watch
 ```
 
-### Monorepo Conventions
+The repository is a TypeScript monorepo managed with pnpm workspaces.
 
-- **Zero circular dependencies**: Verified via package boundaries.
-- **Deterministic Unit Tests**: Use `FakeAgent` and in-memory SQLite (`:memory:`) for lightning-fast, reproducible tests without requiring API keys or external binaries.
-- **Format with Prettier**: Run `pnpm format` before opening pull requests.
+When contributing, prefer changes that preserve the central invariant:
+
+> AI reasons about the work; deterministic software owns authoritative state.
 
 ---
 
 ## License
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for complete details.
+MIT. See [LICENSE](LICENSE).
 
-Copyright (c) 2026 Eder Eduardo and TaskForge Contributors.
+Copyright (c) 2026 Eder Eduardo and TaskForge contributors.
