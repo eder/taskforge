@@ -180,17 +180,33 @@ export class RouterQualityGuard {
       proposal.roles.length > 1 ||
       proposal.strategy !== 'single';
 
-    if (!requestedFanOut || proposal.roles.length <= 1) {
+    if (!requestedFanOut) {
       return proposal;
     }
 
-    const normalize = (value: string) =>
-      value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ' ')
-        .trim();
-    const objectives = proposal.roles.map((role) => normalize(role.objective));
-    const distinctObjectives = new Set(objectives.filter(Boolean));
+    if (proposal.roles.length <= 1) {
+      return {
+        ...proposal,
+        strategy: 'single',
+        teamSize: 1,
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        fanOutAssessment: {
+          requested: true,
+          admitted: false,
+          requestedTeamSize: proposal.teamSize,
+          admittedTeamSize: 1,
+          benefits: [],
+          reasons: ['fan-out requested without multiple executable roles'],
+        },
+      };
+    }
+
+    const objectives = proposal.roles.map((role) => role.objective);
+    const distinctObjectiveCount = this.countDistinctObjectives(objectives);
     const distinctRoles = new Set(proposal.roles.map((role) => role.role));
     const qualityRoles = new Set([
       'reviewer',
@@ -203,8 +219,8 @@ export class RouterQualityGuard {
     const hasQualityRole = proposal.roles.some((role) => qualityRoles.has(role.role));
     const hasPrimaryRole = proposal.roles.some((role) => !qualityRoles.has(role.role));
     const hasDistinctWork =
-      distinctObjectives.size >= 2 &&
-      distinctObjectives.size >= Math.ceil(proposal.roles.length / 2);
+      distinctObjectiveCount >= 2 &&
+      distinctObjectiveCount >= Math.ceil(proposal.roles.length / 2);
 
     const timeCase =
       hasDistinctWork &&
@@ -269,6 +285,72 @@ export class RouterQualityGuard {
         ],
       },
     };
+  }
+
+  private static countDistinctObjectives(objectives: string[]): number {
+    const representatives: Set<string>[] = [];
+
+    for (const objective of objectives) {
+      const tokens = this.objectiveTokens(objective);
+      if (tokens.size === 0) continue;
+
+      const duplicate = representatives.some(
+        (representative) => this.jaccardSimilarity(tokens, representative) >= 0.72,
+      );
+      if (!duplicate) {
+        representatives.push(tokens);
+      }
+    }
+
+    return representatives.length;
+  }
+
+  private static objectiveTokens(value: string): Set<string> {
+    const stopwords = new Set([
+      'a',
+      'an',
+      'and',
+      'the',
+      'to',
+      'of',
+      'in',
+      'on',
+      'for',
+      'with',
+      'repo',
+      'repository',
+      'project',
+      'code',
+      'codebase',
+      'read',
+      'inspect',
+      'analyze',
+      'analyse',
+      'investigate',
+      'review',
+      'trace',
+      'check',
+      'identify',
+      'find',
+    ]);
+
+    return new Set(
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .split(/\s+/)
+        .filter((token) => token.length > 1 && !stopwords.has(token)),
+    );
+  }
+
+  private static jaccardSimilarity(left: Set<string>, right: Set<string>): number {
+    if (left.size === 0 && right.size === 0) return 1;
+    let intersection = 0;
+    for (const token of left) {
+      if (right.has(token)) intersection++;
+    }
+    const union = left.size + right.size - intersection;
+    return union === 0 ? 1 : intersection / union;
   }
 
   public static evaluateTask(task: import('@taskforge/core').Task): {
