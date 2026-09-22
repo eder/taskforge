@@ -37,14 +37,13 @@ export class TelemetryCollector {
     plannedEstimatedTokens?: number;
   }): TaskCostSummary {
     const cachedInputTokens = item.cachedInputTokens ?? 0;
-    const totalTokens =
-      item.totalTokens ?? item.inputTokens + cachedInputTokens + item.outputTokens;
-    // Cached input pricing differs by provider/model and is not normalized yet.
-    // Treat it as ordinary input for the existing *estimated* cost model while
-    // preserving the cached count separately for usage accuracy/calibration.
+    const totalTokens = item.totalTokens ?? item.inputTokens + item.outputTokens;
+    // inputTokens is normalized to include its cached-input subset. Until
+    // provider/model-specific cache discounts are modeled, estimate cached
+    // tokens at ordinary input price -- but never add them a second time.
     const costUsd = CostEstimator.estimateCost(
       item.modelName,
-      item.inputTokens + cachedInputTokens,
+      item.inputTokens,
       item.outputTokens,
     );
 
