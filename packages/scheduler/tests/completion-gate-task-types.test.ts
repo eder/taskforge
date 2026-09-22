@@ -5,6 +5,7 @@ import {
   CompletionGate,
   resolveCompletionPolicy,
 } from '../src/completion-gate.js';
+import { parseStructuredFindings } from '../src/governed-assignment.js';
 
 function createTask(
   type: Task['type'],
@@ -234,6 +235,56 @@ describe('CompletionGate - Task-Type Aware Policy Matrix', () => {
 
       expect(result.accepted).toBe(true);
       expect(result.evidence?.reviewFindingsCount).toBe(1);
+    });
+
+    it('normalizes prose P1 findings and rejects them as blocking review findings', async () => {
+      const task = createTask('review', {
+        completionMode: 'review',
+        forbiddenChanges: ['*'],
+      });
+      const output =
+        '1. P1 — cache invalidation can restore stale data after an event arrives.';
+
+      const findings = parseStructuredFindings(output);
+      expect(findings).toEqual([
+        {
+          severity: 'major',
+          description: 'cache invalidation can restore stale data after an event arrives.',
+        },
+      ]);
+
+      const result = await gate.evaluate({
+        task,
+        agentResult: createAgentResult({ output, findings }),
+        baseCommit: 'commit-base',
+        resultingCommit: 'commit-base',
+        verificationPassed: true,
+      });
+
+      expect(result.accepted).toBe(false);
+      expect(result.failureReason).toBe('ACCEPTANCE_NOT_MET');
+      expect(result.evidence.findings?.[0].severity).toBe('major');
+    });
+
+    it('rejects explicit prose review rejection even when no structured finding was returned', async () => {
+      const task = createTask('review', {
+        completionMode: 'review',
+        forbiddenChanges: ['*'],
+      });
+      const result = await gate.evaluate({
+        task,
+        agentResult: createAgentResult({
+          output:
+            'Revisão reprovada: o fluxo principal ainda viola o requisito de invalidação por evento.',
+          findings: [],
+        }),
+        baseCommit: 'commit-base',
+        resultingCommit: 'commit-base',
+        verificationPassed: true,
+      });
+
+      expect(result.accepted).toBe(false);
+      expect(result.failureReason).toBe('ACCEPTANCE_NOT_MET');
     });
 
     it('accepts review with substantive written commentary', async () => {
