@@ -27,7 +27,8 @@
     "@taskforge/planner": "workspace:*",
     "@taskforge/router": "workspace:*",
     "@taskforge/git-workflow": "workspace:*",
-    "@taskforge/collaboration": "workspace:*"
+    "@taskforge/collaboration": "workspace:*",
+    "@taskforge/telemetry": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

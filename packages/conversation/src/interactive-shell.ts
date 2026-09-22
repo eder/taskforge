@@ -41,7 +41,12 @@ import {
   AssignmentRepository,
   AuditService,
 } from '@taskforge/persistence';
-import { TelemetryCollector, PerformanceEngine, ExecutionUsageEstimator } from '@taskforge/telemetry';
+import {
+  TelemetryCollector,
+  PerformanceEngine,
+  ExecutionUsageEstimator,
+  UsageCalibrationEngine,
+} from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
 import { SessionRegistry } from '@taskforge/collaboration';
@@ -92,6 +97,7 @@ export class InteractiveShell {
   private config: TaskForgeConfig;
   private db: TaskForgeDatabase;
   private telemetry: TelemetryCollector;
+  private usageCalibration: UsageCalibrationEngine;
   private operator: OperatorAgent;
   private agentRegistry: AgentRegistry;
   private gitService: GitService;
@@ -144,6 +150,7 @@ export class InteractiveShell {
     this.taskRepo = new TaskRepository(this.db);
     this.assignmentRepo = new AssignmentRepository(this.db);
     this.telemetry = new TelemetryCollector(this.db);
+    this.usageCalibration = new UsageCalibrationEngine(this.db);
     this.operator = new OperatorAgent();
     this.agentRegistry = new AgentRegistry();
     this.gitService = new GitService(this.repoRoot);
@@ -652,6 +659,14 @@ export class InteractiveShell {
 
     const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
 
+    const usageAccuracy = this.telemetry.getUsageAccuracy(result.runId);
+    const usageBlock =
+      usageAccuracy.observedAssignments > 0
+        ? usageAccuracy.plannedEstimatedTokens > 0
+          ? `    ${colors.dim}Observed usage:${colors.reset}     ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Assignment baseline:${colors.reset} ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} (${((usageAccuracy.varianceRatio ?? 1) * 100).toFixed(0)}% observed / baseline)`
+          : `    ${colors.dim}Observed usage:${colors.reset}     ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
+        : '';
+
     const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
     let deliveryBlock = '';
     let repositoryBlock = '';
@@ -703,6 +718,7 @@ export class InteractiveShell {
       `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
       `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
       repositoryBlock,
+      usageBlock,
       deliveryBlock,
       result.error
         ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
@@ -1243,12 +1259,16 @@ export class InteractiveShell {
           1,
           selected.length || routing.teamSize || 1,
         );
+        const calibrationByTaskType = this.usageCalibration.getTaskTypeCalibrations(
+          tasks.map((task) => task.type),
+        );
         const usageEstimate = ExecutionUsageEstimator.estimateRun({
           tasks,
           originalUserRequest: intent.goal,
           assignmentCounts: {
             [primaryTask.id]: primaryAssignmentCount,
           },
+          calibrationByTaskType,
         });
         const usageByTask = new Map(
           usageEstimate.breakdown.map((estimate) => [estimate.taskId, estimate]),
@@ -1365,12 +1385,16 @@ export class InteractiveShell {
           1,
           selected.length || routing.teamSize || 1,
         );
+        const calibrationByTaskType = this.usageCalibration.getTaskTypeCalibrations(
+          tasks.map((task) => task.type),
+        );
         const usageEstimate = ExecutionUsageEstimator.estimateRun({
           tasks,
           originalUserRequest: goal.description,
           assignmentCounts: {
             [primaryTask.id]: primaryAssignmentCount,
           },
+          calibrationByTaskType,
         });
         const usageByTask = new Map(
           usageEstimate.breakdown.map((estimate) => [estimate.taskId, estimate]),
@@ -1483,6 +1507,7 @@ export class InteractiveShell {
           activityTracker: this.activityTracker,
           streamBus: this.streamBus,
           sessionRegistry: this.sessionRegistry,
+          telemetryCollector: this.telemetry,
         });
 
         const isBackground =

@@ -49,6 +49,14 @@ class TimeoutProbeAgent implements AgentAdapter {
       output:
         'Detailed investigation report confirming the execution timeout supplied by the TaskForge control plane.',
       durationMs: 1,
+      usage: {
+        inputTokens: 1000,
+        cachedInputTokens: 200,
+        outputTokens: 300,
+        totalTokens: 1500,
+        modelName: 'probe-model',
+        source: 'provider_reported',
+      },
     };
   }
 }
@@ -163,6 +171,21 @@ describe('governed assignment execution timeout', () => {
     );
     expect(agent.observedRole).toBe('researcher');
     expect(activityTracker.getActive()).toEqual([]);
+
+    const usageRow = db
+      .prepare(
+        'SELECT assignment_id, role, model_name, input_tokens, cached_input_tokens, output_tokens, total_tokens, usage_source, planned_estimated_tokens FROM cost_tracking LIMIT 1',
+      )
+      .get() as Record<string, unknown> | undefined;
+    expect(usageRow).toBeDefined();
+    expect(usageRow?.role).toBe('researcher');
+    expect(usageRow?.model_name).toBe('probe-model');
+    expect(usageRow?.input_tokens).toBe(1000);
+    expect(usageRow?.cached_input_tokens).toBe(200);
+    expect(usageRow?.output_tokens).toBe(300);
+    expect(usageRow?.total_tokens).toBe(1500);
+    expect(usageRow?.usage_source).toBe('provider_reported');
+    expect(Number(usageRow?.planned_estimated_tokens)).toBeGreaterThan(0);
 
     db.close();
   });

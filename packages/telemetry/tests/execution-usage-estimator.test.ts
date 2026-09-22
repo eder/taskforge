@@ -105,6 +105,38 @@ describe('ExecutionUsageEstimator', () => {
     expect(docs.breakdown[0].complexity).toBe('lightweight');
   });
 
+  it('applies historical observed-vs-estimated calibration to future ranges', () => {
+    const target = task('TASK-1', 'implementation', 'Implement provider abstraction');
+
+    const uncalibrated = ExecutionUsageEstimator.estimateRun({
+      tasks: [target],
+      originalUserRequest: 'Create provider abstraction.',
+      assignmentCounts: { 'TASK-1': 1 },
+    });
+
+    const calibrated = ExecutionUsageEstimator.estimateRun({
+      tasks: [target],
+      originalUserRequest: 'Create provider abstraction.',
+      assignmentCounts: { 'TASK-1': 1 },
+      calibrationByTaskType: {
+        implementation: {
+          taskType: 'implementation',
+          sampleSize: 12,
+          p25Ratio: 1.2,
+          medianRatio: 1.5,
+          p75Ratio: 1.8,
+          confidence: 'high',
+        },
+      },
+    });
+
+    expect(calibrated.expectedTokens).toBeGreaterThan(uncalibrated.expectedTokens);
+    expect(calibrated.minTokens).toBeGreaterThanOrEqual(uncalibrated.minTokens);
+    expect(calibrated.maxTokens).toBeGreaterThan(uncalibrated.maxTokens);
+    expect(calibrated.confidence).toBe('high');
+    expect(calibrated.assumptions.join(' ')).toContain('Historical calibration applied');
+  });
+
   it('documents sources of uncertainty instead of hiding them', () => {
     const estimate = ExecutionUsageEstimator.estimateRun({
       tasks: [task('TASK-1', 'testing', 'Test all providers')],

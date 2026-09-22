@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { AgentAssignment, AgentStreamBus, AgentUnavailableError, TaskForgeConfig } from '@taskforge/shared';
+import {
+  AgentAssignment,
+  AgentStreamBus,
+  AgentUnavailableError,
+  AgentUsage,
+  TaskForgeConfig,
+} from '@taskforge/shared';
 import { TaskGraph, Task, computeTaskPriority } from '@taskforge/core';
 import { AgentRegistry, AgentActivityTracker } from '@taskforge/agents';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
@@ -50,6 +56,12 @@ export interface SchedulerContext {
   sessionRegistry?: SessionRegistry;
   escalationHandler?: EscalationHandler;
   onProgress?: (message: string) => void;
+  onAgentUsage?: (observation: {
+    task: Task;
+    assignment: AgentAssignment;
+    agentId: string;
+    usage: AgentUsage;
+  }) => void;
   collaborativeExecutors?: Map<
     string,
     (task: Task, ctx: SchedulerContext) => Promise<{ success: boolean; commitHash?: string }>
@@ -556,6 +568,9 @@ export class DeterministicScheduler {
         communicationBus: this.ctx.communicationBus,
         sessionRegistry: this.ctx.sessionRegistry,
         abortSignal,
+        onUsage: (usage) => {
+          this.ctx.onAgentUsage?.({ task, assignment, agentId: agent.id, usage });
+        },
         onAttention: (kind) => {
           taskRepo.updateStatus(task.id, kind);
           graph.updateTaskStatus(task.id, kind);
@@ -711,6 +726,14 @@ export class DeterministicScheduler {
           communicationBus: this.ctx.communicationBus,
           sessionRegistry: this.ctx.sessionRegistry,
           abortSignal,
+          onUsage: (usage) => {
+            this.ctx.onAgentUsage?.({
+              task,
+              assignment: newAsgn,
+              agentId: candidateAgent.id,
+              usage,
+            });
+          },
           onAttention: (kind) => {
             taskRepo.updateStatus(task.id, kind);
             graph.updateTaskStatus(task.id, kind);

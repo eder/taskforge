@@ -48,6 +48,11 @@ import {
 } from './deterministic-scheduler.js';
 import { executeExecutionTeam } from './execution-team.js';
 import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
+import {
+  ExecutionUsageEstimator,
+  TelemetryCollector,
+  UsageCalibrationEngine,
+} from '@taskforge/telemetry';
 
 export interface OrchestratorOptions {
   repoRoot: string;
@@ -70,6 +75,7 @@ export interface OrchestratorOptions {
   communicationBus?: CommunicationBus;
   sessionRegistry?: SessionRegistry;
   escalationHandler?: EscalationHandler;
+  telemetryCollector?: TelemetryCollector;
 }
 
 export interface RunOptions {
@@ -153,6 +159,8 @@ export class RunOrchestrator {
   private escalationHandler: EscalationHandler;
   private activityTracker?: AgentActivityTracker;
   private streamBus?: AgentStreamBus;
+  private telemetry: TelemetryCollector;
+  private usageCalibration: UsageCalibrationEngine;
   private workflowSuggestionShown = false;
 
   constructor(options: OrchestratorOptions) {
@@ -171,6 +179,8 @@ export class RunOrchestrator {
     this.verificationRepo = new VerificationRepository(this.db);
     this.workspaceRepo = new WorkspaceRepository(this.db);
     this.interactionRepo = new InteractionRepository(this.db);
+    this.telemetry = options.telemetryCollector ?? new TelemetryCollector(this.db);
+    this.usageCalibration = new UsageCalibrationEngine(this.db);
 
     this.interactionGateway =
       options.interactionGateway ??
@@ -460,6 +470,13 @@ export class RunOrchestrator {
       }
     }
 
+    // Freeze calibration at run start so every assignment baseline is
+    // compared against history that existed before this run, not against
+    // sibling assignments that happened to finish a few milliseconds earlier.
+    const runUsageCalibration = this.usageCalibration.getTaskTypeCalibrations(
+      graph.getAllTasks().map((task) => task.type),
+    );
+
     // 7. Deterministic Scheduler
     options.onProgress?.(`Scheduling ${graph.getAllTasks().length} tasks across worktrees...`);
     const scheduler = new DeterministicScheduler({
@@ -488,6 +505,29 @@ export class RunOrchestrator {
       escalationHandler: this.escalationHandler,
       activityTracker: options.activityTracker ?? this.activityTracker,
       streamBus: options.streamBus ?? this.streamBus,
+      onAgentUsage: ({ task, assignment, agentId, usage }) => {
+        const planned = ExecutionUsageEstimator.estimateRun({
+          tasks: [task],
+          originalUserRequest: goalDescription,
+          assignmentCounts: { [task.id]: 1 },
+          calibrationByTaskType: runUsageCalibration,
+        }).expectedTokens;
+
+        this.telemetry.recordTaskTokens({
+          runId,
+          taskId: task.id,
+          assignmentId: assignment.id,
+          agentId,
+          role: assignment.role,
+          modelName: usage.modelName ?? agentId,
+          inputTokens: usage.inputTokens,
+          cachedInputTokens: usage.cachedInputTokens,
+          outputTokens: usage.outputTokens,
+          totalTokens: usage.totalTokens,
+          usageSource: usage.source,
+          plannedEstimatedTokens: planned,
+        });
+      },
       onProgress: options.onProgress,
       abortSignal: options.abortSignal,
     });

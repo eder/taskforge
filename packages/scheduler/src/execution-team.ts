@@ -1154,6 +1154,14 @@ function buildGovernedCtx(
     communicationBus: ctx.communicationBus,
     sessionRegistry: ctx.sessionRegistry,
     abortSignal: ctx.abortSignal,
+    onUsage: (usage: import('@taskforge/shared').AgentUsage) => {
+      ctx.onAgentUsage?.({
+        task,
+        assignment,
+        agentId: agent.id,
+        usage,
+      });
+    },
     ...overrides,
   };
 }

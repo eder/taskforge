@@ -1,5 +1,6 @@
 import type { Task } from '@taskforge/core';
-import type { RepositoryProfile } from '@taskforge/shared';
+import type { RepositoryProfile, TaskType } from '@taskforge/shared';
+import type { UsageCalibration } from './types.js';
 
 export type UsageEstimateConfidence = 'low' | 'medium' | 'high';
 
@@ -33,6 +34,7 @@ export interface ExecutionUsageEstimateOptions {
    */
   assignmentCounts?: Record<string, number>;
   repositoryProfile?: RepositoryProfile;
+  calibrationByTaskType?: Partial<Record<TaskType, UsageCalibration>>;
 }
 
 interface UsageBand {
@@ -222,10 +224,26 @@ export class ExecutionUsageEstimator {
       const promptTokens = originalRequestTokens + taskTokens + controlEnvelopeTokens;
       const band = usageBandFor(task);
 
-      const minPerAssignment = promptTokens + band.minContext + band.minOutput;
-      const expectedPerAssignment =
+      let minPerAssignment = promptTokens + band.minContext + band.minOutput;
+      let expectedPerAssignment =
         promptTokens + band.expectedContext + band.expectedOutput;
-      const maxPerAssignment = promptTokens + band.maxContext + band.maxOutput;
+      let maxPerAssignment = promptTokens + band.maxContext + band.maxOutput;
+
+      const calibration = options.calibrationByTaskType?.[task.type];
+      if (calibration && calibration.sampleSize >= 3) {
+        minPerAssignment = Math.max(
+          promptTokens,
+          Math.round(minPerAssignment * calibration.p25Ratio),
+        );
+        expectedPerAssignment = Math.max(
+          minPerAssignment,
+          Math.round(expectedPerAssignment * calibration.medianRatio),
+        );
+        maxPerAssignment = Math.max(
+          expectedPerAssignment,
+          Math.round(maxPerAssignment * calibration.p75Ratio),
+        );
+      }
 
       breakdown.push({
         taskId: task.id,
@@ -247,11 +265,20 @@ export class ExecutionUsageEstimator {
     const allAssignmentsKnown =
       options.tasks.length > 0 && hintedAssignments === options.tasks.length;
     const hasRepositoryProfile = Boolean(options.repositoryProfile);
+    const calibrations = options.calibrationByTaskType ?? {};
+    const calibratedTaskCount = options.tasks.filter(
+      (task) => (calibrations[task.type]?.sampleSize ?? 0) >= 3,
+    ).length;
+    const allTasksCalibrated =
+      options.tasks.length > 0 && calibratedTaskCount === options.tasks.length;
+    const allCalibrationHigh =
+      allTasksCalibrated &&
+      options.tasks.every((task) => calibrations[task.type]?.confidence === 'high');
 
     const confidence: UsageEstimateConfidence =
-      allAssignmentsKnown && hasRepositoryProfile
-        ? 'medium'
-        : allAssignmentsKnown || hasRepositoryProfile
+      allAssignmentsKnown && allCalibrationHigh
+        ? 'high'
+        : allAssignmentsKnown || hasRepositoryProfile || calibratedTaskCount > 0
           ? 'medium'
           : 'low';
 
@@ -260,6 +287,9 @@ export class ExecutionUsageEstimator {
       'Repository context is estimated from task type; exact files read by coding agents are unknown before execution.',
       'Retries, provider failover, emergent collaboration and provider-hidden reasoning/context are excluded.',
       'Tasks without an explicit routing/collaboration hint assume one baseline assignment.',
+      calibratedTaskCount > 0
+        ? `Historical calibration applied to ${calibratedTaskCount}/${options.tasks.length} task(s) using provider-reported usage.`
+        : 'No sufficiently large provider-reported usage history was available for calibration.',
     ];
 
     return {
