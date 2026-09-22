@@ -172,6 +172,13 @@ export abstract class BaseCliAdapter implements AgentAdapter {
         : context.task.allowedScope.includes('*')
           ? 'all repository files'
           : context.task.allowedScope.join(', ');
+    const isReviewerRole = [
+      'reviewer',
+      'architecture_reviewer',
+      'critic',
+      'security_reviewer',
+      'tester',
+    ].includes(assignment.role);
 
     return [
       hasOriginalUserRequest ? 'Original user request:' : undefined,
@@ -194,6 +201,12 @@ export abstract class BaseCliAdapter implements AgentAdapter {
         : undefined,
       readOnly
         ? 'Provenance policy: clearly distinguish facts observed in repository files from inference; do not present inference as repository fact.'
+        : undefined,
+      isReviewerRole
+        ? 'Review decision contract: you are an approval gate. Do not say approved if any blocking issue remains. End the response with a JSON object of the form {"findings":[{"severity":"critical|major|minor|suggestion","description":"...","file":"optional","line":123}]}. Use an empty findings array only when no issue exists. P0 maps to critical, P1 to major, P2 to minor, P3 to suggestion.'
+        : undefined,
+      isReviewerRole
+        ? 'Review severity policy: critical and major findings block completion and must be fixed before delivery; minor and suggestion findings are non-blocking.'
         : undefined,
       'Acceptance criteria:',
       ...context.task.acceptanceCriteria.map((criterion) => `- ${criterion}`),
