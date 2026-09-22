@@ -237,6 +237,13 @@ export function resolveCompletionPolicy(task: Task): TaskCompletionPolicy {
   }
 }
 
+function reviewTextExplicitlyRejects(text: string): boolean {
+  if (!text.trim()) return false;
+  return /\b(review rejected|review failed|not approved|do not approve|cannot approve|blocks approval|revis[aã]o reprovada|revis[aã]o rejeitada|n[aã]o aprovad[ao]|bloqueia a aprova[cç][aã]o)\b/i.test(
+    text,
+  );
+}
+
 export interface CompletionGateContext {
   task: Task;
   assignment?: AgentAssignment;
@@ -434,7 +441,9 @@ export class CompletionGate {
         };
       }
     } else if (policy.requirement === 'review_findings_required') {
-      // Review does NOT require git commits, but requires findings or substantive commentary
+      // Review does NOT require git commits, but it must be an actual approval.
+      // A substantive report containing P0/P1/critical/major findings is evidence
+      // of rejection, not evidence that the task completed successfully.
       const findings = agentResult.findings ?? [];
       const outputText = sanitizeTaskOutput(agentResult.output ?? agentResult.message ?? '').trim();
       if (findings.length === 0 && outputText.length < 20) {
@@ -444,6 +453,24 @@ export class CompletionGate {
           evidence: {
             reviewFindingsCount: 0,
             explanation: `Review task '${task.id}' produced no review findings or analysis report. ${policy.reason}`,
+          },
+        };
+      }
+
+      const blockingFindings = findings.filter(
+        (finding) => finding.severity === 'critical' || finding.severity === 'major',
+      );
+      if (blockingFindings.length > 0 || reviewTextExplicitlyRejects(outputText)) {
+        return {
+          accepted: false,
+          failureReason: 'ACCEPTANCE_NOT_MET',
+          evidence: {
+            reviewFindingsCount: findings.length,
+            findings,
+            explanation:
+              blockingFindings.length > 0
+                ? `Review task '${task.id}' rejected the implementation with ${blockingFindings.length} blocking critical/major finding(s).`
+                : `Review task '${task.id}' explicitly rejected the implementation.`,
           },
         };
       }
