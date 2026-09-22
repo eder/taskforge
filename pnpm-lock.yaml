@@ -576,6 +576,9 @@ importers:
       '@taskforge/shared':
         specifier: workspace:*
         version: link:../shared
+      '@taskforge/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
       '@taskforge/verification':
         specifier: workspace:*
         version: link:../verification
