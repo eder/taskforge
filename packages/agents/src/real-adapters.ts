@@ -65,7 +65,8 @@ export abstract class BaseCliAdapter implements AgentAdapter {
   }
 
   protected buildPrompt(assignment: AgentAssignment, context: AgentContext): string {
-    const originalUserRequest = context.originalUserRequest?.trim();
+    const originalUserRequest = context.originalUserRequest;
+    const hasOriginalUserRequest = Boolean(originalUserRequest?.trim());
     const readOnly =
       context.mutationAllowed === false || context.task.forbiddenChanges.includes('*');
     const writableScope =
@@ -76,9 +77,9 @@ export abstract class BaseCliAdapter implements AgentAdapter {
           : context.task.allowedScope.join(', ');
 
     return [
-      originalUserRequest ? 'Original user request:' : undefined,
-      originalUserRequest,
-      originalUserRequest ? '' : undefined,
+      hasOriginalUserRequest ? 'Original user request:' : undefined,
+      hasOriginalUserRequest ? originalUserRequest : undefined,
+      hasOriginalUserRequest ? '' : undefined,
       'TaskForge assignment:',
       `Task ID: ${assignment.taskId}`,
       `Assignment ID: ${assignment.id}`,
