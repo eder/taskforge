@@ -6,50 +6,20 @@
     "composite": true
   },
   "references": [
-    {
-      "path": "../shared"
-    },
-    {
-      "path": "../execution"
-    },
-    {
-      "path": "../workspace"
-    },
-    {
-      "path": "../persistence"
-    },
-    {
-      "path": "../agents"
-    },
-    {
-      "path": "../core"
-    },
-    {
-      "path": "../verification"
-    },
-    {
-      "path": "../integration"
-    },
-    {
-      "path": "../negotiation"
-    },
-    {
-      "path": "../planner"
-    },
-    {
-      "path": "../router"
-    },
-    {
-      "path": "../git-workflow"
-    },
-    {
-      "path": "../collaboration"
-    },
-    {
-      "path": "../telemetry"
-    }
+    { "path": "../shared" },
+    { "path": "../execution" },
+    { "path": "../workspace" },
+    { "path": "../persistence" },
+    { "path": "../agents" },
+    { "path": "../core" },
+    { "path": "../verification" },
+    { "path": "../integration" },
+    { "path": "../negotiation" },
+    { "path": "../planner" },
+    { "path": "../router" },
+    { "path": "../git-workflow" },
+    { "path": "../collaboration" },
+    { "path": "../telemetry" }
   ],
-  "include": [
-    "src/**/*"
-  ]
+  "include": ["src/**/*"]
 }
