@@ -272,7 +272,7 @@ READ_ONLY_ANALYSIS
 → no delivery branch / apply / PR
 ```
 
-Planner and Router output are advisory for this path. If a model over-decomposes the question or proposes a multi-agent team, TaskForge collapses it back to the invariant before execution. Read-only agent prompts also require the current repository to be treated as the source of truth and require inference to be distinguished from facts observed in repository files.
+Planner and Router output are advisory for this path. If a model over-decomposes the question or proposes a multi-agent team, TaskForge collapses it back to the invariant before execution. For this deterministic fast path, the plan UI explicitly says that the model call was skipped rather than presenting the path as a fallback. Read-only agent prompts also require the current repository to be treated as the source of truth and require inference to be distinguished from facts observed in repository files.
 
 ### Staffing
 
@@ -306,27 +306,39 @@ Complexity by itself is not enough. Multiple agents doing the same repository re
 
 Routing is advisory. Deterministic code owns authoritative state.
 
-#### Orchestration efficiency
+#### Execution health and orchestration efficiency
 
-After a run, TaskForge compares the routing hypothesis with observed execution evidence. `/stats` reports:
+After a run, TaskForge compares the routing hypothesis with observed execution evidence. Staffing is only one dimension of execution health.
 
-- assignments that completed versus assignments that failed/cancelled;
-- retry/failover overhead;
-- provider-reported tokens spent on failed/cancelled assignments;
-- active execution time versus summed serial work;
+The final summary and `/stats` report:
+
+- **Overall health** — EXCELLENT, NEEDS ATTENTION, INEFFICIENT, or INCONCLUSIVE;
+- **Staffing** — RIGHT-SIZED, FAN-OUT JUSTIFIED, INEFFICIENT, or INCONCLUSIVE;
+- **Token efficiency** — based on fresh provider work rather than cache being counted twice;
+- **Quality** — first-pass completion, rework, Completion Gate rejections, specialist quality roles;
+- **Recovery** — retries, failover and failed/cancelled assignments;
 - observed execution overlap and parallelism factor;
-- first-pass completion rate, rework and Completion Gate rejections;
-- completed specialist quality assignments;
-- fan-out decisions admitted/rejected by the policy.
+- fan-out decisions admitted/rejected by deterministic policy.
 
-The outcome is one of:
+Provider usage uses one normalized invariant:
 
-- **RIGHT-SIZED** — single-agent execution completed first-pass without orchestration waste;
-- **FAN-OUT JUSTIFIED** — multi-agent execution completed with acceptable waste and observable parallel-time or specialist-quality evidence;
-- **INEFFICIENT** — retries/failovers, wasted assignments/tokens, or fan-out without an observable benefit made the orchestration more expensive than justified;
-- **INCONCLUSIVE** — the run does not contain enough reliable execution evidence to make the call.
+```text
+inputTokens       = all provider input, including cached input
+cachedInputTokens = subset of inputTokens
+totalTokens       = inputTokens + outputTokens
+```
 
-TaskForge deliberately does not claim hypothetical "time saved" or "tokens saved" without a counterfactual single-agent run. It reports only observable overlap, provider usage, waste and quality signals.
+Cached input is never added to input a second time.
+
+For efficiency comparison, TaskForge also reports:
+
+```text
+fresh-work tokens = uncached input + output
+```
+
+The planning baseline is compared to fresh work with an explicit confidence level. A large total provider footprint caused by high cache reuse is shown as context footprint, not automatically labeled inefficient.
+
+TaskForge deliberately does not claim hypothetical "time saved" or "tokens saved" without a counterfactual single-agent run. It reports observable overlap, provider footprint, cache reuse, fresh work, waste and quality signals.
 
 ### Isolation
 
