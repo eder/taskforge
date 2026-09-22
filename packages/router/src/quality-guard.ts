@@ -1,3 +1,4 @@
+import { isLightweightReadOnlyRequest } from '@taskforge/shared';
 import {
   RoutingDecision,
   RoutingInput,
@@ -64,7 +65,7 @@ export class RouterQualityGuard {
     const lightweightReadOnly =
       isReadOnly &&
       input.task.type === 'investigation' &&
-      /\b(summary|summarize|summarise|resum(?:a|e|ir|o|indo|ido)?|explain|explica|describe|overview|vis[aã]o geral|what does|how does|como funciona|entenda|understand)\b/i.test(text) &&
+      isLightweightReadOnlyRequest(text) &&
       !/\b(root cause|reproduce|reproduction|bug|flaky|race|deadlock|incident|failure|security|audit|vulnerab|payment|pagamento|auth|inconsisten|corrupt)\b/i.test(text);
 
     if (lightweightReadOnly) {
