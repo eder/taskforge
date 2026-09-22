@@ -105,6 +105,10 @@ export type OrchestrationEfficiencyOutcome =
   | 'inefficient'
   | 'inconclusive';
 
+export type ExecutionHealthStatus = 'excellent' | 'needs_attention' | 'inefficient' | 'inconclusive';
+export type DimensionHealth = 'healthy' | 'attention' | 'uncertain';
+export type ComparisonConfidence = 'low' | 'medium';
+
 export interface OrchestrationEfficiencyReport {
   runId: string;
   outcome: OrchestrationEfficiencyOutcome;
@@ -121,9 +125,18 @@ export interface OrchestrationEfficiencyReport {
   admittedFanOutDecisions: number;
   rejectedFanOutDecisions: number;
   providerReportedTokens: number;
+  providerInputTokens: number;
+  cachedInputTokens: number;
+  uncachedInputTokens: number;
+  providerOutputTokens: number;
+  freshWorkTokens: number;
+  cacheHitRatio?: number;
   wastedProviderTokens: number;
   wastedTokenRatio?: number;
   tokenVarianceRatio?: number;
+  freshWorkVarianceRatio?: number;
+  tokenComparisonConfidence: ComparisonConfidence;
+  tokenEfficiency: DimensionHealth;
   serialExecutionMs: number;
   activeExecutionMs: number;
   observedParallelOverlapMs: number;
@@ -136,4 +149,7 @@ export interface OrchestrationEfficiencyReport {
   timeBenefitObserved: boolean;
   qualityGuardSignalObserved: boolean;
   tokenWasteAcceptable: boolean;
+  qualityHealth: DimensionHealth;
+  recoveryHealth: DimensionHealth;
+  overallHealth: ExecutionHealthStatus;
 }
