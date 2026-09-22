@@ -61,7 +61,67 @@ export class RouterQualityGuard {
     // over-staffs them.
     const isReadOnly =
       input.task.contract.completionMode === 'report' ||
+      input.task.contract.completionMode === 'review' ||
       input.task.contract.forbiddenChanges?.includes('*');
+
+    // A dedicated review task is already the validation stage. Routing it as
+    // "implementer + reviewer" invents a mutating role inside a read-only
+    // contract and can produce contradictory outcomes ("implementer rejected"
+    // followed by "review approved"). Canonicalize it to one reviewer; the
+    // CompletionGate decides whether the review approves the dependency.
+    if (isReadOnly && input.task.type === 'review') {
+      return {
+        strategy: 'single',
+        complexity: proposal.complexity,
+        risk: proposal.risk,
+        uncertainty: proposal.uncertainty,
+        teamSize: 1,
+        roles: [
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: input.task.contract.objective,
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'Dedicated review task: one read-only reviewer evaluates the completed dependency; no implementer role is valid here.',
+        source: proposal.source,
+        provenance: proposal.provenance,
+      };
+    }
+
+    // Read-only architecture decisions should inspect and decide, not mutate.
+    // This is used by the architecture-boundary invariant inserted before an
+    // ambiguous stateful implementation request.
+    if (isReadOnly && input.task.type === 'architecture') {
+      return {
+        strategy: 'single',
+        complexity: proposal.complexity,
+        risk: proposal.risk,
+        uncertainty: proposal.uncertainty,
+        teamSize: 1,
+        roles: [
+          {
+            role: 'architecture_reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: input.task.contract.objective,
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'Read-only architecture decision: inspect repository boundaries and produce a concrete design decision before mutation.',
+        source: proposal.source,
+        provenance: proposal.provenance,
+      };
+    }
+
     const invariantLightweightReadOnly =
       input.task.contract.metadata?.lightweightReadOnlyInvariant === true;
     const lightweightReadOnly =
