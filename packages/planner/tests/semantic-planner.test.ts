@@ -236,6 +236,37 @@ describe('SemanticPlanner', () => {
     expect(graph.metadata!.fallbackReason).toBe('model_unresponsive_or_invalid');
   });
 
+  it('fails fast to deterministic fallback on non-retryable provider HTTP errors', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const planner = new SemanticPlanner({
+        apiKey: 'test-key',
+        model: 'test-model',
+      });
+      const goal: Goal = {
+        id: 'goal-fast-fallback',
+        description: 'Implement a provider abstraction and add tests',
+        repository: '/fake/repo',
+        constraints: [],
+        acceptanceCriteria: [],
+        createdAt: new Date(),
+      };
+
+      const graph = await planner.plan(goal);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(graph.metadata?.planner?.source).not.toBe('semantic_model');
+      expect(graph.metadata?.planner?.fallbackReason).toBe('model_unresponsive_or_invalid');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('Requirement 3: revises existing plan with typed revisions without creating new goal', async () => {
     const planner = new SemanticPlanner();
     const goal: Goal = {
