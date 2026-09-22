@@ -286,6 +286,15 @@ export class TaskForgeDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS agent_availability (
+        agent_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        reason TEXT,
+        recorded_at INTEGER NOT NULL,
+        reset_at INTEGER,
+        source TEXT NOT NULL DEFAULT 'runtime'
+      );
+
       CREATE TABLE IF NOT EXISTS interaction_requests (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
