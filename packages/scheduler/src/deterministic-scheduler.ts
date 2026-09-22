@@ -154,6 +154,30 @@ export class DeterministicScheduler {
     return available[0]?.id;
   }
 
+  private objectiveWithDependencyEvidence(task: Task): string {
+    const baseObjective = task.contract.objective || task.description;
+    const evidence = task.dependencies
+      .map((dependencyId) => {
+        const output = this.taskOutputs[dependencyId];
+        if (!output || output.trim().length === 0) return undefined;
+        const dependency = this.ctx.graph.getTask(dependencyId);
+        const label = dependency?.title ?? dependencyId;
+        return `[${dependencyId} — ${label}]\n${output.trim()}`;
+      })
+      .filter((entry): entry is string => Boolean(entry));
+
+    if (evidence.length === 0) return baseObjective;
+
+    return [
+      baseObjective,
+      '',
+      'Authoritative evidence from completed prerequisite tasks:',
+      ...evidence,
+      '',
+      'Treat the prerequisite decisions above as implementation/review constraints. Do not silently choose a conflicting architecture or ownership boundary.',
+    ].join('\n');
+  }
+
   private async resolveTaskBaseCommit(task: Task): Promise<string> {
     if (task.dependencies.length === 0) {
       return this.ctx.baseCommit;
@@ -366,6 +390,17 @@ export class DeterministicScheduler {
     // already contains its fully integrated dependencies. Root tasks keep the
     // original run base so unrelated work can still proceed independently.
     const taskBaseCommit = await this.resolveTaskBaseCommit(task);
+    const executionObjective = this.objectiveWithDependencyEvidence(task);
+    const executionTask =
+      executionObjective === task.contract.objective
+        ? task
+        : {
+            ...task,
+            contract: {
+              ...task.contract,
+              objective: executionObjective,
+            },
+          };
 
     // Check for collaborative execution override
     if (this.ctx.collaborativeExecutors?.has(task.id)) {
@@ -392,7 +427,7 @@ export class DeterministicScheduler {
         const executor = this.ctx.collaborativeExecutors.get(task.id)!;
         const taskScopedContext =
           taskBaseCommit === baseCommit ? this.ctx : { ...this.ctx, baseCommit: taskBaseCommit };
-        const res = await executor(task, taskScopedContext);
+        const res = await executor(executionTask, taskScopedContext);
         if (!res.success) {
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
@@ -423,6 +458,7 @@ export class DeterministicScheduler {
             durationMs: 0,
             commitHash: res.commitHash,
             output: (res as any).output,
+            findings: (res as any).findings,
           },
           baseCommit: taskBaseCommit,
           resultingCommit: res.commitHash,
@@ -569,7 +605,7 @@ export class DeterministicScheduler {
       taskId: task.id,
       agentId,
       role: roleForTaskType(task.type),
-      objective: task.contract.objective || task.description,
+      objective: executionObjective,
       status: 'running',
     };
 
@@ -578,8 +614,11 @@ export class DeterministicScheduler {
 
     try {
       // 2. Create isolated worktree for this assignment
-      const isInvestigation = task.type === 'investigation';
-      if (isInvestigation) {
+      const isReadOnlyTask =
+        task.contract.completionMode === 'report' ||
+        task.contract.completionMode === 'review' ||
+        task.contract.forbiddenChanges?.includes('*');
+      if (isReadOnlyTask) {
         this.ctx.onProgress?.(`[${task.id}] Created isolated read-only workspace`);
       } else {
         this.ctx.onProgress?.(`[${task.id}] Created isolated worktree`);
@@ -614,7 +653,7 @@ export class DeterministicScheduler {
         task,
         assignment,
         agent,
-        detached: isInvestigation,
+        detached: isReadOnlyTask,
         worktreeManager,
         workspaceRepo,
         assignmentRepo,
@@ -963,6 +1002,15 @@ export class DeterministicScheduler {
       if (gateResult.failureReason === 'REQUIRED_ACTION_DENIED') {
         graph.updateTaskStatus(task.id, 'failed');
         taskRepo.updateStatus(task.id, 'failed');
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+        return;
+      }
+
+      if (task.type === 'review' && gateResult.failureReason === 'ACCEPTANCE_NOT_MET') {
+        graph.updateTaskStatus(task.id, 'failed');
+        taskRepo.updateStatus(task.id, 'failed');
+        graph.updateTaskStatus(task.id, 'blocked');
+        taskRepo.updateStatus(task.id, 'blocked');
         await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
         return;
       }

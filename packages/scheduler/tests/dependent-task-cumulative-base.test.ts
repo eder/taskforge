@@ -19,6 +19,7 @@ class DependencyAwareAgent implements AgentAdapter {
   readonly id = 'dependency-aware';
   readonly name = 'Dependency Aware Agent';
   public downstreamSawUpstream = false;
+  public downstreamObjective = '';
 
   async detect(): Promise<boolean> {
     return true;
@@ -56,6 +57,7 @@ class DependencyAwareAgent implements AgentAdapter {
       };
     }
 
+    this.downstreamObjective = assignment.objective;
     const upstreamPath = path.join(context.worktreePath, 'llm-provider.ts');
     this.downstreamSawUpstream = fs.existsSync(upstreamPath);
     if (!this.downstreamSawUpstream) {
@@ -218,6 +220,8 @@ describe('dependent task cumulative execution base', () => {
     expect(result.status).toBe('completed');
     expect(result.tasksCompleted).toBe(2);
     expect(agent.downstreamSawUpstream).toBe(true);
+    expect(agent.downstreamObjective).toContain('Authoritative evidence from completed prerequisite tasks:');
+    expect(agent.downstreamObjective).toContain('Created llm-provider.ts');
     expect(result.integrationBranch).toBeDefined();
 
     const integratedFiles = await gitService.exec(

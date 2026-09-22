@@ -80,6 +80,114 @@ describe('Router and AgentSelector', () => {
     expect(guarded.communication?.required).toBe(false);
   });
 
+  it('canonicalizes a dedicated review task to one read-only reviewer', () => {
+    const task: Task = {
+      ...sampleTask,
+      id: 'TASK-REVIEW',
+      title: 'Verification and Review',
+      description: 'Review the completed implementation',
+      type: 'review',
+      contract: {
+        objective: 'Review implementation against acceptance criteria',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        acceptanceCriteria: ['No blocking findings'],
+        dependencies: ['TASK-IMPL'],
+        completionMode: 'review',
+      },
+    };
+
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'review',
+        complexity: 'medium',
+        risk: 'high',
+        uncertainty: 'low',
+        teamSize: 2,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement more changes',
+          },
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Review the implementation',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'Router incorrectly tried to implement inside a review task',
+        source: 'static',
+      },
+      { task, availableAgents: ['claude', 'codex'] },
+    );
+
+    expect(guarded.strategy).toBe('single');
+    expect(guarded.teamSize).toBe(1);
+    expect(guarded.roles).toHaveLength(1);
+    expect(guarded.roles[0].role).toBe('reviewer');
+    expect(guarded.roles[0].requiredCapabilities).toEqual(['canRead']);
+  });
+
+  it('routes an architecture boundary gate as one read-only architecture reviewer', () => {
+    const task: Task = {
+      ...sampleTask,
+      id: 'TASK-ARCH-BOUNDARY',
+      title: 'Resolve State Ownership and Consistency Boundary',
+      description: 'Decide state ownership before implementation',
+      type: 'architecture',
+      contract: {
+        objective: 'Decide authoritative state owner and event invalidation boundary',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        acceptanceCriteria: ['Boundary decision produced'],
+        dependencies: [],
+        completionMode: 'report',
+        metadata: { architectureBoundaryDecision: true },
+      },
+    };
+
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'collaborative',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'high',
+        teamSize: 2,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Implement cache',
+          },
+          {
+            role: 'architecture_reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Review architecture',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Overstaffed architecture decision',
+        source: 'openai',
+      },
+      { task, availableAgents: ['claude', 'codex'] },
+    );
+
+    expect(guarded.strategy).toBe('single');
+    expect(guarded.teamSize).toBe(1);
+    expect(guarded.roles[0].role).toBe('architecture_reviewer');
+    expect(guarded.roles[0].requiredCapabilities).toEqual(['canRead']);
+  });
+
   it('rejects multi-agent fan-out when roles duplicate the same work without a quality guard', () => {
     const guarded = RouterQualityGuard.evaluate(
       {

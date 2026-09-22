@@ -61,7 +61,68 @@ export class RouterQualityGuard {
     // over-staffs them.
     const isReadOnly =
       input.task.contract.completionMode === 'report' ||
+      input.task.contract.completionMode === 'review' ||
       input.task.contract.forbiddenChanges?.includes('*');
+
+    // A dedicated review task validates an already integrated dependency. It
+    // must never invent a new implementer role inside a read-only contract.
+    if (isReadOnly && input.task.type === 'review') {
+      return {
+        strategy: 'single',
+        complexity: proposal.complexity,
+        risk: proposal.risk,
+        uncertainty: proposal.uncertainty,
+        teamSize: 1,
+        roles: [
+          {
+            role: 'reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: input.task.contract.objective,
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason:
+          'Dedicated review task: one read-only reviewer evaluates the completed dependency; no implementer role is valid here.',
+        source: proposal.source,
+        provenance: proposal.provenance,
+      };
+    }
+
+    // Architecture-boundary tasks are decision gates, not scaffolding tasks.
+    if (
+      isReadOnly &&
+      input.task.type === 'architecture' &&
+      input.task.contract.metadata?.architectureBoundaryDecision === true
+    ) {
+      return {
+        strategy: 'single',
+        complexity: proposal.complexity,
+        risk: proposal.risk,
+        uncertainty: proposal.uncertainty,
+        teamSize: 1,
+        roles: [
+          {
+            role: 'architecture_reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: input.task.contract.objective,
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason:
+          'Architecture boundary decision is read-only and must complete before mutation.',
+        source: proposal.source,
+        provenance: proposal.provenance,
+      };
+    }
+
     const invariantLightweightReadOnly =
       input.task.contract.metadata?.lightweightReadOnlyInvariant === true;
     const lightweightReadOnly =
