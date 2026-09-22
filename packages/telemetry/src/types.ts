@@ -117,6 +117,9 @@ export interface OrchestrationEfficiencyReport {
   uniqueAgents: number;
   multiAgent: boolean;
   retryOrFailoverAssignments: number;
+  fanOutDecisions: number;
+  admittedFanOutDecisions: number;
+  rejectedFanOutDecisions: number;
   providerReportedTokens: number;
   wastedProviderTokens: number;
   wastedTokenRatio?: number;
