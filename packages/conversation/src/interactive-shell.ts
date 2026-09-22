@@ -1951,6 +1951,22 @@ export class InteractiveShell {
         return;
       }
 
+      // Focus Mode raw shortcuts: while the prompt is empty and an assignment
+      // is focused, 1-9 switch agent immediately and Esc returns to overview.
+      // Every other case falls through to the existing line editor unchanged.
+      if (
+        this.viewport.handleFocusShortcut({
+          str,
+          key,
+          buffer,
+          focused: Boolean(this.focusedAssignmentId),
+          onSwitch: (indexOneBased) => this.switchFocus(indexOneBased),
+          onExit: () => this.exitFocusMode(),
+        })
+      ) {
+        return;
+      }
+
       // Slash menu navigation with Up / Down / Tab / Esc
       if (this.slashMenu.isOpen && key) {
         if (key.name === 'up') {
