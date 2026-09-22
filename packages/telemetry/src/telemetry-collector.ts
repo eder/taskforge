@@ -235,21 +235,44 @@ export class TelemetryCollector {
     const ms = (value: number) => `${(value / 1000).toFixed(1)}s`;
     const tokens = (value: number) => value.toLocaleString();
 
+    const healthLabel = {
+      healthy: 'HEALTHY',
+      attention: 'NEEDS ATTENTION',
+      uncertain: 'UNCERTAIN',
+    } as const;
+    const overallLabel = {
+      excellent: 'EXCELLENT',
+      needs_attention: 'NEEDS ATTENTION',
+      inefficient: 'INEFFICIENT',
+      inconclusive: 'INCONCLUSIVE',
+    } as const;
+
     const lines = [
-      `Orchestration Efficiency - Run ${runId}`,
-      `  Outcome: ${outcomeLabel[report.outcome]}`,
+      `Execution Health - Run ${runId}`,
+      `  Overall: ${overallLabel[report.overallHealth]}`,
+      `  Staffing: ${outcomeLabel[report.outcome]}`,
+      `  Token efficiency: ${healthLabel[report.tokenEfficiency]} (comparison confidence: ${report.tokenComparisonConfidence})`,
+      `  Quality: ${healthLabel[report.qualityHealth]}`,
+      `  Recovery: ${healthLabel[report.recoveryHealth]}`,
       `  Shape: ${report.taskCount} task(s), ${report.assignmentCount} assignment(s), ${report.uniqueAgents} agent(s)`,
       `  Assignment yield: ${report.usefulAssignments} useful / ${report.wastedAssignments} wasted (${pct(report.wastedAssignmentRatio)} waste)`,
       `  Recovery overhead: ${report.retryOrFailoverAssignments} retry/failover assignment(s)`,
       `  Fan-out decisions: ${report.admittedFanOutDecisions} admitted / ${report.rejectedFanOutDecisions} rejected (${report.fanOutDecisions} requested)`,
       `  Time: ${ms(report.activeExecutionMs)} active, ${ms(report.serialExecutionMs)} serial work, ${ms(report.observedParallelOverlapMs)} observed overlap (${report.parallelismFactor.toFixed(2)}× parallelism)`,
       report.providerReportedTokens > 0
-        ? `  Tokens: ${tokens(report.providerReportedTokens)} provider-reported, ${tokens(report.wastedProviderTokens)} wasted${report.wastedTokenRatio !== undefined ? ` (${pct(report.wastedTokenRatio)})` : ''}`
-        : '  Tokens: provider-reported usage unavailable',
-      report.tokenVarianceRatio !== undefined
-        ? `  Token baseline variance: ${report.tokenVarianceRatio.toFixed(1)}×`
+        ? `  Provider footprint: ${tokens(report.providerReportedTokens)} total = ${tokens(report.providerInputTokens)} input (including ${tokens(report.cachedInputTokens)} cached) + ${tokens(report.providerOutputTokens)} output`
+        : '  Provider footprint: unavailable',
+      report.providerReportedTokens > 0
+        ? `  Fresh-work tokens: ${tokens(report.freshWorkTokens)} = ${tokens(report.uncachedInputTokens)} uncached input + ${tokens(report.providerOutputTokens)} output${report.cacheHitRatio !== undefined ? ` (cache hit ${pct(report.cacheHitRatio)})` : ''}`
         : undefined,
-      `  Quality: ${pct(report.firstPassRate)} first-pass, ${report.reworkCount} rework, ${report.completionGateRejections} completion rejection(s), ${report.specializedQualityAssignments} specialist quality assignment(s)`,
+      report.freshWorkVarianceRatio !== undefined
+        ? `  Fresh work / planning baseline: ${report.freshWorkVarianceRatio.toFixed(1)}×`
+        : undefined,
+      report.tokenVarianceRatio !== undefined
+        ? `  Total provider footprint / baseline: ${report.tokenVarianceRatio.toFixed(1)}× (context-sensitive; not a direct efficiency ratio)`
+        : undefined,
+      `  Wasted provider tokens: ${tokens(report.wastedProviderTokens)}${report.wastedTokenRatio !== undefined ? ` (${pct(report.wastedTokenRatio)})` : ''}`,
+      `  First-pass quality: ${pct(report.firstPassRate)}, ${report.reworkCount} rework, ${report.completionGateRejections} completion rejection(s), ${report.specializedQualityAssignments} specialist quality assignment(s)`,
       `  Signals: time=${report.timeBenefitObserved ? 'observed' : 'not observed'}, quality=${report.qualityGuardSignalObserved ? 'observed' : 'not observed'}, token-waste=${report.tokenWasteAcceptable ? 'acceptable' : 'high'}`,
       ...report.reasons.map((reason) => `  - ${reason}`),
     ].filter((line): line is string => Boolean(line));
@@ -281,17 +304,21 @@ export class TelemetryCollector {
       return `No costs recorded for run ${runId}. (Tokens: 0, Cost: $0.000)`;
     }
 
-    const accuracy = this.getUsageAccuracy(runId);
+    const efficiency = this.getOrchestrationEfficiency(runId);
     const comparison =
-      accuracy.observedAssignments > 0 && accuracy.plannedEstimatedTokens > 0
-        ? `Observed vs assignment baseline: ${accuracy.observedTokens.toLocaleString()} / ${accuracy.plannedEstimatedTokens.toLocaleString()} tokens (${((accuracy.varianceRatio ?? 1) * 100).toFixed(0)}%)`
+      efficiency.freshWorkVarianceRatio !== undefined
+        ? `Fresh work vs planning baseline: ${efficiency.freshWorkTokens.toLocaleString()} / ${report.totalPlannedEstimatedTokens.toLocaleString()} tokens (${efficiency.freshWorkVarianceRatio.toFixed(1)}×; confidence=${efficiency.tokenComparisonConfidence})`
         : undefined;
 
     const lines = [
       `Cost Report - Run ${runId}`,
-      `Total estimated: $${report.totalCostUsd.toFixed(4)} USD`,
-      `Observed tokens: ${report.totalTokens.toLocaleString()} total (${report.totalInputTokens.toLocaleString()} input / ${report.totalCachedInputTokens.toLocaleString()} cached / ${report.totalOutputTokens.toLocaleString()} output)`,
+      `Total estimated: ${report.totalCostUsd.toFixed(4)} USD`,
+      `Provider footprint: ${report.totalTokens.toLocaleString()} total (${report.totalInputTokens.toLocaleString()} input including ${report.totalCachedInputTokens.toLocaleString()} cached / ${report.totalOutputTokens.toLocaleString()} output)`,
+      `Fresh-work tokens: ${efficiency.freshWorkTokens.toLocaleString()} (${efficiency.uncachedInputTokens.toLocaleString()} uncached input + ${efficiency.providerOutputTokens.toLocaleString()} output)`,
       comparison,
+      efficiency.tokenVarianceRatio !== undefined
+        ? `Total footprint vs baseline: ${efficiency.tokenVarianceRatio.toFixed(1)}× — context-sensitive, not a direct efficiency ratio`
+        : undefined,
       'Task breakdown:',
       ...report.breakdown.map(
         (b) =>
