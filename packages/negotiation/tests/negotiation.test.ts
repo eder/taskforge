@@ -180,4 +180,101 @@ describe('NegotiationManager', () => {
 
     db.close();
   });
+
+  it('inserts a read-only architecture decision before ambiguous stateful cross-layer mutation', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const eventRepo = new EventRepository(db);
+    const goalRepo = new (await import('@taskforge/persistence')).GoalRepository(db);
+    const runRepo = new (await import('@taskforge/persistence')).RunRepository(db);
+
+    goalRepo.create({
+      id: 'goal-cache-boundary',
+      description: 'Reactive cache for app home',
+      repository: '/tmp',
+    });
+    runRepo.create('run-cache-boundary', 'goal-cache-boundary');
+
+    const task: Task = {
+      id: 'TASK-01',
+      goalId: 'goal-cache-boundary',
+      title: 'Core Implementation',
+      description:
+        'Na tela inicial do app precisamos de uma camada de cache que carregue instantaneamente e seja reativa a eventos, invalidando quando algo novo chega.',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        objective:
+          'Implementar cache reativo para a tela inicial do app com invalidação por evento.',
+        allowedScope: ['*'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Home carrega imediatamente e reage a novos eventos'],
+        dependencies: [],
+        completionMode: 'mutation',
+      },
+      acceptanceCriteria: ['Home carrega imediatamente e reage a novos eventos'],
+      reworkCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const graph = new TaskGraph([task]);
+    const negotiator = new NegotiationManager(undefined, eventRepo, db);
+    const negotiated = await negotiator.negotiateGraph(graph, 'run-cache-boundary');
+
+    const architectureTask = negotiated
+      .getAllTasks()
+      .find((candidate) => candidate.contract.metadata?.architectureBoundaryDecision === true);
+
+    expect(architectureTask).toBeDefined();
+    expect(architectureTask?.type).toBe('architecture');
+    expect(architectureTask?.contract.completionMode).toBe('report');
+    expect(architectureTask?.contract.forbiddenChanges).toContain('*');
+    expect(architectureTask?.status).toBe('accepted');
+
+    const implementation = negotiated.getTask('TASK-01')!;
+    expect(implementation.dependencies).toContain(architectureTask!.id);
+    expect(implementation.contract.dependencies).toContain(architectureTask!.id);
+
+    const events = eventRepo.listByRun('run-cache-boundary');
+    expect(events.some((event) => event.type === 'ARCHITECTURE_BOUNDARY_GATE_INSERTED')).toBe(
+      true,
+    );
+
+    db.close();
+  });
+
+  it('does not add an architecture gate for a narrowly placed cache implementation', async () => {
+    const task: Task = {
+      id: 'TASK-CACHE-BACKEND',
+      goalId: 'goal-cache-backend',
+      title: 'Add backend response cache',
+      description: 'Add Redis cache to the backend API endpoint with a fixed 60 second TTL.',
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        objective: 'Add Redis cache to the backend API endpoint.',
+        allowedScope: ['server/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Endpoint uses Redis cache'],
+        dependencies: [],
+        completionMode: 'mutation',
+      },
+      acceptanceCriteria: ['Endpoint uses Redis cache'],
+      reworkCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const graph = new TaskGraph([task]);
+    const negotiated = await new NegotiationManager().negotiateGraph(graph, 'run-narrow-cache');
+
+    expect(
+      negotiated
+        .getAllTasks()
+        .some((candidate) => candidate.contract.metadata?.architectureBoundaryDecision === true),
+    ).toBe(false);
+    expect(negotiated.getAllTasks()).toHaveLength(1);
+  });
 });
