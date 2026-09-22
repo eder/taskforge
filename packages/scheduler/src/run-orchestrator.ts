@@ -37,6 +37,7 @@ import {
   HeuristicPlanner,
   normalizeGraphForExecutionIntent,
   enforceLightweightReadOnlyPlanInvariant,
+  enforceArchitectureDecisionPlanInvariant,
 } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
 import {
@@ -318,7 +319,7 @@ export class RunOrchestrator {
       goal,
       executionIntent,
     );
-    const graph = invariant.graph;
+    let graph = invariant.graph;
     if (invariant.changed) {
       this.eventRepo.append({
         id: `evt-${randomUUID()}`,
@@ -335,6 +336,31 @@ export class RunOrchestrator {
       });
       options.onProgress?.(
         `Plan invariant enforced: lightweight read-only overview collapsed from ${invariant.originalTaskCount} task(s) to 1 report task.`,
+      );
+    }
+
+    const architectureInvariant = enforceArchitectureDecisionPlanInvariant(
+      graph,
+      goal,
+      executionIntent,
+    );
+    graph = architectureInvariant.graph;
+    if (architectureInvariant.changed) {
+      this.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: architectureInvariant.decisionTaskId,
+        type: 'PLAN_INVARIANT_ENFORCED',
+        payload: {
+          invariant: 'architecture_boundary_decision_before_mutation',
+          decisionTaskId: architectureInvariant.decisionTaskId,
+          insertedTask: architectureInvariant.insertedTask,
+          reason: architectureInvariant.reason,
+        },
+        timestamp: new Date(),
+      });
+      options.onProgress?.(
+        `Plan invariant enforced: architecture boundary decision ${architectureInvariant.insertedTask ? 'inserted' : 'required'} before mutation (${architectureInvariant.decisionTaskId}).`,
       );
     }
 
