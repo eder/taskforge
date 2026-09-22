@@ -430,13 +430,10 @@ export class RunOrchestrator {
             risk: 'high',
             uncertainty: 'medium',
             teamSize: collabReq.requestedRoles.length,
-            roles: collabReq.requestedRoles.map((role: AgentRole, index: number) => ({
+            roles: collabReq.requestedRoles.map((role: AgentRole) => ({
               role,
               requiredCapabilities: role === 'implementer' ? ['canWrite'] : ['canRead'],
-              objective:
-                collabReq.requestedRoles.length > 1
-                  ? `${collabReq.reason || task.contract.objective} [role ${index + 1}: ${role}]`
-                  : collabReq.reason || task.contract.objective,
+              objective: collabReq.reason || task.contract.objective,
             })),
             communication: {
               required: true,
