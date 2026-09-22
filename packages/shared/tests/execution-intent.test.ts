@@ -40,6 +40,14 @@ describe('detectExecutionIntent', () => {
     expect(decision.mutationAllowed).toBe(false);
   });
 
+  it('classifies a Portuguese repository summary request as READ_ONLY_ANALYSIS', () => {
+    const decision = detectExecutionIntent('Resuma esse projeto para mim');
+    expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
+    expect(decision.mutationAllowed).toBe(false);
+    expect(decision.deliveryAllowed).toBe(false);
+    expect(decision.forbiddenChanges).toEqual(['*']);
+  });
+
   it('classifies a plain-language Portuguese analysis request as READ_ONLY_ANALYSIS', () => {
     const decision = detectExecutionIntent('Avalie a arquitetura atual e me diga sua opinião técnica.');
     expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
