@@ -239,7 +239,7 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       });
 
       const report = collector.getOrchestrationEfficiency(runId);
-      expect(report.outcome).toBe('fan_out_not_justified');
+      expect(report.outcome).toBe('inefficient');
       expect(report.retryOrFailoverAssignments).toBe(1);
       expect(report.wastedAssignments).toBe(1);
       expect(report.wastedProviderTokens).toBe(400_000);
