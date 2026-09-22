@@ -63,7 +63,9 @@ export function enforceLightweightReadOnlyPlanInvariant(
     title: 'Explain Project and Architecture',
     description: `Read the current repository and answer the user's overview question: ${goal.description}`,
     type: 'investigation',
-    status: 'proposed',
+    // This guard runs after negotiation in product flows. Preserve the current
+    // lifecycle state rather than rewinding an accepted task back to proposed.
+    status: firstTask?.status ?? 'accepted',
     dependencies: [],
     contract: {
       objective: `Explain the current repository using repository evidence only: ${goal.description}`,
