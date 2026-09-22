@@ -54,6 +54,38 @@ describe('Router and AgentSelector', () => {
     }
   });
 
+  it('keeps a simple read-only repository summary single-agent and low complexity', async () => {
+    const provider = new StaticRoutingProvider();
+    const task: Task = {
+      ...sampleTask,
+      id: 'TASK-SUMMARY',
+      title: 'Investigar e resumir o projeto',
+      description: 'Resuma esse projeto para mim',
+      type: 'investigation',
+      contract: {
+        objective: 'Ler o repositório e produzir um resumo claro do projeto',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        acceptanceCriteria: ['Resumo entregue'],
+        dependencies: [],
+        completionMode: 'report',
+      },
+    };
+
+    const decision = await provider.route({
+      task,
+      availableAgents: ['claude', 'codex', 'agy'],
+    });
+
+    expect(decision.strategy).toBe('single');
+    expect(decision.complexity).toBe('low');
+    expect(decision.risk).toBe('low');
+    expect(decision.teamSize).toBe(1);
+    expect(decision.roles).toHaveLength(1);
+    expect(decision.roles[0].role).toBe('researcher');
+    expect(decision.communication.required).toBe(false);
+  });
+
   it('OpenAIRoutingProvider gracefully falls back to static provider without API key', async () => {
     const provider = new OpenAIRoutingProvider(undefined);
     const decision = await provider.route({
