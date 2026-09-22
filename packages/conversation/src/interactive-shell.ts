@@ -60,7 +60,7 @@ import { SessionRegistry } from '@taskforge/collaboration';
 import { TuiDashboard } from './tui-dashboard.js';
 import { theme, colors } from './theme.js';
 import { TerminalViewport } from './terminal-viewport.js';
-import { SlashMenu } from './slash-menu.js';
+import { SlashMenu, SLASH_COMMANDS } from './slash-menu.js';
 import { LiveTicker } from './live-ticker.js';
 import { StreamViewer } from './stream-viewer.js';
 import { CockpitPanels } from './cockpit-panels.js';
@@ -1646,6 +1646,10 @@ export class InteractiveShell {
       }
 
       case 'general_query': {
+        const commandLines = SLASH_COMMANDS.map(
+          (command) =>
+            `    ${colors.brand}${command.cmd.padEnd(12)}${colors.reset} ${command.desc}`,
+        );
         return [
           `  ${colors.brand}✦ ${colors.bold}TaskForge Control Plane${colors.reset}`,
           `  ${colors.dim}Conversational control plane for autonomous coding-agent teams (Claude, Codex, Antigravity).${colors.reset}`,
@@ -1655,18 +1659,10 @@ export class InteractiveShell {
           `    ${colors.cyan}›${colors.reset} create a JWT authentication endpoint`,
           `    ${colors.cyan}›${colors.reset} refactor API routes adding input validation`,
           '',
-          `  ${colors.bold}Quick Commands:${colors.reset}`,
-          `    ${colors.brand}/agents${colors.reset}   List available agent harnesses and status`,
-          `    ${colors.brand}/health${colors.reset}   Inspect Router, agents, and local database health`,
-          `    ${colors.brand}/tasks${colors.reset}    List active tasks in this run`,
-          `    ${colors.brand}/runs${colors.reset}     List past runs and their git branches`,
-          `    ${colors.brand}/plan${colors.reset}     View current task plan`,
-          `    ${colors.brand}/pending${colors.reset}  View interactions awaiting approval`,
-          `    ${colors.brand}/stream${colors.reset}   Inspect real-time agent output stream`,
-          `    ${colors.brand}/status${colors.reset}   Full TUI dashboard`,
-          `    ${colors.brand}/cost${colors.reset}     Token cost and telemetry report`,
-          `    ${colors.brand}/clean${colors.reset}    Clean temporary worktrees and branches`,
-          `    ${colors.brand}/exit${colors.reset}     Exit session`,
+          `  ${colors.bold}Commands:${colors.reset}`,
+          ...commandLines,
+          '',
+          `  ${colors.dim}Type / to browse the same command catalog interactively.${colors.reset}`,
         ].join('\n');
       }
 
