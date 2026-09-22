@@ -51,19 +51,16 @@ export class StaticRoutingProvider implements RoutingProvider {
             role: 'reproduction_engineer',
             requiredCapabilities: ['canExecute', 'canWrite'],
             objective: 'Reproduce problem and generate minimal failing test or trace',
-            preferredAgent: 'codex',
           },
           {
             role: 'researcher',
             requiredCapabilities: ['canRead'],
             objective: 'Trace flow paths and analyze idempotency/data flow',
-            preferredAgent: 'agy',
           },
           {
             role: 'architecture_reviewer',
             requiredCapabilities: ['canRead', 'canWrite'],
             objective: 'Analyze consistency invariants and recommend architecture fix',
-            preferredAgent: 'claude',
           },
         ],
         communication: {
@@ -87,14 +84,12 @@ export class StaticRoutingProvider implements RoutingProvider {
             role: 'implementer',
             requiredCapabilities: ['canWrite', 'canExecute'],
             objective: input.task.contract.objective,
-            preferredAgent: 'codex',
           },
           {
             role: 'reviewer',
             requiredCapabilities: ['canRead'],
             objective:
               'Independent review of implementation against contract and security constraints',
-            preferredAgent: 'claude',
           },
         ],
         communication: {
