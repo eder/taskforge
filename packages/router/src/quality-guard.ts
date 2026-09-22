@@ -62,11 +62,14 @@ export class RouterQualityGuard {
     const isReadOnly =
       input.task.contract.completionMode === 'report' ||
       input.task.contract.forbiddenChanges?.includes('*');
+    const invariantLightweightReadOnly =
+      input.task.contract.metadata?.lightweightReadOnlyInvariant === true;
     const lightweightReadOnly =
       isReadOnly &&
       input.task.type === 'investigation' &&
-      isLightweightReadOnlyRequest(text) &&
-      !/\b(root cause|reproduce|reproduction|bug|flaky|race|deadlock|incident|failure|security|audit|vulnerab|payment|pagamento|auth|inconsisten|corrupt)\b/i.test(text);
+      (invariantLightweightReadOnly ||
+        (isLightweightReadOnlyRequest(text) &&
+          !/\b(root cause|reproduce|reproduction|bug|flaky|race|deadlock|incident|failure|security|audit|vulnerab|payment|pagamento|auth|inconsisten|corrupt)\b/i.test(text)));
 
     if (lightweightReadOnly) {
       return {
