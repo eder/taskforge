@@ -102,7 +102,7 @@ export interface RunSummaryStats {
 export type OrchestrationEfficiencyOutcome =
   | 'right_sized'
   | 'fan_out_justified'
-  | 'fan_out_not_justified'
+  | 'inefficient'
   | 'inconclusive';
 
 export interface OrchestrationEfficiencyReport {
