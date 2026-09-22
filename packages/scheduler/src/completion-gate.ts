@@ -434,7 +434,9 @@ export class CompletionGate {
         };
       }
     } else if (policy.requirement === 'review_findings_required') {
-      // Review does NOT require git commits, but requires findings or substantive commentary
+      // Review does NOT require git commits, but it is an approval gate rather
+      // than a "produced some text" gate. Critical/major findings must block
+      // the task so downstream delivery cannot become READY TO APPLY.
       const findings = agentResult.findings ?? [];
       const outputText = sanitizeTaskOutput(agentResult.output ?? agentResult.message ?? '').trim();
       if (findings.length === 0 && outputText.length < 20) {
@@ -444,6 +446,32 @@ export class CompletionGate {
           evidence: {
             reviewFindingsCount: 0,
             explanation: `Review task '${task.id}' produced no review findings or analysis report. ${policy.reason}`,
+          },
+        };
+      }
+
+      const blockingFindings = findings.filter(
+        (finding) => finding.severity === 'critical' || finding.severity === 'major',
+      );
+      const explicitRejection =
+        /\b(review\s+rejected|review\s+failed|not\s+approved|do\s+not\s+approve|revis[aã]o\s+reprovada|revis[aã]o\s+rejeitada)\b/i.test(
+          outputText,
+        );
+
+      if (blockingFindings.length > 0 || explicitRejection) {
+        const summary =
+          blockingFindings.length > 0
+            ? blockingFindings
+                .map((finding) => `[${finding.severity.toUpperCase()}] ${finding.description}`)
+                .join('; ')
+            : 'Reviewer explicitly rejected the implementation.';
+        return {
+          accepted: false,
+          failureReason: 'ACCEPTANCE_NOT_MET',
+          evidence: {
+            reviewFindingsCount: findings.length,
+            findings,
+            explanation: `Review task '${task.id}' rejected the implementation: ${summary}`,
           },
         };
       }
@@ -468,6 +496,7 @@ export class CompletionGate {
       filesModified,
       commitsProduced,
       reviewFindingsCount: agentResult.findings?.length,
+      findings: agentResult.findings,
       investigationReportLength: (agentResult.output ?? '').trim().length,
       verificationPassed: ctx.verificationPassed ?? true,
       verificationChecks: ctx.verificationChecks,
