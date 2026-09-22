@@ -57,6 +57,62 @@ describe('AgentQuotaTracker and Quota-Aware Detection', () => {
     expect(tracker.isAvailable('agy')).toBe(false);
   });
 
+  it('hydrates quota state from durable storage across process-like singleton resets', () => {
+    const records = new Map<string, any>();
+    const store = {
+      list: () => Array.from(records.values()),
+      upsert: (record: any) => records.set(record.agentId, { ...record }),
+      delete: (agentId: string) => records.delete(agentId),
+    };
+
+    const first = AgentQuotaTracker.getInstance();
+    first.configureStore(store);
+    first.recordFailure(
+      'agy',
+      'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 34h23m41s.',
+    );
+
+    expect(records.get('agy')?.status).toBe('quota_exhausted');
+    const originalResetAt = records.get('agy')?.resetAt;
+    expect(originalResetAt).toBeGreaterThan(Date.now());
+
+    AgentQuotaTracker.resetInstance();
+    const restarted = AgentQuotaTracker.getInstance();
+    restarted.configureStore(store);
+
+    const status = restarted.getQuotaStatus('agy');
+    expect(status.status).toBe('quota_exhausted');
+    expect(status.resetAt?.getTime()).toBe(originalResetAt);
+    expect(restarted.isAvailable('agy')).toBe(false);
+  });
+
+  it('removes expired durable cooldowns so the next execution can probe recovery', () => {
+    const records = new Map<string, any>([
+      [
+        'agy',
+        {
+          agentId: 'agy',
+          status: 'quota_exhausted',
+          reason: 'old quota',
+          recordedAt: Date.now() - 10_000,
+          resetAt: Date.now() - 100,
+          source: 'runtime',
+        },
+      ],
+    ]);
+    const store = {
+      list: () => Array.from(records.values()),
+      upsert: (record: any) => records.set(record.agentId, { ...record }),
+      delete: (agentId: string) => records.delete(agentId),
+    };
+
+    const tracker = AgentQuotaTracker.getInstance();
+    tracker.configureStore(store);
+
+    expect(tracker.isAvailable('agy')).toBe(true);
+    expect(records.has('agy')).toBe(false);
+  });
+
   it('clears quota exhaustion on recordSuccess', () => {
     const tracker = AgentQuotaTracker.getInstance();
     tracker.setManualStatus('agy', 'quota_exhausted', 'limit hit');

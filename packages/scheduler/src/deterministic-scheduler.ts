@@ -7,7 +7,7 @@ import {
   TaskForgeConfig,
 } from '@taskforge/shared';
 import { TaskGraph, Task, computeTaskPriority } from '@taskforge/core';
-import { AgentRegistry, AgentActivityTracker } from '@taskforge/agents';
+import { AgentRegistry, AgentActivityTracker, AgentQuotaTracker } from '@taskforge/agents';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import {
   AssignmentRepository,
@@ -108,12 +108,13 @@ export class DeterministicScheduler {
     this.completionGate = new CompletionGate(ctx.gitService);
   }
 
-  private resolveAgentId(task: Task): string {
+  private resolveAgentId(task: Task): string | undefined {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
+    const quotaTracker = AgentQuotaTracker.getInstance();
 
     if (this.ctx.preferredAgentMapping && this.ctx.preferredAgentMapping[task.id]) {
       const preferred = this.ctx.preferredAgentMapping[task.id];
-      if (!failed.has(preferred)) {
+      if (!failed.has(preferred) && quotaTracker.isAvailable(preferred)) {
         return preferred;
       }
     }
@@ -121,19 +122,16 @@ export class DeterministicScheduler {
     if (
       configuredAgent &&
       this.ctx.agentRegistry.get(configuredAgent) &&
-      !failed.has(configuredAgent)
+      !failed.has(configuredAgent) &&
+      quotaTracker.isAvailable(configuredAgent)
     ) {
       return configuredAgent;
     }
-    const registered = this.ctx.agentRegistry.list();
-    const available = registered.filter((a) => !failed.has(a.id));
-    if (available.length > 0) {
-      return available[0].id;
-    }
-    if (registered.length > 0) {
-      return registered[0].id;
-    }
-    return 'codex';
+    const available = this.ctx.agentRegistry
+      .list()
+      .filter((agent) => !failed.has(agent.id) && quotaTracker.isAvailable(agent.id));
+
+    return available[0]?.id;
   }
 
   private async resolveTaskBaseCommit(task: Task): Promise<string> {
@@ -201,6 +199,14 @@ export class DeterministicScheduler {
 
       for (const task of candidates) {
         const agentId = this.resolveAgentId(task);
+        if (!agentId) {
+          this.ctx.onProgress?.(
+            `[${task.id}] ✗ No healthy coding agent is currently available; task will not be sent to a known-unavailable provider.`,
+          );
+          graph.updateTaskStatus(task.id, 'failed');
+          this.ctx.taskRepo.updateStatus(task.id, 'failed');
+          continue;
+        }
         if (this.concurrency.canSchedule(agentId)) {
           this.concurrency.acquire(task.id, agentId);
 
@@ -626,7 +632,11 @@ export class DeterministicScheduler {
           return;
         }
 
-        const availableAgents = this.ctx.agentRegistry.list().map((a) => a.id);
+        const quotaTracker = AgentQuotaTracker.getInstance();
+        const availableAgents = this.ctx.agentRegistry
+          .list()
+          .filter((candidate) => quotaTracker.isAvailable(candidate.id))
+          .map((candidate) => candidate.id);
         const candidateAgentId =
           availableAgents.find((id) => id !== agentId) ?? availableAgents[0];
         const candidateAgent = candidateAgentId ? this.ctx.agentRegistry.get(candidateAgentId) : undefined;

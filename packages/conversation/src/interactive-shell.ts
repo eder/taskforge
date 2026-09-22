@@ -16,7 +16,12 @@ import {
   ActiveAgentState,
 } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
-import { AgentRegistry, AgentDetector, AgentActivityTracker } from '@taskforge/agents';
+import {
+  AgentRegistry,
+  AgentDetector,
+  AgentActivityTracker,
+  AgentQuotaTracker,
+} from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
 import { HeuristicPlanner, SemanticPlanner } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
@@ -40,6 +45,7 @@ import {
   TaskRepository,
   AssignmentRepository,
   AuditService,
+  AgentAvailabilityRepository,
 } from '@taskforge/persistence';
 import {
   TelemetryCollector,
@@ -146,6 +152,7 @@ export class InteractiveShell {
     this.sessionRegistry = new SessionRegistry();
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
+    AgentQuotaTracker.getInstance().configureStore(new AgentAvailabilityRepository(this.db));
     this.eventRepo = new EventRepository(this.db);
     this.taskRepo = new TaskRepository(this.db);
     this.assignmentRepo = new AssignmentRepository(this.db);
@@ -1239,9 +1246,10 @@ export class InteractiveShell {
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
 
+        const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
         const routing = await this.router.route({
           task: primaryTask,
-          availableAgents: this.agentRegistry.list().map((a) => a.id),
+          availableAgents: availableAgentIds,
         });
 
         const selected = await this.agentSelector.selectAgents(routing.roles);
@@ -1365,9 +1373,10 @@ export class InteractiveShell {
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
 
+        const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
         const routing = await this.router.route({
           task: primaryTask,
-          availableAgents: this.agentRegistry.list().map((a) => a.id),
+          availableAgents: availableAgentIds,
         });
 
         const selected = await this.agentSelector.selectAgents(routing.roles);

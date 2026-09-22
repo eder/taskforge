@@ -94,6 +94,25 @@ describe('Router and AgentSelector', () => {
     }
   });
 
+  it('listAvailableAgentIds excludes quota-blocked providers before routing', async () => {
+    const { AgentQuotaTracker } = await import('@taskforge/agents');
+    AgentQuotaTracker.resetInstance();
+    const tracker = AgentQuotaTracker.getInstance();
+    tracker.setManualStatus('agy', 'quota_exhausted', 'resets tomorrow', 60);
+
+    const registry = new AgentRegistry(false);
+    registry.register(new FakeAgent('codex', 'Codex CLI'));
+    registry.register(new FakeAgent('agy', 'Google Antigravity'));
+    registry.register(new FakeAgent('claude', 'Claude Code'));
+
+    const selector = new AgentSelector(registry);
+    const available = await selector.listAvailableAgentIds();
+
+    expect(available).toEqual(['codex', 'claude']);
+
+    AgentQuotaTracker.resetInstance();
+  });
+
   it('AgentSelector maps neutral role requests to available registered agents', async () => {
     const registry = new AgentRegistry();
     const agent1 = new FakeAgent('fake-1', 'Fake Researcher');

@@ -754,7 +754,10 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     if (isExecutionSuccessful) {
       AgentQuotaTracker.getInstance().recordSuccess(this.id);
     } else {
-      AgentQuotaTracker.getInstance().recordFailure(this.id, result.stderr || result.stdout);
+      AgentQuotaTracker.getInstance().recordFailure(
+        this.id,
+        [result.stderr, result.stdout].filter(Boolean).join('\n'),
+      );
     }
 
     const { message, completionReason } = this.classifyExecutionFailure(
