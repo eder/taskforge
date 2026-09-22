@@ -350,6 +350,28 @@ export class HeuristicPlanner implements Planner {
       }
     }
 
+    // Heuristic planning is also normalized to the same explicit completion
+    // contract used by semantic plans. CompletionGate should not have to infer
+    // whether a task is expected to mutate the repository.
+    for (const task of tasks) {
+      if (!task.contract.completionMode) {
+        if (task.type === 'implementation' || task.type === 'refactoring') {
+          task.contract.completionMode = 'mutation';
+        } else if (task.type === 'review') {
+          task.contract.completionMode = 'review';
+        } else {
+          task.contract.completionMode = 'report';
+        }
+      }
+
+      if (task.contract.completionMode !== 'mutation') {
+        task.contract.allowedScope = [];
+        task.contract.forbiddenChanges = Array.from(
+          new Set(['*', ...(task.contract.forbiddenChanges ?? [])]),
+        );
+      }
+    }
+
     const graph = new TaskGraph(tasks);
     const plannerMeta: PlannerProvenance = {
       source: 'heuristic_fallback',

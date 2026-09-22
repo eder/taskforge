@@ -5,6 +5,7 @@ import {
   AgentUnavailableError,
   AgentUsage,
   TaskForgeConfig,
+  VerificationResult,
 } from '@taskforge/shared';
 import { TaskGraph, Task, computeTaskPriority } from '@taskforge/core';
 import { AgentRegistry, AgentActivityTracker, AgentQuotaTracker } from '@taskforge/agents';
@@ -382,6 +383,19 @@ export class DeterministicScheduler {
         }
 
         const verifyPath = (res as any).worktreePath ?? this.ctx.repoRoot;
+        let collabCompletionVerification: VerificationResult | undefined;
+        if (task.contract.completionMode === 'verification') {
+          collabCompletionVerification = await verificationRunner.verify({
+            taskId: task.id,
+            runId,
+            worktreePath: verifyPath,
+            config,
+            taskType: task.type,
+            explicitCommands: task.contract.verification?.commands ?? [],
+            expectation: task.contract.verification?.expectation ?? 'pass',
+          });
+        }
+
         const collabGate = await this.completionGate.evaluate({
           task,
           agentResult: {
@@ -395,6 +409,8 @@ export class DeterministicScheduler {
           resultingCommit: res.commitHash,
           worktreePath: verifyPath,
           gitService: this.ctx.gitService,
+          verificationPassed: collabCompletionVerification?.passed,
+          verificationChecks: collabCompletionVerification?.checks,
         });
 
         if (!collabGate.accepted) {
@@ -452,13 +468,15 @@ export class DeterministicScheduler {
         this.ctx.activityTracker?.updateStatus(collabAsgnId, 'Running automated verification checks...');
         this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
 
-        const verResult = await verificationRunner.verify({
-          taskId: task.id,
-          runId,
-          worktreePath: verifyPath,
-          config,
-          taskType: task.type,
-        });
+        const verResult =
+          collabCompletionVerification ??
+          (await verificationRunner.verify({
+            taskId: task.id,
+            runId,
+            worktreePath: verifyPath,
+            config,
+            taskType: task.type,
+          }));
 
 
         if (!verResult.passed) {
@@ -817,6 +835,19 @@ export class DeterministicScheduler {
       return;
     }
 
+    let completionVerification: VerificationResult | undefined;
+    if (task.contract.completionMode === 'verification') {
+      completionVerification = await verificationRunner.verify({
+        taskId: task.id,
+        runId,
+        worktreePath: wt.path,
+        config,
+        taskType: task.type,
+        explicitCommands: task.contract.verification?.commands ?? [],
+        expectation: task.contract.verification?.expectation ?? 'pass',
+      });
+    }
+
     const gateResult = await this.completionGate.evaluate({
       task,
       assignment,
@@ -836,6 +867,8 @@ export class DeterministicScheduler {
       resultingCommit: agentResult.commitHash,
       worktreePath: wt.path,
       gitService: this.ctx.gitService,
+      verificationPassed: completionVerification?.passed,
+      verificationChecks: completionVerification?.checks,
     });
 
     if (!gateResult.accepted) {
@@ -950,13 +983,15 @@ export class DeterministicScheduler {
       this.ctx.activityTracker?.updateStatus(assignmentId, 'Running automated verification checks...');
       this.ctx.onProgress?.(`[${task.id}] Running verification checks...`);
 
-      const verResult = await verificationRunner.verify({
-        taskId: task.id,
-        runId,
-        worktreePath: wt.path,
-        config,
-        taskType: task.type,
-      });
+      const verResult =
+        completionVerification ??
+        (await verificationRunner.verify({
+          taskId: task.id,
+          runId,
+          worktreePath: wt.path,
+          config,
+          taskType: task.type,
+        }));
 
       if (!verResult.passed) {
         eventRepo.append({
