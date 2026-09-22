@@ -227,7 +227,7 @@ export class AgentQuotaTracker {
       agentId,
       status,
       reason: reason ?? (status === 'quota_exhausted' ? 'quota limit reached' : 'rate limited'),
-      recordedAt: observedAt,
+      recordedAt: Date.now(),
       resetAt: status === 'auth_failed' ? undefined : Date.now() + cooldownMinutes * 60 * 1000,
       source: 'manual',
     });
