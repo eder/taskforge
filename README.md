@@ -276,6 +276,16 @@ Planner and Router output are advisory for this path. If a model over-decomposes
 
 ### Staffing
 
+TaskForge is not a multi-agent demo. Its product objective is to improve engineering outcomes by using the minimum useful set of agents.
+
+For every plan, fan-out should earn its cost through at least one measurable benefit:
+
+- lower wall-clock time through genuinely parallel, non-overlapping work;
+- lower total token consumption through narrower per-agent context and less duplicated reading;
+- higher quality through independent verification, complementary specialization, or explicit uncertainty reduction.
+
+If adding an agent cannot plausibly improve one of those dimensions, the correct team size is one. Duplicate repository reading, redundant summaries, and review-without-risk are orchestration failures, not collaboration.
+
 The router recommends the minimum useful team for a task:
 
 - single-agent implementation;
