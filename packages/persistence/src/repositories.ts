@@ -62,6 +62,13 @@ export interface AssignmentRecord {
   updatedAt: string;
 }
 
+export interface AgentSelectionStats {
+  agentId: string;
+  totalAssignments: number;
+  roleAssignments: number;
+  lastAssignedAt?: string;
+}
+
 export interface ExecutionRecord {
   id: string;
   runId: string;
@@ -553,6 +560,32 @@ export class AssignmentRepository {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
+  }
+
+  getAgentSelectionStats(agentId: string, role: string): AgentSelectionStats {
+    const row = this.db
+      .prepare(
+        `SELECT
+          COUNT(*) as total_assignments,
+          COALESCE(SUM(CASE WHEN role = ? THEN 1 ELSE 0 END), 0) as role_assignments,
+          MAX(created_at) as last_assigned_at
+         FROM assignments
+         WHERE agent_id = ?`,
+      )
+      .get(role, agentId) as
+      | {
+          total_assignments?: number;
+          role_assignments?: number;
+          last_assigned_at?: string | null;
+        }
+      | undefined;
+
+    return {
+      agentId,
+      totalAssignments: Number(row?.total_assignments ?? 0),
+      roleAssignments: Number(row?.role_assignments ?? 0),
+      lastAssignedAt: row?.last_assigned_at ?? undefined,
+    };
   }
 
   get(id: string): AssignmentRecord | undefined {
