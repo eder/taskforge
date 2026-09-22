@@ -132,6 +132,6 @@ describe('SlashMenu', () => {
     expect(menu.matches.length).toBe(1);
     expect(menu.matches[0].cmd).toBe('/health');
     expect(res.autoCompleted).toBe('/health');
-    expect(menu.matches[0].desc).toContain('health and status');
+    expect(menu.matches[0].desc).toContain('Router');
   });
 });
