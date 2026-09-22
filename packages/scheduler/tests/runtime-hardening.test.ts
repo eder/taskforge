@@ -834,7 +834,163 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     db.close();
   });
 
-  it('12. Emergent collaboration validates proposal against maxAgentsPerTask limit', async () => {
+  it('12. production invariant: project overview stays one read-only assignment despite planner/router/collaboration overreach', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const registry = new AgentRegistry(false);
+    const executionCounts = new Map<string, number>();
+
+    const makeOverviewAgent = (id: string, name: string): AgentAdapter => ({
+      id,
+      name,
+      detect: async () => true,
+      capabilities: async () => ({
+        canRead: true,
+        canWrite: true,
+        canExecute: true,
+        languages: [],
+        tools: [],
+      }),
+      execute: async () => {
+        executionCounts.set(id, (executionCounts.get(id) ?? 0) + 1);
+        return {
+          success: true,
+          message: 'Repository overview completed',
+          output:
+            'This repository is a current-codebase overview produced from files in the isolated read-only workspace.',
+          durationMs: 10,
+          collaborationProposal: {
+            reason: 'I would like another reviewer',
+            requestedRoles: ['reviewer'],
+          },
+        };
+      },
+    });
+
+    registry.register(makeOverviewAgent('claude', 'Claude Code'));
+    registry.register(makeOverviewAgent('codex', 'Codex CLI'));
+    registry.register(makeOverviewAgent('agy', 'Google Antigravity'));
+
+    const overstaffingRouter: RoutingProvider = {
+      id: 'overstaffing-router',
+      route: async () => ({
+        strategy: 'parallel',
+        source: 'openai',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'high',
+        teamSize: 3,
+        roles: [
+          {
+            role: 'reproduction_engineer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Inspect structure',
+          },
+          { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Read docs' },
+          {
+            role: 'architecture_reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Review architecture',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Deliberately bad router proposal for regression coverage',
+      }),
+    };
+
+    const graph = new TaskGraph();
+    for (let i = 1; i <= 4; i++) {
+      const id = `TASK-0${i}`;
+      graph.addTask({
+        id,
+        goalId: 'goal-overview',
+        title: `Over-decomposed task ${i}`,
+        description: 'Unnecessarily split project overview work',
+        type: i === 4 ? 'review' : 'investigation',
+        status: 'proposed',
+        dependencies: [],
+        contract: {
+          taskId: id,
+          objective: 'Inspect one slice of the repository',
+          allowedScope: i === 1 ? ['*'] : [],
+          forbiddenChanges: i === 1 ? [] : ['*'],
+          acceptanceCriteria: ['Return findings'],
+          completionMode: i === 4 ? 'review' : 'report',
+          dependencies: [],
+          metadata: {
+            recommendCollaboration: true,
+            collaboration: {
+              requestedRoles: ['researcher', 'architecture_reviewer'],
+              reason: 'Over-decomposed planner requested collaboration',
+            },
+          },
+        },
+        acceptanceCriteria: ['Return findings'],
+        reworkCount: 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    const config = getDefaultConfig();
+    config.verification.tests = true;
+    config.verification.lint = true;
+    config.verification.typecheck = true;
+
+    const progressLogs: string[] = [];
+    const orchestrator = new RunOrchestrator({
+      repoRoot: testRepoRoot,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router: overstaffingRouter,
+      gitService,
+      worktreeManager,
+    });
+
+    const result = await orchestrator.run('O que é esse projeto?', {
+      preplannedGraph: graph,
+      onProgress: (message) => progressLogs.push(message),
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.executionIntent.intent).toBe('READ_ONLY_ANALYSIS');
+    expect(result.executionIntent.mutationAllowed).toBe(false);
+    expect(result.graph.getAllTasks()).toHaveLength(1);
+
+    const task = result.graph.getAllTasks()[0];
+    expect(task.type).toBe('investigation');
+    expect(task.contract.completionMode).toBe('report');
+    expect(task.contract.allowedScope).toEqual([]);
+    expect(task.contract.forbiddenChanges).toEqual(['*']);
+    expect(task.contract.metadata?.lightweightReadOnlyInvariant).toBe(true);
+
+    const assignments = new AssignmentRepository(db).listByRun(result.runId);
+    expect(assignments).toHaveLength(1);
+    expect(Array.from(executionCounts.values()).reduce((sum, count) => sum + count, 0)).toBe(1);
+
+    const events = new EventRepository(db).listByRun(result.runId);
+    expect(events.some((event) => event.type === 'PLAN_INVARIANT_ENFORCED')).toBe(true);
+    expect(events.some((event) => event.type === 'COLLABORATION_APPROVED')).toBe(false);
+    expect(events.some((event) => event.type === 'COLLABORATION_REJECTED')).toBe(true);
+
+    expect(progressLogs.some((line) => line.includes('Running verification checks'))).toBe(false);
+    expect(
+      progressLogs.some((line) =>
+        line.includes('Read-only report accepted; automated repository verification not applicable'),
+      ),
+    ).toBe(true);
+    expect(progressLogs.some((line) => line.includes('Execution intent: READ_ONLY_ANALYSIS'))).toBe(
+      true,
+    );
+
+    db.close();
+  });
+
+  it('13. Emergent collaboration validates proposal against maxAgentsPerTask limit', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
 
@@ -949,7 +1105,7 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     db.close();
   });
 
-  it('13. Emergent collaboration is rejected when maxAgentsPerTask limit is reached', async () => {
+  it('14. Emergent collaboration is rejected when maxAgentsPerTask limit is reached', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
 
@@ -1017,7 +1173,7 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     db.close();
   });
 
-  it('14. skips a provider that became quota-exhausted after routing but before execution', async () => {
+  it('15. skips a provider that became quota-exhausted after routing but before execution', async () => {
     AgentQuotaTracker.resetInstance();
     const tracker = AgentQuotaTracker.getInstance();
 
@@ -1117,7 +1273,7 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     AgentQuotaTracker.resetInstance();
   });
 
-  it('15. Structured JSON output from reviewer model is automatically parsed into findings with file:line references', async () => {
+  it('16. Structured JSON output from reviewer model is automatically parsed into findings with file:line references', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
 
