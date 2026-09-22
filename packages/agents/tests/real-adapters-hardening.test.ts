@@ -231,6 +231,7 @@ describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
   it('detects fallback interactive terminal prompts and answers', async () => {
     const receivedEvents: AgentRuntimeEvent[] = [];
     const session = new RealCliAgentSession('sess-4', 'asgn-4', {
+      rawTerminalPromptFallback: true,
       onEvent: (event) => receivedEvents.push(event),
     });
 
@@ -254,6 +255,64 @@ describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
     }
 
     expect(written).toContain('n\n');
+  });
+
+  it('does not mistake grep/source output containing prompt text for a real interaction', () => {
+    const receivedEvents: AgentRuntimeEvent[] = [];
+    const session = new RealCliAgentSession('sess-grep', 'asgn-grep', {
+      onEvent: (event) => receivedEvents.push(event),
+    });
+
+    session.handleOutputChunk(
+      [
+        "packages/conversation/tests/shell.test.ts:95:    expect(goalReply).toContain('Do you want me to execute?');",
+        "packages/planner/tests/foo.test.ts:120:    const prompt = 'Do you want to run migration? (y/n)';",
+      ].join('\n'),
+      'stdout',
+    );
+
+    expect(receivedEvents).toEqual([]);
+  });
+
+  it('does not inspect raw Codex output for interactions when provider-native protocol is in use', async () => {
+    const receivedEvents: AgentRuntimeEvent[] = [];
+    const codex = new CodexAdapter();
+    const assignment: AgentAssignment = {
+      id: 'asgn-codex-output',
+      taskId: 'TASK-CODEX',
+      agentId: 'codex',
+      role: 'researcher',
+      objective: 'Inspect the repository',
+      status: 'running',
+    };
+    const context: AgentContext = {
+      worktreePath: '/tmp/taskforge-codex',
+      assignment,
+      task: {
+        objective: assignment.objective,
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        acceptanceCriteria: ['Return findings'],
+        dependencies: [],
+      },
+      mutationAllowed: false,
+      onEvent: async (event) => {
+        receivedEvents.push(event);
+      },
+    };
+
+    const session = (await codex.createSession(
+      assignment,
+      context,
+    )) as RealCliAgentSession;
+
+    // Even a line that looks exactly like a terminal prompt must not become an
+    // ACTION REQUIRED request for Codex: Codex runs with provider-native
+    // interaction semantics and close-after-spawn stdin.
+    session.handleOutputChunk('Do you want to run migration on production? (y/n)\n', 'stdout');
+
+    expect(receivedEvents).toEqual([]);
+    codex.releaseSession(assignment.id);
   });
 
   it('cancels running process cleanly with SIGTERM', async () => {
@@ -299,7 +358,8 @@ describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
     });
 
     const session = new RealCliAgentSession('sess-e2e-1', 'asgn-e2e-1', {
-      adapterId: 'claude',
+      adapterId: 'legacy-cli',
+      rawTerminalPromptFallback: true,
       onEvent: async (ev) => {
         await gateway.handleEvent(ev, session, {
           runId: 'run-e2e',

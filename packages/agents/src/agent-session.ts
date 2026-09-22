@@ -110,6 +110,13 @@ export interface RealCliSessionOptions {
   adapterName?: string;
   taskId?: string;
   onEvent?: (event: AgentRuntimeEvent) => void | Promise<void>;
+  /**
+   * Legacy escape hatch for CLIs that do not expose structured interaction
+   * events. Supported TaskForge adapters use structured/provider-native
+   * protocols and explicitly disable this heuristic so command/search output
+   * can never be mistaken for a human prompt.
+   */
+  rawTerminalPromptFallback?: boolean;
 }
 
 export class RealCliAgentSession implements AgentSession {
@@ -281,8 +288,12 @@ export class RealCliAgentSession implements AgentSession {
         } catch {
           // ignore json parse error
         }
-      } else {
-        // 2. Fallback terminal prompt detection for interactive CLI queries
+      } else if (this.options?.rawTerminalPromptFallback !== false) {
+        // 2. Legacy fallback terminal-prompt detection. Real TaskForge
+        // adapters with structured/provider-native interaction protocols
+        // disable this path explicitly; otherwise arbitrary command output
+        // (grep/rg/test logs containing prompt-like strings) could create a
+        // fake ACTION REQUIRED interaction.
         this.detectTerminalPrompt(trimmed);
       }
     }
@@ -325,11 +336,20 @@ export class RealCliAgentSession implements AgentSession {
     const stripped = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
     if (!stripped) return;
 
-    if (
-      /\((?:y\/n|yes\/no|y\/N)\)/i.test(stripped) ||
-      /(?:approve|proceed|allow|execute|confirm)\s*\?/i.test(stripped) ||
-      /Do you want to (?:proceed|continue|run)/i.test(stripped)
-    ) {
+    // Raw fallback detection must be intentionally high-confidence. It is
+    // designed only for a real terminal question from a legacy CLI, not for
+    // source code, grep output, test snapshots, logs, or escaped command
+    // output that merely contains prompt-like text.
+    if (stripped.length > 512 || stripped.includes('\\n') || /:\d+(?::\d+)?:/.test(stripped)) {
+      return;
+    }
+
+    const looksLikePrompt =
+      /^(?:do you want to (?:proceed|continue|run|execute|allow)\b.{0,320}|(?:approve|proceed|allow|execute|confirm)\b.{0,320}\?|.{0,320}\((?:y\/n|yes\/no|y\/N|Y\/n)\))\s*$/i.test(
+        stripped,
+      );
+
+    if (looksLikePrompt) {
       if (this.pendingRequestId) return;
       const reqId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       this.pendingRequestId = reqId;
