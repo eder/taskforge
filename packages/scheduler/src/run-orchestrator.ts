@@ -21,9 +21,16 @@ import {
   VerificationRepository,
   WorkspaceRepository,
   InteractionRepository,
+  AgentAvailabilityRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
-import { AgentRegistry, AgentDetector, FakeAgent, AgentActivityTracker } from '@taskforge/agents';
+import {
+  AgentRegistry,
+  AgentDetector,
+  FakeAgent,
+  AgentActivityTracker,
+  AgentQuotaTracker,
+} from '@taskforge/agents';
 import { TaskGraph, Goal, Task } from '@taskforge/core';
 import { HeuristicPlanner, normalizeGraphForExecutionIntent } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
@@ -169,6 +176,7 @@ export class RunOrchestrator {
     this.streamBus = options.streamBus;
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
+    AgentQuotaTracker.getInstance().configureStore(new AgentAvailabilityRepository(this.db));
 
     this.runRepo = new RunRepository(this.db);
     this.goalRepo = new GoalRepository(this.db);
@@ -394,7 +402,7 @@ export class RunOrchestrator {
         } else {
           routing = await this.router.route({
             task,
-            availableAgents: this.agentRegistry.list().map((a) => a.id),
+            availableAgents: await this.agentSelector.listAvailableAgentIds(),
           });
         }
 
