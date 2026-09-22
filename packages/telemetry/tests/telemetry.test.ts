@@ -76,6 +76,182 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(statsReport).toContain('2/2 completed');
     });
 
+    it('classifies a clean single-agent first-pass run as RIGHT-SIZED', () => {
+      const collector = new TelemetryCollector(db);
+      const runId = 'run-right-sized';
+      const started = '2026-09-22T12:00:00.000Z';
+      const finished = '2026-09-22T12:00:10.000Z';
+
+      db.prepare(`INSERT INTO runs (id, status, created_at, completed_at) VALUES (?, 'completed', ?, ?)`)
+        .run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at)
+         VALUES ('TASK-01', ?, 'Overview', 'Explain repo', 'investigation', 'integrated', 0, ?, ?)`,
+      ).run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO assignments (id, task_id, run_id, agent_id, role, objective, status, created_at, updated_at)
+         VALUES ('ASGN-01', 'TASK-01', ?, 'codex', 'researcher', 'Explain repo', 'completed', ?, ?)`,
+      ).run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO executions (id, run_id, task_id, assignment_id, agent_id, started_at, finished_at, exit_code, status)
+         VALUES ('EXEC-01', ?, 'TASK-01', 'ASGN-01', 'codex', ?, ?, 0, 'success')`,
+      ).run(runId, started, finished);
+
+      collector.recordTaskTokens({
+        runId,
+        taskId: 'TASK-01',
+        assignmentId: 'ASGN-01',
+        agentId: 'codex',
+        role: 'researcher',
+        modelName: 'gpt-codex-test',
+        inputTokens: 10_000,
+        outputTokens: 500,
+        totalTokens: 10_500,
+        plannedEstimatedTokens: 9_000,
+      });
+
+      const report = collector.getOrchestrationEfficiency(runId);
+      expect(report.outcome).toBe('right_sized');
+      expect(report.assignmentCount).toBe(1);
+      expect(report.usefulAssignments).toBe(1);
+      expect(report.wastedAssignments).toBe(0);
+      expect(report.multiAgent).toBe(false);
+      expect(report.firstPassRate).toBe(1);
+    });
+
+    it('classifies real parallel specialist work as FAN-OUT JUSTIFIED', () => {
+      const collector = new TelemetryCollector(db);
+      const runId = 'run-justified-fanout';
+      const base = '2026-09-22T12:00:00.000Z';
+
+      db.prepare(`INSERT INTO runs (id, status, created_at, completed_at) VALUES (?, 'completed', ?, ?)`)
+        .run(runId, base, '2026-09-22T12:00:12.000Z');
+
+      for (const [taskId, role, agent] of [
+        ['TASK-A', 'implementer', 'codex'],
+        ['TASK-B', 'architecture_reviewer', 'claude'],
+      ] as const) {
+        db.prepare(
+          `INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at)
+           VALUES (?, ?, 'Task', 'Desc', 'implementation', 'integrated', 0, ?, ?)`,
+        ).run(taskId, runId, base, '2026-09-22T12:00:12.000Z');
+        db.prepare(
+          `INSERT INTO assignments (id, task_id, run_id, agent_id, role, objective, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'Distinct objective', 'completed', ?, ?)`,
+        ).run(`ASGN-${taskId}`, taskId, runId, agent, role, base, '2026-09-22T12:00:12.000Z');
+      }
+
+      db.prepare(
+        `INSERT INTO executions (id, run_id, task_id, assignment_id, agent_id, started_at, finished_at, exit_code, status)
+         VALUES ('EXEC-A', ?, 'TASK-A', 'ASGN-TASK-A', 'codex', ?, ?, 0, 'success')`,
+      ).run(runId, '2026-09-22T12:00:00.000Z', '2026-09-22T12:00:10.000Z');
+      db.prepare(
+        `INSERT INTO executions (id, run_id, task_id, assignment_id, agent_id, started_at, finished_at, exit_code, status)
+         VALUES ('EXEC-B', ?, 'TASK-B', 'ASGN-TASK-B', 'claude', ?, ?, 0, 'success')`,
+      ).run(runId, '2026-09-22T12:00:02.000Z', '2026-09-22T12:00:12.000Z');
+
+      for (const [taskId, assignmentId, agentId, role] of [
+        ['TASK-A', 'ASGN-TASK-A', 'codex', 'implementer'],
+        ['TASK-B', 'ASGN-TASK-B', 'claude', 'architecture_reviewer'],
+      ]) {
+        collector.recordTaskTokens({
+          runId,
+          taskId,
+          assignmentId,
+          agentId,
+          role,
+          modelName: agentId,
+          inputTokens: 10_000,
+          outputTokens: 1_000,
+          totalTokens: 11_000,
+          plannedEstimatedTokens: 10_000,
+        });
+      }
+
+      const report = collector.getOrchestrationEfficiency(runId);
+      expect(report.outcome).toBe('fan_out_justified');
+      expect(report.multiAgent).toBe(true);
+      expect(report.timeBenefitObserved).toBe(true);
+      expect(report.qualityGuardSignalObserved).toBe(true);
+      expect(report.observedParallelOverlapMs).toBe(8_000);
+      expect(report.parallelismFactor).toBeGreaterThan(1.5);
+      expect(report.wastedAssignments).toBe(0);
+    });
+
+    it('classifies false failover with wasted provider tokens as INEFFICIENT', () => {
+      const collector = new TelemetryCollector(db);
+      const runId = 'run-false-failover';
+      const created = '2026-09-22T12:00:00.000Z';
+
+      db.prepare(`INSERT INTO runs (id, status, created_at, completed_at) VALUES (?, 'completed', ?, ?)`)
+        .run(runId, created, '2026-09-22T12:00:30.000Z');
+      db.prepare(
+        `INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at)
+         VALUES ('TASK-01', ?, 'Overview', 'Explain repo', 'investigation', 'integrated', 1, ?, ?)`,
+      ).run(runId, created, '2026-09-22T12:00:30.000Z');
+
+      db.prepare(
+        `INSERT INTO assignments (id, task_id, run_id, agent_id, role, objective, status, completion_reason, created_at, updated_at)
+         VALUES ('ASGN-CODEX', 'TASK-01', ?, 'codex', 'researcher', 'Explain repo', 'failed', 'EMPTY_PROVIDER_RESULT', ?, ?)`,
+      ).run(runId, created, '2026-09-22T12:00:20.000Z');
+      db.prepare(
+        `INSERT INTO assignments (id, task_id, run_id, agent_id, role, objective, status, created_at, updated_at)
+         VALUES ('ASGN-CLAUDE', 'TASK-01', ?, 'claude', 'researcher', 'Explain repo', 'completed', ?, ?)`,
+      ).run(runId, '2026-09-22T12:00:20.000Z', '2026-09-22T12:00:30.000Z');
+
+      db.prepare(
+        `INSERT INTO executions (id, run_id, task_id, assignment_id, agent_id, started_at, finished_at, exit_code, status)
+         VALUES ('EXEC-CODEX', ?, 'TASK-01', 'ASGN-CODEX', 'codex', ?, ?, 0, 'success')`,
+      ).run(runId, created, '2026-09-22T12:00:20.000Z');
+      db.prepare(
+        `INSERT INTO executions (id, run_id, task_id, assignment_id, agent_id, started_at, finished_at, exit_code, status)
+         VALUES ('EXEC-CLAUDE', ?, 'TASK-01', 'ASGN-CLAUDE', 'claude', ?, ?, 0, 'success')`,
+      ).run(runId, '2026-09-22T12:00:20.000Z', '2026-09-22T12:00:30.000Z');
+
+      db.prepare(
+        `INSERT INTO events (id, run_id, task_id, type, payload_json, timestamp)
+         VALUES ('EVT-REJECT', ?, 'TASK-01', 'COMPLETION_GATE_REJECTED', ?, ?)`,
+      ).run(runId, JSON.stringify({ failureReason: 'EMPTY_PROVIDER_RESULT' }), '2026-09-22T12:00:20.000Z');
+
+      collector.recordTaskTokens({
+        runId,
+        taskId: 'TASK-01',
+        assignmentId: 'ASGN-CODEX',
+        agentId: 'codex',
+        role: 'researcher',
+        modelName: 'codex',
+        inputTokens: 390_000,
+        outputTokens: 10_000,
+        totalTokens: 400_000,
+        plannedEstimatedTokens: 7_000,
+      });
+      collector.recordTaskTokens({
+        runId,
+        taskId: 'TASK-01',
+        assignmentId: 'ASGN-CLAUDE',
+        agentId: 'claude',
+        role: 'researcher',
+        modelName: 'claude',
+        inputTokens: 55_000,
+        outputTokens: 3_000,
+        totalTokens: 58_000,
+        plannedEstimatedTokens: 7_000,
+      });
+
+      const report = collector.getOrchestrationEfficiency(runId);
+      expect(report.outcome).toBe('fan_out_not_justified');
+      expect(report.retryOrFailoverAssignments).toBe(1);
+      expect(report.wastedAssignments).toBe(1);
+      expect(report.wastedProviderTokens).toBe(400_000);
+      expect(report.wastedTokenRatio).toBeGreaterThan(0.8);
+      expect(report.completionGateRejections).toBe(1);
+      expect(report.reworkCount).toBe(1);
+
+      const formatted = collector.formatOrchestrationEfficiencyReport(runId);
+      expect(formatted).toContain('Outcome: INEFFICIENT');
+      expect(formatted).toContain('400,000 wasted');
+    });
+
     it('extracts and surfaces staffing bottleneck metrics', () => {
       const collector = new TelemetryCollector(db);
       const runId = 'run-staffing-metrics';
