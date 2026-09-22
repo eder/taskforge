@@ -90,13 +90,21 @@ export class TelemetryCollector {
     tasksFailed: number;
     reworkCount: number;
     escalationsCount: number;
+    firstPassRate?: number;
   }): RunSummaryStats {
     const costTotals = this.costRepo.getTotalCostByRun(metrics.runId);
     const totalCostUsd = metrics.totalCostUsd ?? costTotals.totalCostUsd;
 
-    const firstPassCount = Math.max(0, metrics.tasksCompleted - metrics.reworkCount);
     const firstPassRate =
-      metrics.tasksCount > 0 ? Number((firstPassCount / metrics.tasksCount).toFixed(3)) : 1.0;
+      metrics.firstPassRate ??
+      (metrics.tasksCount > 0
+        ? Number(
+            (
+              Math.max(0, metrics.tasksCompleted - Math.min(metrics.tasksCompleted, metrics.reworkCount)) /
+              metrics.tasksCount
+            ).toFixed(3),
+          )
+        : 1.0);
 
     this.metricsRepo.save({
       id: `rm-${randomUUID()}`,
@@ -307,7 +315,7 @@ export class TelemetryCollector {
       `Run Metrics - ${runId}`,
       `  Duration: ${durationSec}s`,
       `  Tasks: ${summary.tasksCompleted}/${summary.tasksCount} completed (${summary.tasksFailed} failed)`,
-      `  First-pass verification rate: ${passPct}%`,
+      `  First-pass completion rate: ${passPct}%`,
       `  Rework cycles: ${summary.reworkCount}`,
       `  Collaboration escalations: ${summary.escalationsCount}`,
       `  Total cost: $${summary.totalCostUsd.toFixed(4)} USD`,
