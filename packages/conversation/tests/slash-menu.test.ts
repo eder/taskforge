@@ -97,7 +97,7 @@ describe('SlashMenu', () => {
 
     menu.update('/exit');
     const item = menu.getSelected();
-    expect(item?.desc).toContain('Exit interactive session');
+    expect(item?.desc).toContain('Exit the interactive session');
   });
 
   it('exposes operational commands that were previously hidden from the slash menu', () => {
