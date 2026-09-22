@@ -977,12 +977,16 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     expect(events.some((event) => event.type === 'COLLABORATION_APPROVED')).toBe(false);
     expect(events.some((event) => event.type === 'COLLABORATION_REJECTED')).toBe(true);
 
+    expect(progressLogs.some((line) => line.includes('Scheduling 1 read-only task...'))).toBe(true);
+    expect(progressLogs.some((line) => line.includes('across worktrees'))).toBe(false);
     expect(progressLogs.some((line) => line.includes('Running verification checks'))).toBe(false);
     expect(
       progressLogs.some((line) =>
         line.includes('Read-only report accepted; automated repository verification not applicable'),
       ),
     ).toBe(true);
+    expect(progressLogs.some((line) => line.includes('Report completion validated ✓'))).toBe(true);
+    expect(progressLogs.some((line) => line.includes('Verified successfully ✓'))).toBe(false);
     expect(progressLogs.some((line) => line.includes('Execution intent: READ_ONLY_ANALYSIS'))).toBe(
       true,
     );
