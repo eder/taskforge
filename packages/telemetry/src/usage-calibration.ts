@@ -45,7 +45,7 @@ export class UsageCalibrationEngine {
     }
 
     const sql =
-      'SELECT c.total_tokens, c.planned_estimated_tokens ' +
+      'SELECT c.agent_id, c.input_tokens, c.cached_input_tokens, c.output_tokens, c.total_tokens, c.planned_estimated_tokens ' +
       'FROM cost_tracking c ' +
       'JOIN tasks t ON t.id = c.task_id ' +
       'WHERE ' +
@@ -53,12 +53,31 @@ export class UsageCalibrationEngine {
       ' ORDER BY c.created_at ASC';
 
     const rows = this.db.prepare(sql).all(...params) as Array<{
+      agent_id: string;
+      input_tokens: number;
+      cached_input_tokens: number;
+      output_tokens: number;
       total_tokens: number;
       planned_estimated_tokens: number;
     }>;
 
     const ratios = rows
-      .map((row) => row.total_tokens / row.planned_estimated_tokens)
+      .map((row) => {
+        // Calibrate the planning baseline against fresh provider work, not the
+        // full cached context footprint. New records normalize cached input as
+        // a subset of input. Legacy Claude rows stored cache categories
+        // separately, which can be detected because total == input+cache+output.
+        const legacyClaudeAdditiveCache =
+          row.agent_id === 'claude' &&
+          row.cached_input_tokens > 0 &&
+          row.total_tokens ===
+            row.input_tokens + row.cached_input_tokens + row.output_tokens;
+        const uncachedInput = legacyClaudeAdditiveCache
+          ? row.input_tokens
+          : Math.max(0, row.input_tokens - row.cached_input_tokens);
+        const freshWorkTokens = uncachedInput + row.output_tokens;
+        return freshWorkTokens / row.planned_estimated_tokens;
+      })
       .filter((ratio) => Number.isFinite(ratio) && ratio > 0)
       .sort((a, b) => a - b);
 

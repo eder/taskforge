@@ -982,8 +982,7 @@ export class CostRepository {
     const inputTokens = item.inputTokens ?? 0;
     const cachedInputTokens = item.cachedInputTokens ?? 0;
     const outputTokens = item.outputTokens ?? 0;
-    const totalTokens =
-      item.totalTokens ?? inputTokens + cachedInputTokens + outputTokens;
+    const totalTokens = item.totalTokens ?? inputTokens + outputTokens;
     const usageSource = item.usageSource ?? 'provider_reported';
     const plannedEstimatedTokens = item.plannedEstimatedTokens ?? 0;
     const estimatedCostUsd = item.estimatedCostUsd ?? 0.0;
@@ -1065,8 +1064,7 @@ export class CostRepository {
       inputTokens: r.input_tokens,
       cachedInputTokens: r.cached_input_tokens ?? 0,
       outputTokens: r.output_tokens,
-      totalTokens:
-        r.total_tokens || r.input_tokens + (r.cached_input_tokens ?? 0) + r.output_tokens,
+      totalTokens: r.total_tokens || r.input_tokens + r.output_tokens,
       usageSource: r.usage_source ?? 'provider_reported',
       plannedEstimatedTokens: r.planned_estimated_tokens ?? 0,
       estimatedCostUsd: r.estimated_cost_usd,
@@ -1089,7 +1087,7 @@ export class CostRepository {
           COALESCE(SUM(input_tokens), 0) as total_input,
           COALESCE(SUM(cached_input_tokens), 0) as total_cached_input,
           COALESCE(SUM(output_tokens), 0) as total_output,
-          COALESCE(SUM(CASE WHEN total_tokens > 0 THEN total_tokens ELSE input_tokens + cached_input_tokens + output_tokens END), 0) as total_tokens,
+          COALESCE(SUM(CASE WHEN total_tokens > 0 THEN total_tokens ELSE input_tokens + output_tokens END), 0) as total_tokens,
           COALESCE(SUM(planned_estimated_tokens), 0) as total_planned
         FROM cost_tracking WHERE run_id = ?`,
       )

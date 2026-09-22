@@ -99,6 +99,14 @@ export class OrchestrationEfficiencyAnalyzer {
     }
 
     const providerReportedTokens = costs.reduce((sum, item) => sum + item.totalTokens, 0);
+    const providerInputTokens = costs.reduce((sum, item) => sum + item.inputTokens, 0);
+    const cachedInputTokens = costs.reduce((sum, item) => sum + item.cachedInputTokens, 0);
+    const uncachedInputTokens = Math.max(0, providerInputTokens - cachedInputTokens);
+    const providerOutputTokens = costs.reduce((sum, item) => sum + item.outputTokens, 0);
+    const freshWorkTokens = uncachedInputTokens + providerOutputTokens;
+    const cacheHitRatio =
+      providerInputTokens > 0 ? cachedInputTokens / providerInputTokens : undefined;
+
     const wastedProviderTokens = costs
       .filter((item) => item.assignmentId && wastedAssignmentIds.has(item.assignmentId))
       .reduce((sum, item) => sum + item.totalTokens, 0);
@@ -107,6 +115,21 @@ export class OrchestrationEfficiencyAnalyzer {
     const plannedTokens = costs.reduce((sum, item) => sum + item.plannedEstimatedTokens, 0);
     const tokenVarianceRatio =
       plannedTokens > 0 ? providerReportedTokens / plannedTokens : undefined;
+    const freshWorkVarianceRatio =
+      plannedTokens > 0 ? freshWorkTokens / plannedTokens : undefined;
+    const tokenComparisonConfidence: 'low' | 'medium' =
+      plannedTokens > 0 &&
+      providerReportedTokens > 0 &&
+      (cacheHitRatio ?? 0) < 0.5 &&
+      (tokenVarianceRatio ?? 1) <= 10
+        ? 'medium'
+        : 'low';
+    const tokenEfficiency: 'healthy' | 'attention' | 'uncertain' =
+      freshWorkVarianceRatio === undefined
+        ? 'uncertain'
+        : freshWorkVarianceRatio <= 3
+          ? 'healthy'
+          : 'attention';
 
     const completedIntervals = executions
       .filter((execution) => execution.finishedAt)
@@ -173,6 +196,17 @@ export class OrchestrationEfficiencyAnalyzer {
 
     const tokenWasteAcceptable = wastedTokenRatio === undefined || wastedTokenRatio <= 0.2;
     const assignmentWasteAcceptable = wastedAssignmentRatio <= 0.2;
+    const qualityHealth: 'healthy' | 'attention' =
+      runSucceeded &&
+      firstPassRate === 1 &&
+      reworkCount === 0 &&
+      completionGateRejections === 0
+        ? 'healthy'
+        : 'attention';
+    const recoveryHealth: 'healthy' | 'attention' =
+      retryOrFailoverAssignments === 0 && wastedAssignments === 0
+        ? 'healthy'
+        : 'attention';
 
     let outcome: OrchestrationEfficiencyReport['outcome'] = 'inconclusive';
     const reasons: string[] = [];
@@ -224,6 +258,17 @@ export class OrchestrationEfficiencyAnalyzer {
       reasons.push('The run has mixed signals; more comparable executions are needed.');
     }
 
+    const overallHealth: OrchestrationEfficiencyReport['overallHealth'] =
+      outcome === 'inefficient'
+        ? 'inefficient'
+        : qualityHealth === 'attention' ||
+            recoveryHealth === 'attention' ||
+            tokenEfficiency === 'attention'
+          ? 'needs_attention'
+          : tokenEfficiency === 'uncertain' || outcome === 'inconclusive'
+            ? 'inconclusive'
+            : 'excellent';
+
     return {
       runId,
       outcome,
@@ -240,9 +285,18 @@ export class OrchestrationEfficiencyAnalyzer {
       admittedFanOutDecisions,
       rejectedFanOutDecisions,
       providerReportedTokens,
+      providerInputTokens,
+      cachedInputTokens,
+      uncachedInputTokens,
+      providerOutputTokens,
+      freshWorkTokens,
+      cacheHitRatio,
       wastedProviderTokens,
       wastedTokenRatio,
       tokenVarianceRatio,
+      freshWorkVarianceRatio,
+      tokenComparisonConfidence,
+      tokenEfficiency,
       serialExecutionMs,
       activeExecutionMs,
       observedParallelOverlapMs,
@@ -255,6 +309,9 @@ export class OrchestrationEfficiencyAnalyzer {
       timeBenefitObserved,
       qualityGuardSignalObserved,
       tokenWasteAcceptable,
+      qualityHealth,
+      recoveryHealth,
+      overallHealth,
     };
   }
 }

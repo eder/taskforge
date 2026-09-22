@@ -117,6 +117,106 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(report.wastedAssignments).toBe(0);
       expect(report.multiAgent).toBe(false);
       expect(report.firstPassRate).toBe(1);
+      expect(report.tokenEfficiency).toBe('healthy');
+      expect(report.qualityHealth).toBe('healthy');
+      expect(report.recoveryHealth).toBe('healthy');
+      expect(report.overallHealth).toBe('excellent');
+    });
+
+    it('keeps a cache-heavy successful run EXCELLENT when fresh work matches the baseline', () => {
+      const collector = new TelemetryCollector(db);
+      const runId = 'run-cache-heavy';
+      const started = '2026-09-22T12:00:00.000Z';
+      const finished = '2026-09-22T12:00:30.000Z';
+
+      db.prepare(`INSERT INTO runs (id, status, created_at, completed_at) VALUES (?, 'completed', ?, ?)`)
+        .run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at)
+         VALUES ('TASK-01', ?, 'Overview', 'Explain repo', 'investigation', 'integrated', 0, ?, ?)`,
+      ).run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO assignments (id, task_id, run_id, agent_id, role, objective, status, created_at, updated_at)
+         VALUES ('ASGN-01', 'TASK-01', ?, 'codex', 'researcher', 'Explain repo', 'completed', ?, ?)`,
+      ).run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO executions (id, run_id, task_id, assignment_id, agent_id, started_at, finished_at, exit_code, status)
+         VALUES ('EXEC-01', ?, 'TASK-01', 'ASGN-01', 'codex', ?, ?, 0, 'success')`,
+      ).run(runId, started, finished);
+
+      collector.recordTaskTokens({
+        runId,
+        taskId: 'TASK-01',
+        assignmentId: 'ASGN-01',
+        agentId: 'codex',
+        role: 'researcher',
+        modelName: 'gpt-codex-test',
+        inputTokens: 200_000,
+        cachedInputTokens: 195_000,
+        outputTokens: 2_000,
+        plannedEstimatedTokens: 7_000,
+      });
+
+      const report = collector.getOrchestrationEfficiency(runId);
+      expect(report.providerReportedTokens).toBe(202_000);
+      expect(report.freshWorkTokens).toBe(7_000);
+      expect(report.cacheHitRatio).toBeCloseTo(0.975);
+      expect(report.tokenVarianceRatio).toBeGreaterThan(20);
+      expect(report.freshWorkVarianceRatio).toBe(1);
+      expect(report.tokenComparisonConfidence).toBe('low');
+      expect(report.tokenEfficiency).toBe('healthy');
+      expect(report.overallHealth).toBe('excellent');
+
+      const cost = collector.getCostReport(runId);
+      expect(cost.totalTokens).toBe(202_000);
+      expect(cost.totalInputTokens).toBe(200_000);
+      expect(cost.totalCachedInputTokens).toBe(195_000);
+
+      const formatted = collector.formatCostReport(runId);
+      expect(formatted).toContain('Provider footprint: 202,000 total');
+      expect(formatted).toContain('Fresh-work tokens: 7,000');
+      expect(formatted).toContain('context-sensitive, not a direct efficiency ratio');
+    });
+
+    it('marks a first-pass run as NEEDS ATTENTION when fresh token work is genuinely excessive', () => {
+      const collector = new TelemetryCollector(db);
+      const runId = 'run-fresh-token-heavy';
+      const started = '2026-09-22T12:00:00.000Z';
+      const finished = '2026-09-22T12:00:30.000Z';
+
+      db.prepare(`INSERT INTO runs (id, status, created_at, completed_at) VALUES (?, 'completed', ?, ?)`)
+        .run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at)
+         VALUES ('TASK-01', ?, 'Overview', 'Explain repo', 'investigation', 'integrated', 0, ?, ?)`,
+      ).run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO assignments (id, task_id, run_id, agent_id, role, objective, status, created_at, updated_at)
+         VALUES ('ASGN-01', 'TASK-01', ?, 'codex', 'researcher', 'Explain repo', 'completed', ?, ?)`,
+      ).run(runId, started, finished);
+      db.prepare(
+        `INSERT INTO executions (id, run_id, task_id, assignment_id, agent_id, started_at, finished_at, exit_code, status)
+         VALUES ('EXEC-01', ?, 'TASK-01', 'ASGN-01', 'codex', ?, ?, 0, 'success')`,
+      ).run(runId, started, finished);
+
+      collector.recordTaskTokens({
+        runId,
+        taskId: 'TASK-01',
+        assignmentId: 'ASGN-01',
+        agentId: 'codex',
+        role: 'researcher',
+        modelName: 'gpt-codex-test',
+        inputTokens: 45_000,
+        cachedInputTokens: 2_000,
+        outputTokens: 4_000,
+        plannedEstimatedTokens: 7_000,
+      });
+
+      const report = collector.getOrchestrationEfficiency(runId);
+      expect(report.freshWorkTokens).toBe(47_000);
+      expect(report.freshWorkVarianceRatio).toBeGreaterThan(6);
+      expect(report.tokenEfficiency).toBe('attention');
+      expect(report.overallHealth).toBe('needs_attention');
     });
 
     it('classifies real parallel specialist work as FAN-OUT JUSTIFIED', () => {
@@ -269,10 +369,13 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(report.wastedTokenRatio).toBeGreaterThan(0.8);
       expect(report.completionGateRejections).toBe(1);
       expect(report.reworkCount).toBe(1);
+      expect(report.recoveryHealth).toBe('attention');
+      expect(report.overallHealth).toBe('inefficient');
 
       const formatted = collector.formatOrchestrationEfficiencyReport(runId);
-      expect(formatted).toContain('Outcome: INEFFICIENT');
-      expect(formatted).toContain('400,000 wasted');
+      expect(formatted).toContain('Overall: INEFFICIENT');
+      expect(formatted).toContain('Staffing: INEFFICIENT');
+      expect(formatted).toContain('Wasted provider tokens: 400,000');
     });
 
     it('extracts and surfaces staffing bottleneck metrics', () => {

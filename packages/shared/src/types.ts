@@ -179,9 +179,12 @@ export interface DeniedAction {
 export type AgentUsageSource = 'provider_reported' | 'taskforge_estimated' | 'unavailable';
 
 export interface AgentUsage {
+  /** Total observed provider input, including any cached-input subset. */
   inputTokens: number;
   outputTokens: number;
+  /** Cached portion of inputTokens. Never add this to inputTokens again. */
   cachedInputTokens?: number;
+  /** Normalized total: inputTokens + outputTokens. */
   totalTokens: number;
   modelName?: string;
   source: AgentUsageSource;
