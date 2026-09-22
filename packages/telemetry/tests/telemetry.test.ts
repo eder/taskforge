@@ -178,7 +178,7 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(formatted).toContain('context-sensitive, not a direct efficiency ratio');
     });
 
-    it('marks a first-pass run as NEEDS ATTENTION when fresh token work is genuinely excessive', () => {
+    it('reports heavy provider token work observationally without downgrading a clean orchestration run', () => {
       const collector = new TelemetryCollector(db);
       const runId = 'run-fresh-token-heavy';
       const started = '2026-09-22T12:00:00.000Z';
@@ -216,7 +216,7 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(report.freshWorkTokens).toBe(47_000);
       expect(report.freshWorkVarianceRatio).toBeGreaterThan(6);
       expect(report.tokenEfficiency).toBe('attention');
-      expect(report.overallHealth).toBe('needs_attention');
+      expect(report.overallHealth).toBe('excellent');
     });
 
     it('classifies real parallel specialist work as FAN-OUT JUSTIFIED', () => {
