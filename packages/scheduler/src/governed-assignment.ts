@@ -9,7 +9,7 @@ import {
   AgentUsage,
 } from '@taskforge/shared';
 import { Task, TaskGraph, computeTaskPriority } from '@taskforge/core';
-import { AgentAdapter, AgentActivityTracker } from '@taskforge/agents';
+import { AgentAdapter, AgentActivityTracker, AgentQuotaTracker } from '@taskforge/agents';
 import { WorktreeManager, GitService } from '@taskforge/workspace';
 import {
   AssignmentRepository,
@@ -85,6 +85,44 @@ export async function executeGovernedAssignment(
   ctx: GovernedAssignmentContext,
 ): Promise<GovernedAssignmentResult> {
   const { task, assignment, agent, runId, baseCommit, abortSignal } = ctx;
+
+  // Availability can change after routing (another assignment may learn a
+  // provider quota/rate-limit while this one waits for a concurrency slot).
+  // Re-check immediately before provisioning/execution so stale staffing can
+  // fail over without spending a worktree, process launch, or provider call.
+  const quotaInfo = AgentQuotaTracker.getInstance().getQuotaStatus(agent.id);
+  if (quotaInfo.status !== 'ready') {
+    const resetAt = quotaInfo.resetAt?.toISOString();
+    const reason = quotaInfo.reason ?? quotaInfo.status;
+    ctx.assignmentRepo.updateStatus(
+      assignment.id,
+      'failed',
+      undefined,
+      undefined,
+      'PROVIDER_QUOTA_EXCEEDED',
+    );
+    ctx.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId,
+      taskId: task.id,
+      type: 'ASSIGNMENT_SKIPPED_UNAVAILABLE',
+      payload: {
+        assignmentId: assignment.id,
+        agentId: agent.id,
+        status: quotaInfo.status,
+        reason,
+        resetAt,
+      },
+      timestamp: new Date(),
+    });
+    return {
+      success: false,
+      message: `Provider unavailable before execution: ${reason}${resetAt ? ` (resets ${resetAt})` : ''}`,
+      durationMs: 0,
+      worktreePath: ctx.repoRoot,
+      completionReason: 'PROVIDER_QUOTA_EXCEEDED',
+    };
+  }
 
   ctx.eventRepo.append({
     id: `evt-${randomUUID()}`,

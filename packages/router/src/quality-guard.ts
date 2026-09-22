@@ -54,9 +54,49 @@ export class RouterQualityGuard {
       ...(input.task.contract.acceptanceCriteria ?? []),
     ].join(' ');
 
+    // Read-only summaries/explanations are investigations in the task model,
+    // but they are not "high uncertainty" engineering investigations. Keep
+    // them deliberately cheap and low-latency even if an adaptive/model router
+    // over-staffs them.
+    const isReadOnly =
+      input.task.contract.completionMode === 'report' ||
+      input.task.contract.forbiddenChanges?.includes('*');
+    const lightweightReadOnly =
+      isReadOnly &&
+      input.task.type === 'investigation' &&
+      /\b(summary|summarize|summarise|resum(?:a|e|ir|o|indo|ido)?|explain|explica|describe|overview|vis[aã]o geral|what does|how does|como funciona|entenda|understand)\b/i.test(text) &&
+      !/\b(root cause|reproduce|reproduction|bug|flaky|race|deadlock|incident|failure|security|audit|vulnerab|payment|pagamento|auth|inconsisten|corrupt)\b/i.test(text);
+
+    if (lightweightReadOnly) {
+      return {
+        strategy: 'single',
+        complexity: 'low',
+        risk: 'low',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: input.task.contract.objective,
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'Lightweight read-only repository analysis: one agent is sufficient.',
+        source: proposal.source,
+        provenance: proposal.provenance,
+      };
+    }
+
+    const textForSignals = text;
+
     const matchedReasons: string[] = [];
     for (const signal of this.DOMAIN_SIGNALS) {
-      if (signal.pattern.test(text)) {
+      if (signal.pattern.test(textForSignals)) {
         matchedReasons.push(signal.label);
       }
     }
@@ -72,7 +112,7 @@ export class RouterQualityGuard {
       'router',
       'workspace',
       'verification',
-    ].filter((pkg) => new RegExp(`\\b${pkg}\\b`, 'i').test(text));
+    ].filter((pkg) => new RegExp(`\\b${pkg}\\b`, 'i').test(textForSignals));
 
     if (packageMentions.length >= 2) {
       matchedReasons.push(`crosses multiple packages: ${packageMentions.join(', ')}`);

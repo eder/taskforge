@@ -12,7 +12,7 @@ import {
   GoalRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
-import { FakeAgent, AgentRegistry, AgentAdapter } from '@taskforge/agents';
+import { FakeAgent, AgentRegistry, AgentAdapter, AgentQuotaTracker } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { RoutingProvider } from '@taskforge/router';
 import { CommunicationBus, AssignmentGraph, SessionRegistry } from '@taskforge/collaboration';
@@ -991,7 +991,107 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     db.close();
   });
 
-  it('14. Structured JSON output from reviewer model is automatically parsed into findings with file:line references', async () => {
+  it('14. skips a provider that became quota-exhausted after routing but before execution', async () => {
+    AgentQuotaTracker.resetInstance();
+    const tracker = AgentQuotaTracker.getInstance();
+
+    const db = new TaskForgeDatabase(':memory:');
+    const assignmentRepo = new AssignmentRepository(db);
+    const executionRepo = new ExecutionRepository(db);
+    const eventRepo = new EventRepository(db);
+    const workspaceRepo = new WorkspaceRepository(db);
+    const goalRepo = new GoalRepository(db);
+    const runRepo = new RunRepository(db);
+    const taskRepo = new TaskRepository(db);
+
+    goalRepo.create({ id: 'goal-quota-recheck', description: 'Goal', repository: testRepoRoot });
+    runRepo.create('run-quota-recheck', 'goal-quota-recheck');
+    taskRepo.create({
+      id: 'TASK-QUOTA-RECHECK',
+      runId: 'run-quota-recheck',
+      title: 'Read repository',
+      description: 'Read repository',
+      type: 'investigation',
+      status: 'running',
+    });
+
+    let executeCalls = 0;
+    const staleSelectedAgent: AgentAdapter = {
+      id: 'agy',
+      name: 'Google Antigravity',
+      detect: async () => true,
+      capabilities: async () => ({
+        canRead: true,
+        canWrite: true,
+        canExecute: true,
+        languages: [],
+        tools: [],
+      }),
+      execute: async () => {
+        executeCalls++;
+        return { success: true, message: 'should not run', durationMs: 1 };
+      },
+    };
+
+    const task: Task = {
+      id: 'TASK-QUOTA-RECHECK',
+      title: 'Read repository',
+      description: 'Read repository',
+      type: 'investigation',
+      status: 'running',
+      dependencies: [],
+      contract: {
+        taskId: 'TASK-QUOTA-RECHECK',
+        objective: 'Read repository',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        acceptanceCriteria: ['Report produced'],
+        completionMode: 'report',
+      },
+    };
+
+    const assignment = {
+      id: 'asgn-quota-recheck',
+      taskId: task.id,
+      agentId: staleSelectedAgent.id,
+      role: 'researcher' as const,
+      objective: task.contract.objective,
+      status: 'running' as const,
+    };
+    assignmentRepo.create(assignment, 'run-quota-recheck');
+
+    // Simulate quota being learned after routing selected Antigravity.
+    tracker.setManualStatus('agy', 'quota_exhausted', 'resets tomorrow', 60);
+
+    const result = await executeGovernedAssignment({
+      runId: 'run-quota-recheck',
+      baseCommit: await gitService.getHeadCommit(),
+      repoRoot: testRepoRoot,
+      config: getDefaultConfig(),
+      task,
+      assignment,
+      agent: staleSelectedAgent,
+      worktreeManager,
+      workspaceRepo,
+      assignmentRepo,
+      executionRepo,
+      eventRepo,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.completionReason).toBe('PROVIDER_QUOTA_EXCEEDED');
+    expect(result.message).toContain('Provider unavailable before execution');
+    expect(executeCalls).toBe(0);
+    expect(assignmentRepo.get(assignment.id)?.status).toBe('failed');
+
+    const events = eventRepo.listByTask(task.id);
+    expect(events.some((event) => event.type === 'ASSIGNMENT_SKIPPED_UNAVAILABLE')).toBe(true);
+
+    db.close();
+    AgentQuotaTracker.resetInstance();
+  });
+
+  it('15. Structured JSON output from reviewer model is automatically parsed into findings with file:line references', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
 

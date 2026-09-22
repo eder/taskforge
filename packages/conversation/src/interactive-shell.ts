@@ -11,6 +11,7 @@ import {
   generateRunId,
   PlannerProvenance,
   resolveOpenAIApiKey,
+  getGlobalStateDatabasePath,
   AgentStreamBus,
   AgentMessage,
   ActiveAgentState,
@@ -102,6 +103,7 @@ export class InteractiveShell {
   private repoRoot: string;
   private config: TaskForgeConfig;
   private db: TaskForgeDatabase;
+  private availabilityDb: TaskForgeDatabase;
   private telemetry: TelemetryCollector;
   private usageCalibration: UsageCalibrationEngine;
   private operator: OperatorAgent;
@@ -152,7 +154,11 @@ export class InteractiveShell {
     this.sessionRegistry = new SessionRegistry();
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
-    AgentQuotaTracker.getInstance().configureStore(new AgentAvailabilityRepository(this.db));
+    this.availabilityDb =
+      options.database ?? new TaskForgeDatabase(getGlobalStateDatabasePath());
+    AgentQuotaTracker.getInstance().configureStore(
+      new AgentAvailabilityRepository(this.availabilityDb),
+    );
     this.eventRepo = new EventRepository(this.db);
     this.taskRepo = new TaskRepository(this.db);
     this.assignmentRepo = new AssignmentRepository(this.db);
@@ -1506,6 +1512,7 @@ export class InteractiveShell {
           repoRoot: this.repoRoot,
           config: this.config,
           database: this.db,
+          availabilityDatabase: this.availabilityDb,
           agentRegistry: this.agentRegistry,
           planner: this.planner,
           negotiator: this.negotiator,
@@ -2290,6 +2297,13 @@ export class InteractiveShell {
       this.db.close();
     } catch {
       // ignore if already closed
+    }
+    if (this.availabilityDb !== this.db) {
+      try {
+        this.availabilityDb.close();
+      } catch {
+        // ignore if already closed
+      }
     }
   }
 }
