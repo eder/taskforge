@@ -874,6 +874,31 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     registry.register(primaryAgent);
     registry.register(helperAgent);
 
+    const emergentRouter: RoutingProvider = {
+      id: 'emergent-primary-router',
+      route: async () => ({
+        strategy: 'single',
+        complexity: 'low',
+        risk: 'low',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite', 'canExecute'],
+            objective: 'Test emergent collaboration',
+            preferredAgent: 'primary-worker',
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'This test requires primary-worker to initiate the collaboration proposal.',
+      }),
+    };
+
     const config = getDefaultConfig();
     config.collaboration.maxAgentsPerTask = 2; // Allows 1 primary + 1 helper
     config.verification.tests = false;
@@ -885,6 +910,7 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
       config,
       database: db,
       agentRegistry: registry,
+      router: emergentRouter,
       gitService,
       worktreeManager,
     });
