@@ -806,7 +806,15 @@ export class InteractiveShell {
       '',
       `  ${colors.bold}Agents${colors.reset}`,
       ...reports.map(
-        (r) => `    ${theme.agentPill(r.id, r.name, r.ready, r.quotaStatus, r.quotaReason)}`,
+        (r) =>
+          `    ${theme.agentPill(
+            r.id,
+            r.name,
+            r.ready,
+            r.quotaStatus,
+            r.quotaReason,
+            r.resetAt,
+          )}`,
       ),
       '',
       `  ${colors.bold}Router${colors.reset}      OpenAI       ${routerStatus}`,
@@ -966,7 +974,17 @@ export class InteractiveShell {
               : `${colors.red}${colors.bold}✖ UNHEALTHY${colors.reset}`;
         const agentSummary = `  ${colors.bold}Agent Fleet:${colors.reset}        ${readyAgents}/${totalAgents} ready ${agentBadge}`;
         const agentLines = agentReports
-          .map((rep) => `    ${theme.agentPill(rep.id, rep.name, rep.ready, rep.quotaStatus, rep.quotaReason)}`)
+          .map(
+            (rep) =>
+              `    ${theme.agentPill(
+                rep.id,
+                rep.name,
+                rep.ready,
+                rep.quotaStatus,
+                rep.quotaReason,
+                rep.resetAt,
+              )}`,
+          )
           .join('\n');
 
         // Format database section

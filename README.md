@@ -318,6 +318,8 @@ For recoverable investigation failures such as quota exhaustion, TaskForge can:
 4. continue the run;
 5. show the recovery in the cockpit.
 
+Quota reset times are stored as absolute timestamps. The startup banner shows the local reset time so it cannot display a frozen relative countdown. Run `/agents` at any time for a freshly calculated remaining duration. Once `resetAt` has elapsed, TaskForge automatically clears the cooldown and reports the provider as ready for a real probe; a subsequent provider quota failure re-opens the circuit with the new reset window.
+
 ### Completion and verification
 
 A successful process is not automatically a successful engineering task.
