@@ -258,14 +258,16 @@ export class OrchestrationEfficiencyAnalyzer {
       reasons.push('The run has mixed signals; more comparable executions are needed.');
     }
 
+    // Overall health evaluates orchestration outcomes TaskForge can prove:
+    // staffing, quality, recovery, and observable wasted assignments/provider
+    // usage. Absolute provider token volume is telemetry, not a quality verdict;
+    // repository/task context makes a theoretical token baseline non-comparable.
     const overallHealth: OrchestrationEfficiencyReport['overallHealth'] =
       outcome === 'inefficient'
         ? 'inefficient'
-        : qualityHealth === 'attention' ||
-            recoveryHealth === 'attention' ||
-            tokenEfficiency === 'attention'
+        : qualityHealth === 'attention' || recoveryHealth === 'attention'
           ? 'needs_attention'
-          : tokenEfficiency === 'uncertain' || outcome === 'inconclusive'
+          : outcome === 'inconclusive'
             ? 'inconclusive'
             : 'excellent';
 
