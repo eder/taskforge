@@ -240,13 +240,13 @@ export class TelemetryCollector {
 
     const lines = [
       `Cost Report - Run ${runId}`,
-      `Total estimated: ${report.totalCostUsd.toFixed(4)} USD`,
+      `Total estimated: $${report.totalCostUsd.toFixed(4)} USD`,
       `Observed tokens: ${report.totalTokens.toLocaleString()} total (${report.totalInputTokens.toLocaleString()} input / ${report.totalCachedInputTokens.toLocaleString()} cached / ${report.totalOutputTokens.toLocaleString()} output)`,
       comparison,
       'Task breakdown:',
       ...report.breakdown.map(
         (b) =>
-          `  - ${b.taskId} [${b.agentId} (${b.modelName})]: ${b.costUsd.toFixed(4)} (${b.totalTokens.toLocaleString()} observed; source=${b.usageSource}${b.plannedEstimatedTokens > 0 ? `; baseline=${b.plannedEstimatedTokens.toLocaleString()}` : ''})`,
+          `  - ${b.taskId} [${b.agentId} (${b.modelName})]: $${b.costUsd.toFixed(4)} (${b.totalTokens.toLocaleString()} observed; source=${b.usageSource}${b.plannedEstimatedTokens > 0 ? `; baseline=${b.plannedEstimatedTokens.toLocaleString()}` : ''})`,
       ),
     ].filter((line): line is string => Boolean(line));
     return lines.join('\n');
