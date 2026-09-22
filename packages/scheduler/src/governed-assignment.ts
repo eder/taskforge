@@ -94,7 +94,13 @@ export async function executeGovernedAssignment(
   if (quotaInfo.status !== 'ready') {
     const resetAt = quotaInfo.resetAt?.toISOString();
     const reason = quotaInfo.reason ?? quotaInfo.status;
-    ctx.assignmentRepo.updateStatus(assignment.id, 'failed', 'PROVIDER_QUOTA_EXCEEDED');
+    ctx.assignmentRepo.updateStatus(
+      assignment.id,
+      'failed',
+      undefined,
+      undefined,
+      'PROVIDER_QUOTA_EXCEEDED',
+    );
     ctx.eventRepo.append({
       id: `evt-${randomUUID()}`,
       runId,
