@@ -38,6 +38,7 @@ import {
   RoutingProvider,
   RouterHealthReport,
   AgentSelector,
+  RouterQualityGuard,
 } from '@taskforge/router';
 import { TaskGraph, Goal } from '@taskforge/core';
 import { RunOrchestrator, OrchestrationResult, sanitizeTaskOutput } from '@taskforge/scheduler';
@@ -1276,7 +1277,11 @@ export class InteractiveShell {
         const primaryTask = tasks[0];
 
         const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
-        const routing = await this.router.route({
+        const routingProposal = await this.router.route({
+          task: primaryTask,
+          availableAgents: availableAgentIds,
+        });
+        const routing = RouterQualityGuard.evaluate(routingProposal, {
           task: primaryTask,
           availableAgents: availableAgentIds,
         });
@@ -1405,7 +1410,11 @@ export class InteractiveShell {
         const primaryTask = tasks[0];
 
         const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
-        const routing = await this.router.route({
+        const routingProposal = await this.router.route({
+          task: primaryTask,
+          availableAgents: availableAgentIds,
+        });
+        const routing = RouterQualityGuard.evaluate(routingProposal, {
           task: primaryTask,
           availableAgents: availableAgentIds,
         });
