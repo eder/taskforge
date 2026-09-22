@@ -29,6 +29,11 @@ export interface ExecutionIntentDecision {
  */
 const GLOBAL_NO_MUTATION_PATTERNS: RegExp[] = [
   /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\s+(?:anything|the\s+(?:repository|repo)|(?:any|all)\s+(?:files?|code))\b/i,
+  // Bare repository-wide targets such as "do not create files" and "do not
+  // write code" are also global mutation bans. Keep these concrete so phrases
+  // like "do not create a hardcoded integration" remain architectural guidance.
+  /\b(?:do\s*not|don'?t)\s+(?:create|write|modify|change|edit|alter|delete|remove|touch|update)\s+(?:files?|code)\b/i,
+  /\bn[ãa]o\s+(?:crie|escreva|altere|modifique|edite|apague|delete|remova|toque|atualize)\s+(?:arquivos?|c[oó]digo)\b/i,
   /\b(?:make|perform)\s+no\s+(?:changes?|modifications?)\b/i,
   /\bno\s+(?:repository|repo|code|file)\s+changes?\b/i,
   /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\s+(?:nada|o\s+reposit[oó]rio|reposit[oó]rio|nenhum(?:a)?\s+(?:arquivo|c[oó]digo))\b/i,
