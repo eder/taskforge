@@ -1,16 +1,18 @@
 import { TaskGraph } from '@taskforge/core';
 import { AgentDetectionReport } from '@taskforge/agents';
-import { RunSummaryStats, RunCostReport } from '@taskforge/telemetry';
+import { RunSummaryStats, RunCostReport, OrchestrationEfficiencyReport } from '@taskforge/telemetry';
 
 export interface DashboardData {
   repoRoot: string;
   branch: string;
   headCommit: string;
   isClean: boolean;
+  gitAvailable?: boolean;
   graph?: TaskGraph;
   agents: AgentDetectionReport[];
   runStats?: RunSummaryStats;
   costReport?: RunCostReport;
+  efficiencyReport?: OrchestrationEfficiencyReport;
   worktrees?: Array<{ id: string; branch: string; agentId: string; status: string }>;
   events?: Array<{ timestamp: Date; message: string }>;
 }
@@ -72,7 +74,11 @@ export class TuiDashboard {
     lines.push('║                      TASKFORGE CONTROL PLANE                     ║');
     lines.push('╚══════════════════════════════════════════════════════════════════╝');
     lines.push(`  Repository  : ${data.repoRoot}`);
-    lines.push(`  Git Status  : ${data.branch} (${data.headCommit.slice(0, 7)}) • ${cleanLabel}`);
+    lines.push(
+      data.gitAvailable === false
+        ? '  Git Status  : unavailable'
+        : `  Git Status  : ${data.branch} (${data.headCommit.slice(0, 7)}) • ${cleanLabel}`,
+    );
     lines.push('');
 
     // Agents
@@ -143,7 +149,14 @@ export class TuiDashboard {
       }
       if (data.costReport) {
         lines.push(
-          `│  Estimated cost: ${data.costReport.totalCostUsd.toFixed(4)} USD • observed: ${data.costReport.totalTokens} tokens`.padEnd(64) + '│',
+          `│  Estimated cost: ${data.costReport.totalCostUsd.toFixed(4)} USD • provider footprint: ${data.costReport.totalTokens} tokens`.padEnd(64) + '│',
+        );
+      }
+      if (data.efficiencyReport) {
+        const overall = data.efficiencyReport.overallHealth.replace('_', ' ').toUpperCase();
+        const staffing = data.efficiencyReport.outcome.replaceAll('_', ' ').toUpperCase();
+        lines.push(
+          `│  Health: ${overall} • Staffing: ${staffing} • Tokens: ${data.efficiencyReport.tokenEfficiency.toUpperCase()}`.padEnd(64) + '│',
         );
       }
       lines.push('└────────────────────────────────────────────────────────────────┘');
