@@ -1098,7 +1098,11 @@ export class DeterministicScheduler {
 
       graph.updateTaskStatus(task.id, 'verified');
       taskRepo.updateStatus(task.id, 'verified');
-      this.ctx.onProgress?.(`[${task.id}] Verified successfully ✓`);
+      if (runAutomatedVerification) {
+        this.ctx.onProgress?.(`[${task.id}] Verified successfully ✓`);
+      } else {
+        this.ctx.onProgress?.(`[${task.id}] Report completion validated ✓`);
+      }
 
       // 5. Integration: cherry-pick task commit into run integration branch
       if (agentResult.commitHash && agentResult.commitHash !== taskBaseCommit) {
