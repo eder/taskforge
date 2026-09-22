@@ -172,6 +172,12 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       readOnly
         ? 'Repository mutation: forbidden'
         : `Forbidden changes: ${context.task.forbiddenChanges.join(', ') || 'none'}`,
+      readOnly
+        ? 'Evidence policy: treat the current repository contents as the source of truth. Do not rely on memories or claims from prior sessions unless they are independently confirmed by files in this worktree.'
+        : undefined,
+      readOnly
+        ? 'Provenance policy: clearly distinguish facts observed in repository files from inference; do not present inference as repository fact.'
+        : undefined,
       'Acceptance criteria:',
       ...context.task.acceptanceCriteria.map((criterion) => `- ${criterion}`),
     ]
