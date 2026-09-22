@@ -122,23 +122,10 @@ export class AgentSelector {
     let selectionReason: string | undefined;
     let fitScore: number | undefined;
 
-    // 1. Respect an explicit router preference if it is actually usable.
-    if (req.preferredAgent) {
-      const candidate = this.registry.get(req.preferredAgent);
-      if (candidate && !exclude.has(candidate.id)) {
-        const isReady = await candidate.detect();
-        const hasQuota = quotaTracker.isAvailable(candidate.id);
-        if (isReady && hasQuota) {
-          chosen = candidate;
-          selectionReason = 'explicit router preference';
-          fitScore = AgentFitScorer.assess(candidate.id, req).score;
-        }
-      }
-    }
-
-    // 2. Rank capability-compatible candidates fairly instead of taking the
-    // first adapter in registry order.
-    if (!chosen) {
+    // Rank capability-compatible candidates by current-task fit. An explicit
+    // router preference is considered only among equally best-fit candidates;
+    // it cannot force a materially worse harness for the assignment.
+    {
       const capable: AgentAdapter[] = [];
       for (const candidate of availableAdapters.filter((a) => !exclude.has(a.id))) {
         const isReady = await candidate.detect();
@@ -154,7 +141,7 @@ export class AgentSelector {
 
         if (meetsCaps) capable.push(candidate);
       }
-      const fit = this.chooseBestFitCandidate(capable, req, context.selectionKey);
+      const fit = this.chooseBestFitCandidate(capable, req, context.selectionKey, req.preferredAgent);
       chosen = fit?.agent;
       selectionReason = fit?.reason;
       fitScore = fit?.score;
@@ -168,7 +155,7 @@ export class AgentSelector {
           healthy.push(candidate);
         }
       }
-      const fit = this.chooseBestFitCandidate(healthy, req, context.selectionKey);
+      const fit = this.chooseBestFitCandidate(healthy, req, context.selectionKey, req.preferredAgent);
       chosen = fit?.agent;
       selectionReason = fit?.reason;
       fitScore = fit?.score;
@@ -186,7 +173,7 @@ export class AgentSelector {
           reusable.push(candidate);
         }
       }
-      const fit = this.chooseBestFitCandidate(reusable, req, context.selectionKey);
+      const fit = this.chooseBestFitCandidate(reusable, req, context.selectionKey, req.preferredAgent);
       chosen = fit?.agent;
       selectionReason = fit ? `degraded reuse; ${fit.reason}` : undefined;
       fitScore = fit?.score;
@@ -208,6 +195,7 @@ export class AgentSelector {
     candidates: AgentAdapter[],
     req: RoleRequest,
     selectionKey?: string,
+    preferredAgent?: string,
   ): { agent: AgentAdapter; score: number; reason: string } | undefined {
     if (candidates.length === 0) return undefined;
 
@@ -217,17 +205,26 @@ export class AgentSelector {
     }));
     const bestScore = Math.max(...assessed.map((item) => item.fit.score));
     const bestFit = assessed.filter((item) => item.fit.score === bestScore);
-    const chosen = this.chooseFairCandidate(
-      bestFit.map((item) => item.agent),
-      req,
-      selectionKey,
-    );
+
+    const preferredBestFit =
+      preferredAgent !== undefined
+        ? bestFit.find((item) => item.agent.id === preferredAgent)
+        : undefined;
+    const chosen =
+      preferredBestFit?.agent ??
+      this.chooseFairCandidate(
+        bestFit.map((item) => item.agent),
+        req,
+        selectionKey,
+      );
     if (!chosen) return undefined;
     const assessment = bestFit.find((item) => item.agent.id === chosen.id)!.fit;
     return {
       agent: chosen,
       score: assessment.score,
-      reason: `best task fit: ${assessment.reason}`,
+      reason: preferredBestFit
+        ? `best task fit; router preference broke an equal-fit tie: ${assessment.reason}`
+        : `best task fit: ${assessment.reason}`,
     };
   }
 
