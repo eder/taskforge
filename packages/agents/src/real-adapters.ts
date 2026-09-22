@@ -425,10 +425,21 @@ export abstract class BaseCliAdapter implements AgentAdapter {
 
   async createSession(assignment: AgentAssignment, context: AgentContext): Promise<AgentSession> {
     const sessionId = `cli-session-${assignment.id}`;
+    const capabilities = await this.capabilities();
+    const rawTerminalPromptFallback =
+      capabilities.stdinMode === 'interactive' &&
+      capabilities.permissionProtocol === 'unsupported' &&
+      capabilities.questionProtocol === 'unsupported';
+
     const session = new RealCliAgentSession(sessionId, assignment.id, {
       adapterId: this.id,
       adapterName: this.name,
       taskId: assignment.taskId,
+      // Supported providers already expose structured or provider-native
+      // interaction semantics. Never infer human questions from their raw
+      // stdout/stderr: tool output can legitimately contain strings such as
+      // "Do you want to execute?" while grepping this repository.
+      rawTerminalPromptFallback,
       onEvent: (event) => {
         context.onEvent?.(event);
       },
