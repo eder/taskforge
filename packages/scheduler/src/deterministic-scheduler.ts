@@ -124,6 +124,26 @@ export class DeterministicScheduler {
     return 'codex';
   }
 
+  private async resolveTaskBaseCommit(task: Task): Promise<string> {
+    if (task.dependencies.length === 0) {
+      return this.ctx.baseCommit;
+    }
+
+    const integrationBranch = this.ctx.integrationService.getBranchName(this.ctx.runId);
+    const exists = await this.ctx.gitService.branchExists(integrationBranch);
+    if (!exists) {
+      return this.ctx.baseCommit;
+    }
+
+    const cumulativeHead = await this.ctx.gitService.resolveRef(integrationBranch);
+    if (cumulativeHead !== this.ctx.baseCommit) {
+      this.ctx.onProgress?.(
+        `[${task.id}] Using cumulative dependency state ${cumulativeHead.slice(0, 7)} as execution base`,
+      );
+    }
+    return cumulativeHead;
+  }
+
   async run(): Promise<SchedulerResult> {
     this.hasIntegratedCommits = false;
     const { runId, graph, eventRepo, runRepo, abortSignal, baseCommit } = this.ctx;
@@ -304,6 +324,11 @@ export class DeterministicScheduler {
       }
     }
 
+    // A dependent task must execute against the cumulative run state that
+    // already contains its fully integrated dependencies. Root tasks keep the
+    // original run base so unrelated work can still proceed independently.
+    const taskBaseCommit = await this.resolveTaskBaseCommit(task);
+
     // Check for collaborative execution override
     if (this.ctx.collaborativeExecutors?.has(task.id)) {
       const collabAsgnId = `asgn-${task.id}-collab-${randomUUID().slice(0, 8)}`;
@@ -327,7 +352,9 @@ export class DeterministicScheduler {
         taskRepo.updateStatus(task.id, 'running');
 
         const executor = this.ctx.collaborativeExecutors.get(task.id)!;
-        const res = await executor(task, this.ctx);
+        const taskScopedContext =
+          taskBaseCommit === baseCommit ? this.ctx : { ...this.ctx, baseCommit: taskBaseCommit };
+        const res = await executor(task, taskScopedContext);
         if (!res.success) {
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
@@ -346,7 +373,7 @@ export class DeterministicScheduler {
             commitHash: res.commitHash,
             output: (res as any).output,
           },
-          baseCommit,
+          baseCommit: taskBaseCommit,
           resultingCommit: res.commitHash,
           worktreePath: verifyPath,
           gitService: this.ctx.gitService,
@@ -432,7 +459,7 @@ export class DeterministicScheduler {
         taskRepo.updateStatus(task.id, 'verified');
         this.ctx.onProgress?.(`[${task.id}] Verified successfully ✓`);
 
-        if (res.commitHash && res.commitHash !== baseCommit) {
+        if (res.commitHash && res.commitHash !== taskBaseCommit) {
           await integrationService.integrateTaskCommit({
             runId,
             taskId: task.id,
@@ -507,7 +534,7 @@ export class DeterministicScheduler {
       // 3. Execute with agent through the governed assignment pipeline
       const govResult = await executeGovernedAssignment({
         runId,
-        baseCommit,
+        baseCommit: taskBaseCommit,
         repoRoot: this.ctx.repoRoot,
         originalUserRequest: this.ctx.originalUserRequest,
         config,
@@ -659,7 +686,7 @@ export class DeterministicScheduler {
         assignmentRepo.create(newAsgn, runId);
 
         const isReviewer = requestedRoles[0] === 'reviewer';
-        const baseCommitForNew = agentResult.commitHash ?? baseCommit;
+        const baseCommitForNew = agentResult.commitHash ?? taskBaseCommit;
 
         const newGovResult = await executeGovernedAssignment({
           runId,
@@ -772,7 +799,7 @@ export class DeterministicScheduler {
         completionReason: govResult.completionReason,
       },
       normalizedOutcome: govResult.normalizedOutcome,
-      baseCommit,
+      baseCommit: taskBaseCommit,
       resultingCommit: agentResult.commitHash,
       worktreePath: wt.path,
       gitService: this.ctx.gitService,
@@ -943,7 +970,7 @@ export class DeterministicScheduler {
       this.ctx.onProgress?.(`[${task.id}] Verified successfully ✓`);
 
       // 5. Integration: cherry-pick task commit into run integration branch
-      if (agentResult.commitHash && agentResult.commitHash !== baseCommit) {
+      if (agentResult.commitHash && agentResult.commitHash !== taskBaseCommit) {
         this.ctx.activityTracker?.updateStatus(assignmentId, 'Integrating commit into run branch...');
         this.ctx.onProgress?.(
           `[${task.id}] Integrating commit ${agentResult.commitHash.slice(0, 7)}...`,
