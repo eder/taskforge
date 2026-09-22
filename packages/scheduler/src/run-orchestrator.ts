@@ -33,13 +33,18 @@ import {
   AgentQuotaTracker,
 } from '@taskforge/agents';
 import { TaskGraph, Goal, Task } from '@taskforge/core';
-import { HeuristicPlanner, normalizeGraphForExecutionIntent } from '@taskforge/planner';
+import {
+  HeuristicPlanner,
+  normalizeGraphForExecutionIntent,
+  enforceLightweightReadOnlyPlanInvariant,
+} from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
 import {
   StaticRoutingProvider,
   AgentSelector,
   RoutingProvider,
   RoutingDecision,
+  RouterQualityGuard,
 } from '@taskforge/router';
 import { VerificationRunner } from '@taskforge/verification';
 import { IntegrationService, DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
@@ -293,23 +298,47 @@ export class RunOrchestrator {
     // 2. Create Run Record
     this.runRepo.create(runId, goal.id);
 
-    // 3. Planning
-    options.onProgress?.('Generating structured task graph...');
-    const rawGraph = options.preplannedGraph ?? (await this.planner.plan(goal));
-
-    // 4. Preflight Negotiation
-    options.onProgress?.('Executing preflight contract negotiation...');
-    const graph = await this.negotiator.negotiateGraph(rawGraph, runId);
-
-    // 4b. Execution intent: determined once from the raw goal text, before
-    // anything downstream runs. This is authoritative over whatever the
-    // planner, router, agent selector or an agent itself decides afterward
-    // -- in particular, a READ_ONLY_ANALYSIS intent can never be relaxed by
-    // a task that the planner mis-classified as implementation.
+    // 3. Execution intent is authoritative and must be known before planning.
+    // Planning is an advisory interpretation layer; it is never allowed to
+    // silently upgrade a read-only user request into implementation work.
     const executionIntent: ExecutionIntentDecision = detectExecutionIntent(goalDescription);
     options.onProgress?.(
       `Execution intent: ${executionIntent.intent} (mutation ${executionIntent.mutationAllowed ? 'allowed' : 'disabled'})`,
     );
+
+    // 4. Planning
+    options.onProgress?.('Generating structured task graph...');
+    const rawGraph = options.preplannedGraph ?? (await this.planner.plan(goal));
+
+    // 5. Preflight Negotiation
+    options.onProgress?.('Executing preflight contract negotiation...');
+    const negotiatedGraph = await this.negotiator.negotiateGraph(rawGraph, runId);
+    const invariant = enforceLightweightReadOnlyPlanInvariant(
+      negotiatedGraph,
+      goal,
+      executionIntent,
+    );
+    const graph = invariant.graph;
+    if (invariant.changed) {
+      this.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: graph.getAllTasks()[0]?.id,
+        type: 'PLAN_INVARIANT_ENFORCED',
+        payload: {
+          invariant: 'lightweight_read_only_single_task',
+          originalTaskCount: invariant.originalTaskCount,
+          normalizedTaskCount: graph.getAllTasks().length,
+          reason: invariant.reason,
+        },
+        timestamp: new Date(),
+      });
+      options.onProgress?.(
+        `Plan invariant enforced: lightweight read-only overview collapsed from ${invariant.originalTaskCount} task(s) to 1 report task.`,
+      );
+    }
+
+    // 5b. Normalize task contracts against the authoritative run intent.
     const intentNormalizations = normalizeGraphForExecutionIntent(graph, executionIntent);
     for (const normalization of intentNormalizations) {
       this.eventRepo.append({
@@ -413,9 +442,14 @@ export class RunOrchestrator {
             reason: `Preflight recommended collaboration: ${collabReq.reason}`,
           };
         } else {
-          routing = await this.router.route({
+          const availableAgents = await this.agentSelector.listAvailableAgentIds();
+          const routingProposal = await this.router.route({
             task,
-            availableAgents: await this.agentSelector.listAvailableAgentIds(),
+            availableAgents,
+          });
+          routing = RouterQualityGuard.evaluate(routingProposal, {
+            task,
+            availableAgents,
           });
         }
 

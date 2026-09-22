@@ -15,6 +15,7 @@ import {
   AgentStreamBus,
   AgentMessage,
   ActiveAgentState,
+  detectExecutionIntent,
 } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import {
@@ -24,7 +25,11 @@ import {
   AgentQuotaTracker,
 } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
-import { HeuristicPlanner, SemanticPlanner } from '@taskforge/planner';
+import {
+  HeuristicPlanner,
+  SemanticPlanner,
+  enforceLightweightReadOnlyPlanInvariant,
+} from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
 import {
   StaticRoutingProvider,
@@ -33,6 +38,7 @@ import {
   RoutingProvider,
   RouterHealthReport,
   AgentSelector,
+  RouterQualityGuard,
 } from '@taskforge/router';
 import { TaskGraph, Goal } from '@taskforge/core';
 import { RunOrchestrator, OrchestrationResult, sanitizeTaskOutput } from '@taskforge/scheduler';
@@ -677,11 +683,15 @@ export class InteractiveShell {
     const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
 
     const usageAccuracy = this.telemetry.getUsageAccuracy(result.runId);
+    const varianceRatio = usageAccuracy.varianceRatio;
+    const highVariance = varianceRatio !== undefined && varianceRatio > 3;
     const usageBlock =
       usageAccuracy.observedAssignments > 0
         ? usageAccuracy.plannedEstimatedTokens > 0
-          ? `    ${colors.dim}Observed usage:${colors.reset}     ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Assignment baseline:${colors.reset} ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} (${((usageAccuracy.varianceRatio ?? 1) * 100).toFixed(0)}% observed / baseline)`
-          : `    ${colors.dim}Observed usage:${colors.reset}     ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
+          ? highVariance
+            ? `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Planning baseline:${colors.reset}       ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} ${colors.yellow}▲ ${varianceRatio!.toFixed(1)}× variance${colors.reset}\n    ${colors.dim}Usage note:${colors.reset}              Baseline excludes retries and provider/runtime context; use /cost for input/cache/output detail.`
+            : `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Planning baseline:${colors.reset}       ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} (${((varianceRatio ?? 1) * 100).toFixed(0)}% provider / baseline)`
+          : `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
         : '';
 
     const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
@@ -1268,14 +1278,28 @@ export class InteractiveShell {
         };
         this.activeGoal = goal;
 
+        const executionIntent = detectExecutionIntent(intent.goal);
         const proposedGraph = await this.planner.plan(goal);
-        this.currentGraph = await this.negotiator.negotiateGraph(proposedGraph, this.activeRunId);
+        const negotiatedGraph = await this.negotiator.negotiateGraph(
+          proposedGraph,
+          this.activeRunId,
+        );
+        const invariant = enforceLightweightReadOnlyPlanInvariant(
+          negotiatedGraph,
+          goal,
+          executionIntent,
+        );
+        this.currentGraph = invariant.graph;
 
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
 
         const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
-        const routing = await this.router.route({
+        const routingProposal = await this.router.route({
+          task: primaryTask,
+          availableAgents: availableAgentIds,
+        });
+        const routing = RouterQualityGuard.evaluate(routingProposal, {
           task: primaryTask,
           availableAgents: availableAgentIds,
         });
@@ -1404,7 +1428,11 @@ export class InteractiveShell {
         const primaryTask = tasks[0];
 
         const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
-        const routing = await this.router.route({
+        const routingProposal = await this.router.route({
+          task: primaryTask,
+          availableAgents: availableAgentIds,
+        });
+        const routing = RouterQualityGuard.evaluate(routingProposal, {
           task: primaryTask,
           availableAgents: availableAgentIds,
         });

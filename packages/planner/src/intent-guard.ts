@@ -1,5 +1,5 @@
-import { TaskGraph } from '@taskforge/core';
-import { ExecutionIntentDecision } from '@taskforge/shared';
+import { Goal, Task, TaskGraph } from '@taskforge/core';
+import { ExecutionIntentDecision, isLightweightReadOnlyRequest } from '@taskforge/shared';
 
 export interface PlanIntentNormalization {
   taskId: string;
@@ -9,6 +9,102 @@ export interface PlanIntentNormalization {
   reason: string;
   originalForbiddenChanges?: string[];
   normalizedForbiddenChanges?: string[];
+}
+
+export interface LightweightReadOnlyPlanInvariantResult {
+  graph: TaskGraph;
+  changed: boolean;
+  originalTaskCount: number;
+  reason?: string;
+}
+
+/**
+ * Production safety invariant for cheap repository-overview questions.
+ *
+ * A lightweight read-only overview must never fan out into multiple tasks,
+ * collaboration, review, verification, or mutation merely because a semantic
+ * planner over-decomposed it. This is intentionally enforced after planning /
+ * negotiation as defense in depth, not just inferred inside one planner.
+ */
+export function enforceLightweightReadOnlyPlanInvariant(
+  graph: TaskGraph,
+  goal: Goal,
+  intent: ExecutionIntentDecision,
+): LightweightReadOnlyPlanInvariantResult {
+  const tasks = graph.getAllTasks();
+  const lightweight =
+    intent.intent === 'READ_ONLY_ANALYSIS' &&
+    !intent.mutationAllowed &&
+    isLightweightReadOnlyRequest(goal.description);
+
+  if (!lightweight) {
+    return { graph, changed: false, originalTaskCount: tasks.length };
+  }
+
+  const alreadyCanonical =
+    tasks.length === 1 &&
+    tasks[0].type === 'investigation' &&
+    tasks[0].dependencies.length === 0 &&
+    tasks[0].contract.completionMode === 'report' &&
+    (tasks[0].contract.allowedScope?.length ?? 0) === 0 &&
+    tasks[0].contract.forbiddenChanges?.includes('*') &&
+    !tasks[0].contract.metadata?.recommendCollaboration &&
+    !tasks[0].contract.metadata?.collaboration;
+
+  if (alreadyCanonical) {
+    return { graph, changed: false, originalTaskCount: 1 };
+  }
+
+  const now = new Date();
+  const firstTask = tasks[0];
+  const canonicalTask: Task = {
+    id: firstTask?.id ?? 'TASK-01',
+    goalId: goal.id,
+    title: 'Explain Project and Architecture',
+    description: `Read the current repository and answer the user's overview question: ${goal.description}`,
+    type: 'investigation',
+    // This guard runs after negotiation in product flows. Preserve the current
+    // lifecycle state rather than rewinding an accepted task back to proposed.
+    status: firstTask?.status ?? 'accepted',
+    dependencies: [],
+    contract: {
+      objective: `Explain the current repository using repository evidence only: ${goal.description}`,
+      allowedScope: [],
+      forbiddenChanges: ['*'],
+      acceptanceCriteria: [
+        'Answer the user question directly and concisely',
+        'Ground factual claims in the current repository contents',
+        'Distinguish repository evidence from inference',
+        'Make no repository changes',
+      ],
+      dependencies: [],
+      completionMode: 'report',
+      metadata: {
+        lightweightReadOnlyInvariant: true,
+      },
+    },
+    acceptanceCriteria: [
+      'Substantive repository-grounded explanation provided',
+      'No repository mutation',
+    ],
+    reworkCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const canonicalGraph = new TaskGraph([canonicalTask], {
+    ...(graph.metadata ?? {}),
+    planInvariant: 'lightweight_read_only_single_task',
+    originalTaskCount: tasks.length,
+  });
+
+  return {
+    graph: canonicalGraph,
+    changed: true,
+    originalTaskCount: tasks.length,
+    reason:
+      'Lightweight read-only overview invariant collapsed planner output to one repository-grounded report task.',
+  };
 }
 
 /**

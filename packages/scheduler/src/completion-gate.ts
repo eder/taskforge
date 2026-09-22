@@ -10,9 +10,14 @@ import {
 } from '@taskforge/shared';
 import { GitService } from '@taskforge/workspace';
 
+const HARNESS_NOISE_PATTERNS: RegExp[] = [
+  /^Reading additional input from stdin\.{0,3}$/i,
+  /^Waiting for additional input from stdin\.{0,3}$/i,
+];
+
 /**
- * Sanitizes task output to ensure raw JSON or JSONL blobs are never returned
- * or displayed as user-facing analysis / explanations.
+ * Sanitizes task output to ensure raw JSON/JSONL envelopes and harness chatter
+ * are never accepted or displayed as user-facing analysis.
  */
 export function sanitizeTaskOutput(output?: string): string {
   if (!output) return '';
@@ -22,6 +27,9 @@ export function sanitizeTaskOutput(output?: string): string {
 
   for (const line of lines) {
     const l = line.trim();
+    if (HARNESS_NOISE_PATTERNS.some((pattern) => pattern.test(l))) {
+      continue;
+    }
     if (l.startsWith('{') && l.endsWith('}')) {
       try {
         const parsed = JSON.parse(l);

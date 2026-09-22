@@ -99,6 +99,9 @@ describe('Real-Agent Hardening - Safety & Adapters', () => {
       'Repository access: read any repository files needed for this assignment',
     );
     expect(prompt).toContain('Repository mutation: forbidden');
+    expect(prompt).toContain('current repository contents as the source of truth');
+    expect(prompt).toContain('Do not rely on memories or claims from prior sessions');
+    expect(prompt).toContain('distinguish facts observed in repository files from inference');
     expect(prompt).not.toContain('Allowed scope: all files');
     expect(prompt).not.toContain('Role: implementer');
   });

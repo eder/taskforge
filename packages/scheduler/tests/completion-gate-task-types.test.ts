@@ -145,6 +145,31 @@ describe('CompletionGate - Task-Type Aware Policy Matrix', () => {
       expect(result.failureReason).toBe('EMPTY_PROVIDER_RESULT');
     });
 
+    it('rejects harness stdin chatter as empty analysis output', async () => {
+      const task = createTask('investigation', {
+        title: 'Explain project',
+        objective: 'Explain the repository',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        completionMode: 'report',
+      });
+      const agentResult = createAgentResult({
+        output: 'Reading additional input from stdin...',
+        message: 'Codex CLI completed successfully',
+      });
+
+      const result = await gate.evaluate({
+        task,
+        agentResult,
+        baseCommit: 'commit-base',
+        resultingCommit: 'commit-base',
+      });
+
+      expect(result.accepted).toBe(false);
+      expect(result.failureReason).toBe('EMPTY_PROVIDER_RESULT');
+      expect(result.evidence.investigationReportLength).toBe(0);
+    });
+
     it('accepts substantive analysis report without git changes', async () => {
       const task = createTask('investigation', {
         title: 'Investigate race condition',
