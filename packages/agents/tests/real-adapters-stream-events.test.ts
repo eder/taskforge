@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { ClaudeCodeAdapter, CodexAdapter, AntigravityAdapter } from '../src/real-adapters.js';
+import {
+  ClaudeCodeAdapter,
+  CodexAdapter,
+  AntigravityAdapter,
+  isDefinitiveStreamingQuotaFailure,
+} from '../src/real-adapters.js';
 import type { AgentAssignment, AgentContext, AgentStreamEvent } from '@taskforge/shared';
 
 function makeAssignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
@@ -31,6 +36,22 @@ function makeContext(onStreamEvent: (e: AgentStreamEvent) => void): AgentContext
 }
 
 describe('BaseCliAdapter.publishStreamEvents', () => {
+  it('recognizes definitive streamed Antigravity quota exhaustion without broad 429 false positives', () => {
+    expect(
+      isDefinitiveStreamingQuotaFailure(
+        'agy',
+        '{"error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 12h3m"}\n',
+      ),
+    ).toBe(true);
+    expect(isDefinitiveStreamingQuotaFailure('agy', 'unit test expects HTTP 429\n')).toBe(false);
+    expect(
+      isDefinitiveStreamingQuotaFailure(
+        'codex',
+        'RESOURCE_EXHAUSTED (code 429): Individual quota reached\n',
+      ),
+    ).toBe(false);
+  });
+
   it('publishes normalized events with full identity, alongside extractActivity (additive, not a replacement)', () => {
     const claude = new ClaudeCodeAdapter();
     const events: AgentStreamEvent[] = [];
