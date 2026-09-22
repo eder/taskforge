@@ -131,6 +131,21 @@ export class OrchestrationEfficiencyAnalyzer {
     const parallelismFactor =
       activeExecutionMs > 0 ? Number((serialExecutionMs / activeExecutionMs).toFixed(2)) : 1;
 
+    const routingDecisions = events.filter((event) => event.type === 'ROUTING_DECIDED');
+    const fanOutAssessments = routingDecisions
+      .map((event) => event.payload.fanOutAssessment)
+      .filter(
+        (assessment): assessment is { requested: boolean; admitted: boolean } =>
+          Boolean(assessment && typeof assessment === 'object'),
+      );
+    const fanOutDecisions = fanOutAssessments.filter((assessment) => assessment.requested).length;
+    const admittedFanOutDecisions = fanOutAssessments.filter(
+      (assessment) => assessment.requested && assessment.admitted,
+    ).length;
+    const rejectedFanOutDecisions = fanOutAssessments.filter(
+      (assessment) => assessment.requested && !assessment.admitted,
+    ).length;
+
     const completionGateRejections = events.filter(
       (event) => event.type === 'COMPLETION_GATE_REJECTED',
     ).length;
@@ -221,6 +236,9 @@ export class OrchestrationEfficiencyAnalyzer {
       uniqueAgents,
       multiAgent,
       retryOrFailoverAssignments,
+      fanOutDecisions,
+      admittedFanOutDecisions,
+      rejectedFanOutDecisions,
       providerReportedTokens,
       wastedProviderTokens,
       wastedTokenRatio,
