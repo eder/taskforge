@@ -375,7 +375,7 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       const formatted = collector.formatOrchestrationEfficiencyReport(runId);
       expect(formatted).toContain('Overall: INEFFICIENT');
       expect(formatted).toContain('Staffing: INEFFICIENT');
-      expect(formatted).toContain('400,000 wasted');
+      expect(formatted).toContain('Wasted provider tokens: 400,000');
     });
 
     it('extracts and surfaces staffing bottleneck metrics', () => {
