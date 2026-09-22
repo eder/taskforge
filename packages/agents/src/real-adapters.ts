@@ -255,8 +255,21 @@ export abstract class BaseCliAdapter implements AgentAdapter {
             return;
           }
 
-          // 4. Codex item
-          if (obj.type === 'item' && obj.item) {
+          // 4. Codex JSONL item lifecycle. Current `codex exec --json`
+          // emits item.started/item.completed with the payload under `item`.
+          if (
+            (obj.type === 'item' || obj.type === 'item.started' || obj.type === 'item.completed') &&
+            obj.item
+          ) {
+            if (
+              obj.item.type === 'agent_message' &&
+              typeof obj.item.text === 'string' &&
+              obj.item.text.trim()
+            ) {
+              const snippet = obj.item.text.trim().split('\n')[0];
+              callback(snippet.length > 50 ? `${snippet.slice(0, 47)}...` : snippet);
+              return;
+            }
             const desc = obj.item.command || obj.item.type || 'Processing...';
             callback(desc.length > 50 ? `${desc.slice(0, 47)}...` : desc);
             return;
@@ -459,7 +472,20 @@ export abstract class BaseCliAdapter implements AgentAdapter {
             candidateResponse = obj.result.response;
           }
 
-          // 4. Assistant text content
+          // 4. Codex final/progress agent messages.
+          // `codex exec --json` emits:
+          // {"type":"item.completed","item":{"type":"agent_message","text":"..."}}
+          // Keep the last completed agent message as the final response.
+          if (
+            obj.type === 'item.completed' &&
+            obj.item?.type === 'agent_message' &&
+            typeof obj.item.text === 'string' &&
+            obj.item.text.trim()
+          ) {
+            candidateResponse = obj.item.text;
+          }
+
+          // 4b. Assistant text content
           if (obj.type === 'assistant' && obj.message?.content) {
             for (const item of obj.message.content) {
               if (item.type === 'text' && typeof item.text === 'string' && item.text.trim()) {
@@ -480,6 +506,33 @@ export abstract class BaseCliAdapter implements AgentAdapter {
           }
 
           // 6. Errors & warnings
+          if (
+            obj.type === 'error' &&
+            typeof obj.message === 'string' &&
+            obj.message.trim()
+          ) {
+            errors.push(obj.message.trim());
+          }
+          if (
+            obj.type === 'turn.failed' &&
+            typeof obj.error?.message === 'string' &&
+            obj.error.message.trim()
+          ) {
+            errors.push(obj.error.message.trim());
+          }
+          if (
+            obj.type === 'item.completed' &&
+            obj.item?.type === 'error' &&
+            typeof obj.item.message === 'string' &&
+            obj.item.message.trim()
+          ) {
+            const message = obj.item.message.trim();
+            if (/in-process app-server event stream lagged; dropped \d+ events?/i.test(message)) {
+              warnings.push(message);
+            } else {
+              errors.push(message);
+            }
+          }
           if (obj.error) {
             errors.push(typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error));
           }
