@@ -8,7 +8,7 @@ import {
   AgentResult,
   getDefaultConfig,
 } from '@taskforge/shared';
-import { AgentAdapter, AgentRegistry } from '@taskforge/agents';
+import { AgentAdapter, AgentActivityTracker, AgentRegistry } from '@taskforge/agents';
 import { TaskForgeDatabase } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { TaskGraph, Task } from '@taskforge/core';
@@ -81,6 +81,7 @@ describe('governed assignment execution timeout', () => {
   it('passes execution.defaultTimeoutMinutes to the agent instead of the adapter-local five-minute default', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
+    const activityTracker = new AgentActivityTracker();
     const agent = new TimeoutProbeAgent();
     registry.register(agent);
 
@@ -144,6 +145,7 @@ describe('governed assignment execution timeout', () => {
       config,
       database: db,
       agentRegistry: registry,
+      activityTracker,
       router,
       gitService,
       worktreeManager,
@@ -160,6 +162,7 @@ describe('governed assignment execution timeout', () => {
       'Analyze the runtime timeout behavior without modifying anything.',
     );
     expect(agent.observedRole).toBe('researcher');
+    expect(activityTracker.getActive()).toEqual([]);
 
     db.close();
   });
