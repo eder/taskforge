@@ -1,3 +1,5 @@
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { describe, it, expect } from 'vitest';
 import { getDefaultConfig, TaskForgeConfigSchema } from '../src/config.js';
 import { ConfigurationError, TaskForgeError } from '../src/errors.js';
@@ -67,5 +69,12 @@ describe('Shared - Errors', () => {
     expect(error.code).toBe('CONFIGURATION_ERROR');
     expect(error.message).toBe('Invalid configuration');
     expect(error.context).toEqual({ key: 'foo' });
+  });
+
+  it('stores provider availability in a global user-level database', () => {
+    expect(getGlobalStateDatabasePath()).toBe(
+      path.resolve(os.homedir(), '.taskforge/state.db'),
+    );
+    expect(path.isAbsolute(getGlobalStateDatabasePath())).toBe(true);
   });
 });
