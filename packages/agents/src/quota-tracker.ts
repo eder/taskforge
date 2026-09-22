@@ -1,5 +1,11 @@
 export type AgentQuotaStatus =
-  'ready' | 'quota_exhausted' | 'rate_limited' | 'not_installed' | 'auth_failed';
+  | 'ready'
+  | 'quota_exhausted'
+  | 'rate_limited'
+  | 'not_installed'
+  | 'auth_failed';
+
+export type AgentAvailabilitySource = 'runtime' | 'manual';
 
 export interface AgentQuotaRecord {
   agentId: string;
@@ -7,11 +13,44 @@ export interface AgentQuotaRecord {
   reason?: string;
   recordedAt: number;
   resetAt?: number;
+  source?: AgentAvailabilitySource;
 }
+
+/**
+ * Minimal persistence contract so the agents package does not depend on the
+ * persistence package. AgentAvailabilityRepository satisfies this interface
+ * structurally.
+ */
+export interface AgentQuotaStore {
+  list(): Array<{
+    agentId: string;
+    status: string;
+    reason?: string;
+    recordedAt: number;
+    resetAt?: number;
+    source?: string;
+  }>;
+  upsert(record: {
+    agentId: string;
+    status: string;
+    reason?: string;
+    recordedAt: number;
+    resetAt?: number;
+    source: string;
+  }): void;
+  delete(agentId: string): void;
+}
+
+const PERSISTABLE_STATUSES = new Set<AgentQuotaStatus>([
+  'quota_exhausted',
+  'rate_limited',
+  'auth_failed',
+]);
 
 export class AgentQuotaTracker {
   private static instance: AgentQuotaTracker | undefined;
   private records: Map<string, AgentQuotaRecord> = new Map();
+  private store?: AgentQuotaStore;
 
   static getInstance(): AgentQuotaTracker {
     if (!AgentQuotaTracker.instance) {
@@ -22,6 +61,45 @@ export class AgentQuotaTracker {
 
   static resetInstance(): void {
     AgentQuotaTracker.instance = undefined;
+  }
+
+  /**
+   * Attach durable storage and hydrate previously learned provider state.
+   * Reconfiguration is intentional: shells/tests can point the singleton at a
+   * different TaskForge database without retaining state from another repo.
+   */
+  configureStore(store: AgentQuotaStore): void {
+    this.store = store;
+    this.records.clear();
+
+    try {
+      for (const persisted of store.list()) {
+        if (!PERSISTABLE_STATUSES.has(persisted.status as AgentQuotaStatus)) {
+          continue;
+        }
+
+        const record: AgentQuotaRecord = {
+          agentId: persisted.agentId,
+          status: persisted.status as AgentQuotaStatus,
+          reason: persisted.reason,
+          recordedAt: persisted.recordedAt,
+          resetAt: persisted.resetAt,
+          source: persisted.source === 'manual' ? 'manual' : 'runtime',
+        };
+
+        if (record.resetAt && Date.now() >= record.resetAt) {
+          // Cooldown is already over. Remove the durable OPEN circuit so the
+          // next selection is the single real probe of the provider.
+          this.safeDelete(record.agentId);
+          continue;
+        }
+
+        this.records.set(record.agentId, record);
+      }
+    } catch {
+      // Availability persistence must never prevent TaskForge from starting.
+      // Runtime failures can still repopulate the in-memory circuit breaker.
+    }
   }
 
   /**
@@ -42,11 +120,12 @@ export class AgentQuotaTracker {
       lower.includes('forbidden');
 
     if (isAuthFailure) {
-      this.records.set(agentId, {
+      this.setRecord({
         agentId,
         status: 'auth_failed',
         reason: 'authentication failed or session expired',
         recordedAt: Date.now(),
+        source: 'runtime',
       });
       return true;
     }
@@ -115,12 +194,13 @@ export class AgentQuotaTracker {
       }
     }
 
-    this.records.set(agentId, {
+    this.setRecord({
       agentId,
       status,
       reason,
       recordedAt: Date.now(),
       resetAt,
+      source: 'runtime',
     });
 
     return true;
@@ -128,6 +208,7 @@ export class AgentQuotaTracker {
 
   recordSuccess(agentId: string): void {
     this.records.delete(agentId);
+    this.safeDelete(agentId);
   }
 
   setManualStatus(
@@ -138,15 +219,17 @@ export class AgentQuotaTracker {
   ): void {
     if (status === 'ready' || status === 'not_installed') {
       this.records.delete(agentId);
+      this.safeDelete(agentId);
       return;
     }
 
-    this.records.set(agentId, {
+    this.setRecord({
       agentId,
       status,
       reason: reason ?? (status === 'quota_exhausted' ? 'quota limit reached' : 'rate limited'),
       recordedAt: Date.now(),
-      resetAt: Date.now() + cooldownMinutes * 60 * 1000,
+      resetAt: status === 'auth_failed' ? undefined : Date.now() + cooldownMinutes * 60 * 1000,
+      source: 'manual',
     });
   }
 
@@ -156,9 +239,12 @@ export class AgentQuotaTracker {
       return { status: 'ready' };
     }
 
-    // Check if cooldown has expired
+    // OPEN circuit cooldown expired. Forget the block and let the next actual
+    // assignment act as the provider probe; success keeps it READY, another
+    // quota failure re-opens the circuit with the provider's new reset time.
     if (record.resetAt && Date.now() >= record.resetAt) {
       this.records.delete(agentId);
+      this.safeDelete(agentId);
       return { status: 'ready' };
     }
 
@@ -171,6 +257,32 @@ export class AgentQuotaTracker {
 
   isAvailable(agentId: string): boolean {
     return this.getQuotaStatus(agentId).status === 'ready';
+  }
+
+  private setRecord(record: AgentQuotaRecord): void {
+    this.records.set(record.agentId, record);
+    if (!PERSISTABLE_STATUSES.has(record.status)) return;
+
+    try {
+      this.store?.upsert({
+        agentId: record.agentId,
+        status: record.status,
+        reason: record.reason,
+        recordedAt: record.recordedAt,
+        resetAt: record.resetAt,
+        source: record.source ?? 'runtime',
+      });
+    } catch {
+      // Persistence is best-effort; the in-memory circuit remains active.
+    }
+  }
+
+  private safeDelete(agentId: string): void {
+    try {
+      this.store?.delete(agentId);
+    } catch {
+      // Best-effort cleanup only.
+    }
   }
 
   private parseTimeTodayOrTomorrow(timeStr: string): number {
