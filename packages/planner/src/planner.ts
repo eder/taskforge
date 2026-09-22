@@ -25,6 +25,17 @@ export function requiresArchitectureBoundaryDecision(description: string): boole
   const explicitDesignQuestion =
     /\b(architecture|architect|design|boundary|ownership|owner|responsib|where\s+(?:it|this)\s+should|where\s+should|source\s+of\s+truth|arquitetura|desenho|fronteira|responsabil|onde\s+deveria|onde\s+deve|deveria\s+ficar|deve\s+ficar)\b/i.test(text);
 
+  // A user mentioning an app screen describes where the behavior is observed,
+  // not necessarily where the mechanism must live. Only treat ownership as
+  // already resolved when the request explicitly locates the mechanism itself.
+  const explicitMechanismOwnership =
+    /\b(?:implement|create|add|keep|store|place|put|implementar|implemente|criar|crie|adicionar|adicione|manter|armazenar|colocar)\b[^.\n]{0,80}\b(?:cache|state|session|queue|storage|store|persistence|read\s+model|snapshot|estado|sess[aã]o|fila|armazenamento|persist[eê]ncia)\b[^.\n]{0,60}\b(?:inside|within|in|on|no|na|dentro\s+do|dentro\s+da)\b[^.\n]{0,30}\b(?:backend|frontend|client|server|app|mobile|desktop|browser|api|gateway|service|worker|database|db|cliente|servidor|aplicativo|camada|servi[cç]o|banco)\b/i.test(text) ||
+    /\b(?:cache|state|session|queue|storage|store|persistence|read\s+model|snapshot|estado|sess[aã]o|fila|armazenamento|persist[eê]ncia)\b[^.\n]{0,40}\b(?:belongs\s+in|lives\s+in|owned\s+by|fica\s+no|fica\s+na|deve\s+ficar\s+no|deve\s+ficar\s+na)\b[^.\n]{0,30}\b(?:backend|frontend|client|server|app|api|gateway|service|database|db|cliente|servidor|aplicativo|camada|servi[cç]o|banco)\b/i.test(text);
+
+  if (explicitMechanismOwnership && !explicitDesignQuestion) {
+    return false;
+  }
+
   const signalCount = [
     statefulMechanism,
     consistencyLifecycle,
