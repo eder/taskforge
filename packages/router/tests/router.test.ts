@@ -80,6 +80,107 @@ describe('Router and AgentSelector', () => {
     expect(guarded.communication?.required).toBe(false);
   });
 
+  it('rejects multi-agent fan-out when roles duplicate the same work without a quality guard', () => {
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'medium',
+        teamSize: 3,
+        roles: [
+          { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Read the repository and summarize it' },
+          { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Read the repository and summarize it' },
+          { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Read the repository and summarize it' },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: false,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Use multiple agents because the task is complex',
+        source: 'openai',
+      },
+      { task: sampleTask, availableAgents: ['claude', 'codex', 'agy'] },
+    );
+
+    expect(guarded.strategy).toBe('single');
+    expect(guarded.teamSize).toBe(1);
+    expect(guarded.roles).toHaveLength(1);
+    expect(guarded.reason).toContain('Fan-out rejected by efficiency policy');
+  });
+
+  it('admits fan-out when objectives are genuinely partitioned for parallel work', () => {
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'high',
+        teamSize: 2,
+        roles: [
+          {
+            role: 'reproduction_engineer',
+            requiredCapabilities: ['canRead', 'canExecute'],
+            objective: 'Reproduce the race and capture timing evidence',
+          },
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: 'Trace transaction and lock ownership through the persistence layer',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: false,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Independent reproduction and code-path investigation can run concurrently',
+        source: 'openai',
+      },
+      { task: sampleTask, availableAgents: ['claude', 'codex'] },
+    );
+
+    expect(guarded.strategy).toBe('parallel');
+    expect(guarded.teamSize).toBe(2);
+    expect(guarded.roles).toHaveLength(2);
+  });
+
+  it('admits implementer plus specialist reviewer as a quality-oriented fan-out', () => {
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'review',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'medium',
+        teamSize: 2,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite', 'canExecute'],
+            objective: 'Implement the concurrency fix',
+          },
+          {
+            role: 'architecture_reviewer',
+            requiredCapabilities: ['canRead'],
+            objective: 'Independently verify lock-order and failure-mode invariants',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: false,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'High-risk concurrency change requires independent review',
+        source: 'openai',
+      },
+      { task: sampleTask, availableAgents: ['claude', 'codex'] },
+    );
+
+    expect(guarded.strategy).toBe('review');
+    expect(guarded.roles).toHaveLength(2);
+  });
+
   it('StaticRoutingProvider produces structured routing decision with neutral roles', async () => {
     const provider = new StaticRoutingProvider();
     const decision = await provider.route({
