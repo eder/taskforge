@@ -559,5 +559,33 @@ export function parseStructuredFindings(
     }
   }
 
-  return undefined;
+  // 4. Plain-text review findings. Coding agents do not always emit the
+  // structured JSON contract, so normalize common severity markers rather
+  // than treating a prose P0/P1 review as an approval.
+  const findings: import('@taskforge/shared').ReviewFinding[] = [];
+  const severityMap: Record<string, import('@taskforge/shared').ReviewFinding['severity']> = {
+    p0: 'critical',
+    p1: 'major',
+    p2: 'minor',
+    p3: 'suggestion',
+    critical: 'critical',
+    major: 'major',
+    minor: 'minor',
+    suggestion: 'suggestion',
+  };
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const match = line.match(
+      /^(?:\d+[.)]\s*)?(?:[-*]\s*)?(?:\*\*)?(P[0-3]|critical|major|minor|suggestion)(?:\*\*)?\s*(?:[-—–:]\s*)?(.+)$/i,
+    );
+    if (!match) continue;
+    const severity = severityMap[match[1].toLowerCase()];
+    const description = match[2].trim();
+    if (!severity || description.length === 0) continue;
+    findings.push({ severity, description });
+  }
+
+  return findings.length > 0 ? findings : undefined;
 }
