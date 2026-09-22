@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { OperatorAgent } from '../src/operator-agent.js';
 
 describe('OperatorAgent Intent Layer', () => {
@@ -84,6 +84,54 @@ describe('OperatorAgent Intent Layer', () => {
 
     expect(operator.parseIntent('create a pr').type).toBe('create_pr');
     expect(operator.parseIntent('cria um pr').type).toBe('create_pr');
+  });
+
+  it('recalculates quota remaining time from resetAt instead of replaying a stale reason', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T12:00:00.000Z'));
+
+    try {
+      const first = operator.formatResponse(
+        { type: 'inspect_agents' },
+        {
+          agents: [
+            {
+              id: 'agy',
+              name: 'Google Antigravity',
+              ready: false,
+              quotaStatus: 'quota_exhausted',
+              quotaReason: 'resets in 32h30m34s',
+              resetAt: new Date('2026-09-22T13:30:00.000Z'),
+            },
+          ],
+        },
+      );
+
+      expect(first).toContain('resets in 1h30m');
+      expect(first).not.toContain('32h30m34s');
+
+      vi.advanceTimersByTime(60 * 60 * 1000);
+      const second = operator.formatResponse(
+        { type: 'inspect_agents' },
+        {
+          agents: [
+            {
+              id: 'agy',
+              name: 'Google Antigravity',
+              ready: false,
+              quotaStatus: 'quota_exhausted',
+              quotaReason: 'resets in 32h30m34s',
+              resetAt: new Date('2026-09-22T13:30:00.000Z'),
+            },
+          ],
+        },
+      );
+
+      expect(second).toContain('resets in 30m');
+      expect(second).not.toContain('1h30m');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('formats responses for each intent', () => {
