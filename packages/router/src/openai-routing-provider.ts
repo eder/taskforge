@@ -130,6 +130,8 @@ export class OpenAIRoutingProvider implements RoutingProvider {
   readonly id = 'openai';
   private fallbackProvider = new StaticRoutingProvider();
   private performanceEngine?: PerformanceEngine;
+  private failureCooldown?: { reason: RouterFallbackReason; until: number };
+  private readonly failureCooldownMs = 30_000;
 
   constructor(
     private apiKey?: string,
@@ -242,6 +244,10 @@ export class OpenAIRoutingProvider implements RoutingProvider {
       return this.makeFallback(input, 'provider_unavailable');
     }
 
+    if (this.failureCooldown && Date.now() < this.failureCooldown.until) {
+      return this.makeFallback(input, this.failureCooldown.reason);
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -322,6 +328,10 @@ export class OpenAIRoutingProvider implements RoutingProvider {
 
       if (!response.ok) {
         const reason: RouterFallbackReason = response.status === 429 ? 'quota' : 'http_error';
+        this.failureCooldown = {
+          reason,
+          until: Date.now() + this.failureCooldownMs,
+        };
         return this.makeFallback(input, reason);
       }
 
@@ -353,13 +363,19 @@ export class OpenAIRoutingProvider implements RoutingProvider {
         promptVersion: 'v1.0',
       };
 
+      this.failureCooldown = undefined;
       return RouterQualityGuard.evaluate(decision, input);
     } catch (err) {
       const isTimeout =
         controller.signal.aborted ||
         (err instanceof Error && err.name === 'AbortError') ||
         (err instanceof Error && err.message.toLowerCase().includes('timeout'));
-      return this.makeFallback(input, isTimeout ? 'timeout' : 'unknown');
+      const reason: RouterFallbackReason = isTimeout ? 'timeout' : 'unknown';
+      this.failureCooldown = {
+        reason,
+        until: Date.now() + this.failureCooldownMs,
+      };
+      return this.makeFallback(input, reason);
     } finally {
       clearTimeout(timeout);
     }
