@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig } from '@taskforge/shared';
+import { loadConfig, getGlobalStateDatabasePath } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import {
   TaskForgeDatabase,
@@ -156,8 +156,7 @@ export function createCli(): Command {
 
       // 5. Agent Detection. Hydrate the durable quota/circuit state first so
       // doctor does not report an exhausted provider as ready after a restart.
-      const doctorConfig = loadConfig();
-      const availabilityDb = new TaskForgeDatabase(doctorConfig.execution.databasePath);
+      const availabilityDb = new TaskForgeDatabase(getGlobalStateDatabasePath());
       AgentQuotaTracker.getInstance().configureStore(
         new AgentAvailabilityRepository(availabilityDb),
       );
@@ -425,6 +424,10 @@ export function createCli(): Command {
         isClean: true,
       }));
       const registry = new AgentRegistry();
+      const availabilityDb = new TaskForgeDatabase(getGlobalStateDatabasePath());
+      AgentQuotaTracker.getInstance().configureStore(
+        new AgentAvailabilityRepository(availabilityDb),
+      );
       const agents = await AgentDetector.detect(registry.list());
 
       const db = new TaskForgeDatabase(config.execution.databasePath);
@@ -448,6 +451,7 @@ export function createCli(): Command {
 
       console.log(output);
       db.close();
+      availabilityDb.close();
     });
 
   // tf pr create [run-id]
@@ -535,10 +539,12 @@ export function createCli(): Command {
         const issue = await ghService.importIssue(issueNum);
         console.log(`Imported Issue: "${issue.title}"`);
 
+        const availabilityDb = new TaskForgeDatabase(getGlobalStateDatabasePath());
         const orchestrator = new RunOrchestrator({
           repoRoot,
           config,
           database: db,
+          availabilityDatabase: availabilityDb,
         });
 
         const result = await orchestrator.run(issue.goalText, {
