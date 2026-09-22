@@ -53,7 +53,7 @@ class TimeoutProbeAgent implements AgentAdapter {
         inputTokens: 1000,
         cachedInputTokens: 200,
         outputTokens: 300,
-        totalTokens: 1500,
+        totalTokens: 1300,
         modelName: 'probe-model',
         source: 'provider_reported',
       },
@@ -183,7 +183,7 @@ describe('governed assignment execution timeout', () => {
     expect(usageRow?.input_tokens).toBe(1000);
     expect(usageRow?.cached_input_tokens).toBe(200);
     expect(usageRow?.output_tokens).toBe(300);
-    expect(usageRow?.total_tokens).toBe(1500);
+    expect(usageRow?.total_tokens).toBe(1300);
     expect(usageRow?.usage_source).toBe('provider_reported');
     expect(Number(usageRow?.planned_estimated_tokens)).toBeGreaterThan(0);
 
