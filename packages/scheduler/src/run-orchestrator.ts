@@ -8,6 +8,7 @@ import {
   generateRunId,
   detectExecutionIntent,
   ExecutionIntentDecision,
+  getGlobalStateDatabasePath,
   AgentStreamBus,
 } from '@taskforge/shared';
 import {
@@ -66,6 +67,7 @@ export interface OrchestratorOptions {
   config?: TaskForgeConfig;
   agentRegistry?: AgentRegistry;
   database?: TaskForgeDatabase;
+  availabilityDatabase?: TaskForgeDatabase;
   planner?: import('@taskforge/core').Planner;
   negotiator?: NegotiationManager;
   router?: RoutingProvider;
@@ -176,7 +178,12 @@ export class RunOrchestrator {
     this.streamBus = options.streamBus;
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
-    AgentQuotaTracker.getInstance().configureStore(new AgentAvailabilityRepository(this.db));
+    const availabilityDb =
+      options.availabilityDatabase ??
+      (options.database ? options.database : new TaskForgeDatabase(getGlobalStateDatabasePath()));
+    AgentQuotaTracker.getInstance().configureStore(
+      new AgentAvailabilityRepository(availabilityDb),
+    );
 
     this.runRepo = new RunRepository(this.db);
     this.goalRepo = new GoalRepository(this.db);
