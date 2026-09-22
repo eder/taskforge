@@ -106,6 +106,61 @@ describe('Real-Agent Hardening - Safety & Adapters', () => {
     expect(prompt).not.toContain('Role: implementer');
   });
 
+  it('normalizes the current Codex exec --json agent_message envelope as substantive output', () => {
+    const codex = new CodexAdapter();
+    const stdout = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: {
+          id: 'item_1',
+          type: 'agent_message',
+          text: 'This repository is a FastAPI and Next.js job application agent.',
+        },
+      }),
+      JSON.stringify({
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 12000,
+          cached_input_tokens: 9000,
+          output_tokens: 600,
+        },
+      }),
+    ].join('\n');
+
+    const outcome = codex.normalizeOutcome(stdout, '', 0);
+
+    expect(outcome.providerStatus).toBe('SUCCESS');
+    expect(outcome.finalResponse).toBe(
+      'This repository is a FastAPI and Next.js job application agent.',
+    );
+    expect(outcome.usage).toMatchObject({
+      inputTokens: 12000,
+      cachedInputTokens: 9000,
+      outputTokens: 600,
+    });
+  });
+
+  it('keeps the last completed Codex agent message as the final response', () => {
+    const codex = new CodexAdapter();
+    const stdout = [
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'item_1', type: 'agent_message', text: 'I will inspect the repository.' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'item_2', type: 'agent_message', text: 'Final repository-grounded answer.' },
+      }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 20 } }),
+    ].join('\n');
+
+    expect(codex.normalizeOutcome(stdout, '', 0).finalResponse).toBe(
+      'Final repository-grounded answer.',
+    );
+  });
+
   it('declares standard coding capabilities', async () => {
     const claude = new ClaudeCodeAdapter();
     const caps = await claude.capabilities();
