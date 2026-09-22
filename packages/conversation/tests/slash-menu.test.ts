@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PassThrough } from 'node:stream';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { SlashMenu, SLASH_COMMANDS } from '../src/slash-menu.js';
 
 describe('SlashMenu', () => {
@@ -11,7 +13,7 @@ describe('SlashMenu', () => {
     expect(menu.isOpen).toBe(true);
     expect(menu.matches.length).toBe(SLASH_COMMANDS.length);
     expect(res.autoCompleted).toBeUndefined();
-    expect(menu.getSelected()?.cmd).toBe('/exit');
+    expect(menu.getSelected()?.cmd).toBe('/help');
   });
 
   it('autocompletes unique match when typing "/e"', () => {
@@ -95,7 +97,30 @@ describe('SlashMenu', () => {
 
     menu.update('/exit');
     const item = menu.getSelected();
-    expect(item?.desc).toContain('Exit interactive session');
+    expect(item?.desc).toContain('Exit the interactive session');
+  });
+
+  it('exposes operational commands that were previously hidden from the slash menu', () => {
+    const commands = SLASH_COMMANDS.map((item) => item.cmd);
+
+    expect(commands).toContain('/inspect');
+    expect(commands).toContain('/focus');
+    expect(commands).toContain('/back');
+    expect(commands).toContain('/raw');
+    expect(commands).toContain('/constraint');
+    expect(commands).toContain('/reassign');
+  });
+
+  it('keeps README command documentation synchronized with the public slash catalog', () => {
+    const readmePath = path.resolve(__dirname, '../../../README.md');
+    const readme = fs.readFileSync(readmePath, 'utf8');
+
+    for (const command of SLASH_COMMANDS) {
+      expect(
+        readme.includes(`\`${command.cmd}`),
+        `README is missing public command ${command.cmd}`,
+      ).toBe(true);
+    }
   });
 
   it('recognizes and autocompletes /health command', () => {
@@ -107,6 +132,6 @@ describe('SlashMenu', () => {
     expect(menu.matches.length).toBe(1);
     expect(menu.matches[0].cmd).toBe('/health');
     expect(res.autoCompleted).toBe('/health');
-    expect(menu.matches[0].desc).toContain('health and status');
+    expect(menu.matches[0].desc).toContain('Router');
   });
 });
