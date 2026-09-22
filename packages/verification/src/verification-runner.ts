@@ -69,8 +69,13 @@ export class VerificationRunner {
       return { command: defaultCmd ?? `${pm} ${name}`, available: false };
     };
 
-    // Investigation tasks are read-only; skip code verification
-    const isInvestigation = taskType === 'investigation';
+    // Read-only/reporting task types do not need to rerun the repository's
+    // full code-quality suite. In particular, a REVIEW task usually follows an
+    // implementation that was already verified; rerunning test+lint+typecheck
+    // here adds substantial wall time without validating a new mutation.
+    const requiresCodeVerification =
+      taskType !== 'investigation' &&
+      taskType !== 'review';
 
     const testResolved = resolveScript('test', customCommands?.testCommand, 'pnpm test');
     const lintResolved = resolveScript('lint', customCommands?.lintCommand, 'pnpm lint');
@@ -85,17 +90,17 @@ export class VerificationRunner {
       {
         name: 'test',
         command: testResolved.command,
-        enabled: !isInvestigation && config.verification.tests && testResolved.available,
+        enabled: requiresCodeVerification && config.verification.tests && testResolved.available,
       },
       {
         name: 'lint',
         command: lintResolved.command,
-        enabled: !isInvestigation && config.verification.lint && lintResolved.available,
+        enabled: requiresCodeVerification && config.verification.lint && lintResolved.available,
       },
       {
         name: 'typecheck',
         command: typecheckResolved.command,
-        enabled: !isInvestigation && config.verification.typecheck && typecheckResolved.available,
+        enabled: requiresCodeVerification && config.verification.typecheck && typecheckResolved.available,
       },
       {
         name: 'build',
