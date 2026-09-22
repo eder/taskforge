@@ -62,13 +62,11 @@ describe('Focus Mode single-key shortcuts', () => {
     });
   }
 
-  async function startInteractiveShell(shell: InteractiveShell, input: PassThrough): Promise<Promise<void>> {
-    const runPromise = shell.start();
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    // Make sure the keypress listener is attached before emitting synthetic
-    // readline keypress events.
-    expect(input.listenerCount('keypress')).toBeGreaterThan(0);
-    return runPromise;
+  async function waitForKeypressListener(input: PassThrough): Promise<void> {
+    await waitForCondition(
+      () => input.listenerCount('keypress') > 0,
+      'interactive keypress listener attached',
+    );
   }
 
   it('switches focus immediately with 1-9 when focused and the input buffer is empty, then exits with Esc', async () => {
@@ -89,7 +87,8 @@ describe('Focus Mode single-key shortcuts', () => {
     await shell.handleInput('/stream TASK-FOCUS');
     expect((shell as any).focusedAssignmentId).toBe('asgn-1');
 
-    const runPromise = await startInteractiveShell(shell, input);
+    const runPromise = shell.start();
+    await waitForKeypressListener(input);
 
     input.emit('keypress', '2', { name: '2', sequence: '2' });
     expect((shell as any).focusedAssignmentId).toBe('asgn-2');
@@ -119,7 +118,8 @@ describe('Focus Mode single-key shortcuts', () => {
     await shell.handleInput('/stream TASK-FOCUS');
     expect((shell as any).focusedAssignmentId).toBe('asgn-1');
 
-    const runPromise = await startInteractiveShell(shell, input);
+    const runPromise = shell.start();
+    await waitForKeypressListener(input);
 
     input.emit('keypress', 'x', { name: 'x', sequence: 'x' });
     input.emit('keypress', '2', { name: '2', sequence: '2' });
@@ -148,7 +148,8 @@ describe('Focus Mode single-key shortcuts', () => {
     shellsToClean.push(shell);
 
     const handleInput = vi.spyOn(shell, 'handleInput').mockResolvedValue('ok');
-    const runPromise = await startInteractiveShell(shell, input);
+    const runPromise = shell.start();
+    await waitForKeypressListener(input);
 
     input.emit('keypress', '2', { name: '2', sequence: '2' });
     input.emit('keypress', '\r', { name: 'return', sequence: '\r' });
