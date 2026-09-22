@@ -1,6 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { VerificationCheck, VerificationResult, TaskForgeConfig } from '@taskforge/shared';
+import {
+  VerificationCheck,
+  VerificationResult,
+  VerificationExpectation,
+  TaskForgeConfig,
+} from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import { EventRepository, VerificationRepository } from '@taskforge/persistence';
 
@@ -16,6 +21,12 @@ export interface RunVerificationOptions {
     typecheckCommand?: string;
     buildCommand?: string;
   };
+  /**
+   * Exact command-only completion evidence for verification tasks. When set,
+   * these commands replace the repository-wide default verification suite.
+   */
+  explicitCommands?: string[];
+  expectation?: VerificationExpectation;
 }
 
 export class VerificationRunner {
@@ -25,7 +36,16 @@ export class VerificationRunner {
   ) {}
 
   async verify(options: RunVerificationOptions): Promise<VerificationResult> {
-    const { taskId, runId, worktreePath, config, customCommands, taskType } = options;
+    const {
+      taskId,
+      runId,
+      worktreePath,
+      config,
+      customCommands,
+      taskType,
+      explicitCommands,
+      expectation = 'pass',
+    } = options;
 
     if (this.eventRepo) {
       this.eventRepo.append({
@@ -86,28 +106,36 @@ export class VerificationRunner {
     );
     const buildResolved = resolveScript('build', customCommands?.buildCommand, 'pnpm build');
 
-    const checksToRun: Array<{ name: string; command: string; enabled: boolean }> = [
-      {
-        name: 'test',
-        command: testResolved.command,
-        enabled: requiresCodeVerification && config.verification.tests && testResolved.available,
-      },
-      {
-        name: 'lint',
-        command: lintResolved.command,
-        enabled: requiresCodeVerification && config.verification.lint && lintResolved.available,
-      },
-      {
-        name: 'typecheck',
-        command: typecheckResolved.command,
-        enabled: requiresCodeVerification && config.verification.typecheck && typecheckResolved.available,
-      },
-      {
-        name: 'build',
-        command: buildResolved.command,
-        enabled: false, // optional by default
-      },
-    ];
+    const requestedCommands = (explicitCommands ?? []).map((command) => command.trim()).filter(Boolean);
+    const checksToRun: Array<{ name: string; command: string; enabled: boolean }> =
+      requestedCommands.length > 0
+        ? requestedCommands.map((command, index) => ({
+            name: `explicit-${index + 1}`,
+            command,
+            enabled: true,
+          }))
+        : [
+            {
+              name: 'test',
+              command: testResolved.command,
+              enabled: requiresCodeVerification && config.verification.tests && testResolved.available,
+            },
+            {
+              name: 'lint',
+              command: lintResolved.command,
+              enabled: requiresCodeVerification && config.verification.lint && lintResolved.available,
+            },
+            {
+              name: 'typecheck',
+              command: typecheckResolved.command,
+              enabled: requiresCodeVerification && config.verification.typecheck && typecheckResolved.available,
+            },
+            {
+              name: 'build',
+              command: buildResolved.command,
+              enabled: false, // optional by default
+            },
+          ];
 
     const results: VerificationCheck[] = [];
     let overallPassed = true;
@@ -136,10 +164,10 @@ export class VerificationRunner {
 
       results.push(checkRecord);
 
-      if (runResult.exitCode !== 0) {
+      if (runResult.exitCode !== 0 && expectation === 'pass') {
         overallPassed = false;
         failureReason = `Check '${check.name}' failed with exit code ${runResult.exitCode}`;
-        break; // stop on first verification failure
+        break; // stop on first required-to-pass verification failure
       }
     }
 
@@ -162,6 +190,7 @@ export class VerificationRunner {
         payload: {
           passed: overallPassed,
           checksCount: results.length,
+          expectation,
           failureReason,
         },
         timestamp: new Date(),
