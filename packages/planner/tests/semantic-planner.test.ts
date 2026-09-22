@@ -247,6 +247,30 @@ describe('TaskGraphValidator', () => {
 });
 
 describe('SemanticPlanner', () => {
+  it('uses the read-only fast path for "O que é esse projeto?"', async () => {
+    const caller = vi.fn().mockRejectedValue(new Error('model should not be called'));
+    const planner = new SemanticPlanner({ customCaller: caller, model: 'gpt-5.6-luna' });
+    const goal: Goal = {
+      id: 'goal-project-overview-copula',
+      description: 'O que é esse projeto?',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    const tasks = graph.getAllTasks();
+
+    expect(caller).not.toHaveBeenCalled();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].type).toBe('investigation');
+    expect(tasks[0].contract.completionMode).toBe('report');
+    expect(tasks[0].contract.allowedScope).toEqual([]);
+    expect(tasks[0].contract.forbiddenChanges).toContain('*');
+    expect(graph.metadata?.planner?.fallbackReason).toBe('lightweight_read_only_fast_path');
+  });
+
   it('uses the read-only fast path for "O que esse projeto faz?"', async () => {
     const caller = vi.fn().mockRejectedValue(new Error('model should not be called'));
     const planner = new SemanticPlanner({ customCaller: caller, model: 'gpt-5.6-luna' });
