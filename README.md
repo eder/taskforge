@@ -294,7 +294,16 @@ The router recommends the minimum useful team for a task:
 - collaborative/pair execution;
 - competitive candidates where appropriate.
 
-Agent choice is deliberately separated from registry order. When the router names a healthy preferred agent, TaskForge honors that decision. When no preference exists, the selector chooses among healthy capability-compatible agents using persisted per-role assignment history (least-used first, then overall usage and recency) and an order-independent rendezvous hash for exact ties. Registering Claude before Codex or Antigravity must never become an accidental routing policy.
+Agent choice is deliberately separated from registry order and from cross-project historical averages. Selection follows a deterministic hierarchy:
+
+1. provider availability and quota;
+2. hard capabilities required by the assignment;
+3. current task-to-agent fit (role, objective and work characteristics);
+4. an explicit healthy router preference when the current-task router supplies one;
+5. fairness history only when equally suitable agents remain tied;
+6. an order-independent rendezvous hash for an exact deterministic tie.
+
+The built-in fit model treats harness specialization as product configuration: architecture/synthesis/review work favors synthesis-oriented agents, implementation/reproduction/testing favors execution-oriented agents, and exploratory research favors research-oriented agents. The CLI shows the selection reason. Historical performance remains telemetry; it is not allowed to become the primary agent selector because repositories and requests are not directly comparable.
 
 TaskForge also applies a deterministic fan-out admission gate before spending provider tokens. Multiple agents are admitted only when the proposed roles demonstrate at least one concrete execution benefit:
 
@@ -308,19 +317,28 @@ Routing is advisory. Deterministic code owns authoritative state.
 
 #### Execution health and orchestration efficiency
 
-After a run, TaskForge compares the routing hypothesis with observed execution evidence. Staffing is only one dimension of execution health.
-
-The final summary and `/stats` report:
+After a run, TaskForge evaluates the orchestration outcomes it can prove:
 
 - **Overall health** — EXCELLENT, NEEDS ATTENTION, INEFFICIENT, or INCONCLUSIVE;
 - **Staffing** — RIGHT-SIZED, FAN-OUT JUSTIFIED, INEFFICIENT, or INCONCLUSIVE;
-- **Token efficiency** — based on fresh provider work rather than cache being counted twice;
-- **Quality** — first-pass completion, rework, Completion Gate rejections, specialist quality roles;
+- **Quality** — first-pass completion, rework, Completion Gate rejections and specialist quality roles;
 - **Recovery** — retries, failover and failed/cancelled assignments;
-- observed execution overlap and parallelism factor;
+- observable assignment/provider usage wasted by failed or cancelled work;
+- observed execution overlap and parallelism;
 - fan-out decisions admitted/rejected by deterministic policy.
 
-Provider usage uses one normalized invariant:
+TaskForge does not publish a theoretical token estimate before execution. Project size, repository structure, provider context and harness behavior make that estimate look more precise than it is.
+
+After execution, provider usage is reported as provider telemetry:
+
+```text
+Input
+Cached input
+Output
+Total
+```
+
+with one normalized invariant:
 
 ```text
 inputTokens       = all provider input, including cached input
@@ -328,17 +346,7 @@ cachedInputTokens = subset of inputTokens
 totalTokens       = inputTokens + outputTokens
 ```
 
-Cached input is never added to input a second time.
-
-For efficiency comparison, TaskForge also reports:
-
-```text
-fresh-work tokens = uncached input + output
-```
-
-The planning baseline is compared to fresh work with an explicit confidence level. A large total provider footprint caused by high cache reuse is shown as context footprint, not automatically labeled inefficient.
-
-TaskForge deliberately does not claim hypothetical "time saved" or "tokens saved" without a counterfactual single-agent run. It reports observable overlap, provider footprint, cache reuse, fresh work, waste and quality signals.
+Absolute provider token volume is not automatically labeled efficient or inefficient. TaskForge only calls provider usage waste when it has objective orchestration evidence, such as tokens spent by a failed/cancelled assignment. This keeps the control plane honest about what it knows and what it does not know.
 
 ### Isolation
 
