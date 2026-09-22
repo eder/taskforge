@@ -29,6 +29,7 @@ import {
   HeuristicPlanner,
   SemanticPlanner,
   enforceLightweightReadOnlyPlanInvariant,
+  enforceArchitectureDecisionPlanInvariant,
 } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
 import {
@@ -1431,7 +1432,12 @@ export class InteractiveShell {
           goal,
           executionIntent,
         );
-        this.currentGraph = invariant.graph;
+        const architectureInvariant = enforceArchitectureDecisionPlanInvariant(
+          invariant.graph,
+          goal,
+          executionIntent,
+        );
+        this.currentGraph = architectureInvariant.graph;
 
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
@@ -1500,6 +1506,9 @@ export class InteractiveShell {
             ? `Selection: ${selected[0].agent.name} — ${selected[0].selectionReason}.`
             : '',
           fanOutRationale,
+          architectureInvariant.changed
+            ? `Plan guard: architecture ownership/consistency must be resolved before mutation (${architectureInvariant.decisionTaskId}).`
+            : '',
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
@@ -1536,7 +1545,19 @@ export class InteractiveShell {
         if (!this.activeRunId) {
           this.activeRunId = generateRunId();
         }
-        this.currentGraph = await this.negotiator.negotiateGraph(revisedGraph, this.activeRunId);
+        const negotiatedRevision = await this.negotiator.negotiateGraph(revisedGraph, this.activeRunId);
+        const revisionExecutionIntent = detectExecutionIntent(goal.description);
+        const revisionInvariant = enforceLightweightReadOnlyPlanInvariant(
+          negotiatedRevision,
+          goal,
+          revisionExecutionIntent,
+        );
+        const architectureInvariant = enforceArchitectureDecisionPlanInvariant(
+          revisionInvariant.graph,
+          goal,
+          revisionExecutionIntent,
+        );
+        this.currentGraph = architectureInvariant.graph;
         this.conversationState = 'AWAITING_PLAN_APPROVAL';
 
         const tasks = this.currentGraph.getAllTasks();
@@ -1585,6 +1606,9 @@ export class InteractiveShell {
             ? `Selection: ${selected[0].agent.name} — ${selected[0].selectionReason}.`
             : '',
           fanOutRationale,
+          architectureInvariant.changed
+            ? `Plan guard: architecture ownership/consistency must be resolved before mutation (${architectureInvariant.decisionTaskId}).`
+            : '',
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
