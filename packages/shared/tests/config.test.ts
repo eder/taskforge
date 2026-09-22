@@ -1,7 +1,11 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { describe, it, expect } from 'vitest';
-import { getDefaultConfig, TaskForgeConfigSchema } from '../src/config.js';
+import {
+  getDefaultConfig,
+  TaskForgeConfigSchema,
+  getGlobalStateDatabasePath,
+} from '../src/config.js';
 import { ConfigurationError, TaskForgeError } from '../src/errors.js';
 
 describe('Shared - Config', () => {
