@@ -286,6 +286,15 @@ export class TaskForgeDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS agent_availability (
+        agent_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        reason TEXT,
+        recorded_at INTEGER NOT NULL,
+        reset_at INTEGER,
+        source TEXT NOT NULL DEFAULT 'runtime'
+      );
+
       CREATE TABLE IF NOT EXISTS interaction_requests (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
@@ -360,6 +369,21 @@ export class TaskForgeDatabase {
       this.db.exec('ALTER TABLE assignments ADD COLUMN completion_reason TEXT;');
     } catch {
       // Column may already exist
+    }
+
+    for (const migration of [
+      'ALTER TABLE cost_tracking ADD COLUMN assignment_id TEXT;',
+      'ALTER TABLE cost_tracking ADD COLUMN role TEXT;',
+      'ALTER TABLE cost_tracking ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0;',
+      'ALTER TABLE cost_tracking ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;',
+      "ALTER TABLE cost_tracking ADD COLUMN usage_source TEXT NOT NULL DEFAULT 'provider_reported';",
+      'ALTER TABLE cost_tracking ADD COLUMN planned_estimated_tokens INTEGER NOT NULL DEFAULT 0;',
+    ]) {
+      try {
+        this.db.exec(migration);
+      } catch {
+        // Column may already exist
+      }
     }
   }
 

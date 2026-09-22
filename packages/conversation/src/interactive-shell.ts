@@ -16,7 +16,12 @@ import {
   ActiveAgentState,
 } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
-import { AgentRegistry, AgentDetector, AgentActivityTracker } from '@taskforge/agents';
+import {
+  AgentRegistry,
+  AgentDetector,
+  AgentActivityTracker,
+  AgentQuotaTracker,
+} from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
 import { HeuristicPlanner, SemanticPlanner } from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
@@ -40,8 +45,14 @@ import {
   TaskRepository,
   AssignmentRepository,
   AuditService,
+  AgentAvailabilityRepository,
 } from '@taskforge/persistence';
-import { TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '@taskforge/telemetry';
+import {
+  TelemetryCollector,
+  PerformanceEngine,
+  ExecutionUsageEstimator,
+  UsageCalibrationEngine,
+} from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
 import { SessionRegistry } from '@taskforge/collaboration';
@@ -52,6 +63,12 @@ import { SlashMenu } from './slash-menu.js';
 import { LiveTicker } from './live-ticker.js';
 import { StreamViewer } from './stream-viewer.js';
 import { CockpitPanels } from './cockpit-panels.js';
+
+function formatApproxTokens(value: number): string {
+  if (value < 1000) return value.toLocaleString();
+  const thousands = value / 1000;
+  return `${thousands >= 10 ? thousands.toFixed(0) : thousands.toFixed(1)}k`;
+}
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -86,6 +103,7 @@ export class InteractiveShell {
   private config: TaskForgeConfig;
   private db: TaskForgeDatabase;
   private telemetry: TelemetryCollector;
+  private usageCalibration: UsageCalibrationEngine;
   private operator: OperatorAgent;
   private agentRegistry: AgentRegistry;
   private gitService: GitService;
@@ -134,10 +152,12 @@ export class InteractiveShell {
     this.sessionRegistry = new SessionRegistry();
     this.config = options.config ?? loadConfig();
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
+    AgentQuotaTracker.getInstance().configureStore(new AgentAvailabilityRepository(this.db));
     this.eventRepo = new EventRepository(this.db);
     this.taskRepo = new TaskRepository(this.db);
     this.assignmentRepo = new AssignmentRepository(this.db);
     this.telemetry = new TelemetryCollector(this.db);
+    this.usageCalibration = new UsageCalibrationEngine(this.db);
     this.operator = new OperatorAgent();
     this.agentRegistry = new AgentRegistry();
     this.gitService = new GitService(this.repoRoot);
@@ -646,6 +666,14 @@ export class InteractiveShell {
 
     const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
 
+    const usageAccuracy = this.telemetry.getUsageAccuracy(result.runId);
+    const usageBlock =
+      usageAccuracy.observedAssignments > 0
+        ? usageAccuracy.plannedEstimatedTokens > 0
+          ? `    ${colors.dim}Observed usage:${colors.reset}     ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Assignment baseline:${colors.reset} ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} (${((usageAccuracy.varianceRatio ?? 1) * 100).toFixed(0)}% observed / baseline)`
+          : `    ${colors.dim}Observed usage:${colors.reset}     ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
+        : '';
+
     const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
     let deliveryBlock = '';
     let repositoryBlock = '';
@@ -697,6 +725,7 @@ export class InteractiveShell {
       `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
       `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
       repositoryBlock,
+      usageBlock,
       deliveryBlock,
       result.error
         ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
@@ -1217,9 +1246,10 @@ export class InteractiveShell {
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
 
+        const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
         const routing = await this.router.route({
           task: primaryTask,
-          availableAgents: this.agentRegistry.list().map((a) => a.id),
+          availableAgents: availableAgentIds,
         });
 
         const selected = await this.agentSelector.selectAgents(routing.roles);
@@ -1233,18 +1263,33 @@ export class InteractiveShell {
           )
           .join(', ');
 
-        const totalEstimatedTokens = tasks.reduce(
-          (sum, t) => sum + TaskTokenEstimator.estimateTask(t).totalEstimatedTokens,
-          0,
+        const primaryAssignmentCount = Math.max(
+          1,
+          selected.length || routing.teamSize || 1,
         );
-        const tokensFormatted = totalEstimatedTokens.toLocaleString();
+        const calibrationByTaskType = this.usageCalibration.getTaskTypeCalibrations(
+          tasks.map((task) => task.type),
+        );
+        const usageEstimate = ExecutionUsageEstimator.estimateRun({
+          tasks,
+          originalUserRequest: intent.goal,
+          assignmentCounts: {
+            [primaryTask.id]: primaryAssignmentCount,
+          },
+          calibrationByTaskType,
+        });
+        const usageByTask = new Map(
+          usageEstimate.breakdown.map((estimate) => [estimate.taskId, estimate]),
+        );
 
         const taskFormattedList = tasks.map((t, idx) => {
           const icon = theme.taskTypeIcon(t.type);
           const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
           const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
-          const est = TaskTokenEstimator.estimateTask(t);
-          const tokenTag = `${colors.dim}(~${est.totalEstimatedTokens.toLocaleString()} tokens)${colors.reset}`;
+          const estimate = usageByTask.get(t.id);
+          const tokenTag = estimate
+            ? `${colors.dim}(~${formatApproxTokens(estimate.minTokens)}–${formatApproxTokens(estimate.maxTokens)} tokens, ${estimate.assignmentCount} baseline assignment${estimate.assignmentCount === 1 ? '' : 's'})${colors.reset}`
+            : '';
           return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
         });
 
@@ -1284,7 +1329,8 @@ export class InteractiveShell {
           `  ${colors.dim}Router:${colors.reset}   ${routerSource}${policyBadge}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
-          `Estimated tokens: ~${tokensFormatted} tokens.`,
+          `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
+          `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
@@ -1327,9 +1373,10 @@ export class InteractiveShell {
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
 
+        const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
         const routing = await this.router.route({
           task: primaryTask,
-          availableAgents: this.agentRegistry.list().map((a) => a.id),
+          availableAgents: availableAgentIds,
         });
 
         const selected = await this.agentSelector.selectAgents(routing.roles);
@@ -1343,18 +1390,33 @@ export class InteractiveShell {
           )
           .join(', ');
 
-        const totalEstimatedTokens = tasks.reduce(
-          (sum, t) => sum + TaskTokenEstimator.estimateTask(t).totalEstimatedTokens,
-          0,
+        const primaryAssignmentCount = Math.max(
+          1,
+          selected.length || routing.teamSize || 1,
         );
-        const tokensFormatted = totalEstimatedTokens.toLocaleString();
+        const calibrationByTaskType = this.usageCalibration.getTaskTypeCalibrations(
+          tasks.map((task) => task.type),
+        );
+        const usageEstimate = ExecutionUsageEstimator.estimateRun({
+          tasks,
+          originalUserRequest: goal.description,
+          assignmentCounts: {
+            [primaryTask.id]: primaryAssignmentCount,
+          },
+          calibrationByTaskType,
+        });
+        const usageByTask = new Map(
+          usageEstimate.breakdown.map((estimate) => [estimate.taskId, estimate]),
+        );
 
         const taskFormattedList = tasks.map((t, idx) => {
           const icon = theme.taskTypeIcon(t.type);
           const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
           const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
-          const est = TaskTokenEstimator.estimateTask(t);
-          const tokenTag = `${colors.dim}(~${est.totalEstimatedTokens.toLocaleString()} tokens)${colors.reset}`;
+          const estimate = usageByTask.get(t.id);
+          const tokenTag = estimate
+            ? `${colors.dim}(~${formatApproxTokens(estimate.minTokens)}–${formatApproxTokens(estimate.maxTokens)} tokens, ${estimate.assignmentCount} baseline assignment${estimate.assignmentCount === 1 ? '' : 's'})${colors.reset}`
+            : '';
           return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
         });
 
@@ -1362,7 +1424,8 @@ export class InteractiveShell {
           `${colors.brand}✦ Revised Plan${colors.reset} ${colors.dim}(Revision: ${intent.revision.details})${colors.reset}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
-          `Estimated tokens: ~${tokensFormatted} tokens.`,
+          `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
+          `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
@@ -1453,6 +1516,7 @@ export class InteractiveShell {
           activityTracker: this.activityTracker,
           streamBus: this.streamBus,
           sessionRegistry: this.sessionRegistry,
+          telemetryCollector: this.telemetry,
         });
 
         const isBackground =

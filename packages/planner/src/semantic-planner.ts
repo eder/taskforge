@@ -60,6 +60,25 @@ export const SEMANTIC_PLAN_JSON_SCHEMA = {
             type: 'array',
             items: { type: 'string' },
           },
+          completionMode: {
+            type: 'string',
+            enum: ['mutation', 'report', 'verification', 'review'],
+          },
+          verification: {
+            type: ['object', 'null'],
+            properties: {
+              commands: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              expectation: {
+                type: 'string',
+                enum: ['observe', 'pass'],
+              },
+            },
+            required: ['commands', 'expectation'],
+            additionalProperties: false,
+          },
         },
         required: [
           'taskId',
@@ -71,6 +90,8 @@ export const SEMANTIC_PLAN_JSON_SCHEMA = {
           'allowedScope',
           'forbiddenChanges',
           'acceptanceCriteria',
+          'completionMode',
+          'verification',
         ],
         additionalProperties: false,
       },
@@ -295,6 +316,8 @@ export class SemanticPlanner implements Planner {
           allowedScope: t.contract.allowedScope,
           forbiddenChanges: t.contract.forbiddenChanges,
           acceptanceCriteria: t.contract.acceptanceCriteria,
+          completionMode: t.contract.completionMode,
+          verification: t.contract.verification ?? null,
         })),
       };
 
@@ -543,6 +566,14 @@ export class SemanticPlanner implements Planner {
         content: `You are the TaskForge Semantic Planner.
 Decompose the engineering objective into an optimal, typed DAG of tasks.
 Never collapse complex engineering requirements into generic 2-task plans.
+
+Every task must declare explicit completion semantics:
+- mutation: repository changes are the completion evidence.
+- report: read-only analysis/report; allowedScope must be [] and forbiddenChanges must be ["*"].
+- verification: read-only command execution; allowedScope must be [] and forbiddenChanges must be ["*"]. Set verification.commands to the exact commands and verification.expectation to "observe" when establishing/capturing a baseline, otherwise "pass".
+- review: read-only review findings; allowedScope must be [] and forbiddenChanges must be ["*"].
+Never invent writable paths for report/review/verification tasks.
+
 Output strictly according to the json_schema.`,
       },
       {
@@ -680,6 +711,26 @@ Output strictly according to the json_schema.`,
         }
       }
 
+      const testingAuthorsCode =
+        taskType === 'testing' &&
+        /\b(write|add|create|implement|author|introduce|generate|update|modify)\b.*\b(tests?|specs?|fixtures?|suites?)\b/i.test(clause);
+      const isVerification =
+        taskType === 'testing' &&
+        !testingAuthorsCode &&
+        /\b(run|execute|verify|validate|check|typecheck|lint|build|compile|baseline)\b/i.test(clause);
+      const completionMode =
+        taskType === 'investigation'
+          ? 'report'
+          : taskType === 'review'
+            ? 'review'
+            : isVerification
+              ? 'verification'
+              : 'mutation';
+      const commandMatches =
+        isVerification
+          ? clause.match(/\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:typecheck|lint|build|test)\b/gi) ?? []
+          : [];
+
       tasks.push({
         taskId,
         title: clause.length > 60 ? `${clause.slice(0, 57)}...` : clause,
@@ -687,9 +738,17 @@ Output strictly according to the json_schema.`,
         type: taskType,
         dependencies,
         objective: clause,
-        allowedScope: ['*'],
-        forbiddenChanges: [],
+        allowedScope: completionMode === 'mutation' ? ['*'] : [],
+        forbiddenChanges: completionMode === 'mutation' ? [] : ['*'],
         acceptanceCriteria: [`Requirement "${clause}" is implemented and verified`],
+        completionMode,
+        verification:
+          completionMode === 'verification'
+            ? {
+                commands: commandMatches.map((command) => command.trim()),
+                expectation: /\bbaseline\b/i.test(clause) ? 'observe' : 'pass',
+              }
+            : null,
       });
 
       createdIds.push(taskId);

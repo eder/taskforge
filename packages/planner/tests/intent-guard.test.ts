@@ -31,6 +31,8 @@ describe('normalizeGraphForExecutionIntent', () => {
 
     const task = graph.getAllTasks()[0];
     expect(task.type).toBe('investigation');
+    expect(task.contract.completionMode).toBe('report');
+    expect(task.contract.verification).toBeUndefined();
     expect(task.contract.allowedScope).toEqual([]);
     expect(task.contract.forbiddenChanges).toEqual(['*']);
   });

@@ -12,9 +12,10 @@ import {
   VerificationRepository,
   WorkspaceRepository,
   InteractionRepository,
+  AgentAvailabilityRepository,
 } from '@taskforge/persistence';
 import { GitService, WorktreeManager, RepositoryAnalyzer } from '@taskforge/workspace';
-import { AgentRegistry, AgentDetector, FakeAgent } from '@taskforge/agents';
+import { AgentRegistry, AgentDetector, FakeAgent, AgentQuotaTracker } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { VerificationRunner } from '@taskforge/verification';
 import {
@@ -153,7 +154,13 @@ export function createCli(): Command {
         // ignore
       }
 
-      // 5. Agent Detection
+      // 5. Agent Detection. Hydrate the durable quota/circuit state first so
+      // doctor does not report an exhausted provider as ready after a restart.
+      const doctorConfig = loadConfig();
+      const availabilityDb = new TaskForgeDatabase(doctorConfig.execution.databasePath);
+      AgentQuotaTracker.getInstance().configureStore(
+        new AgentAvailabilityRepository(availabilityDb),
+      );
       const registry = new AgentRegistry();
       const reports = await AgentDetector.detect(registry.list());
       console.log(`\n  ${colors.bold}Agent Harness Detection:${colors.reset}`);
@@ -162,8 +169,9 @@ export function createCli(): Command {
           `    ${theme.agentPill(rep.id, rep.name, rep.ready, rep.quotaStatus, rep.quotaReason)}`,
         );
       }
+      availabilityDb.close();
       console.log(
-        `\n  ${colors.green}✔${colors.reset} ${colors.bold}Diagnostic complete. Everything ready!${colors.reset}\n`,
+        `\n  ${colors.green}✔${colors.reset} ${colors.bold}Diagnostic complete.${colors.reset}\n`,
       );
     });
 

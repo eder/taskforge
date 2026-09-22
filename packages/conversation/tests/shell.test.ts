@@ -94,6 +94,10 @@ describe('InteractiveShell (REPL)', () => {
     // Check plan proposal flow
     const goalReply = await shell.handleInput('create application health endpoint');
     expect(goalReply).toContain('Understood. Recommended strategy:');
+    expect(goalReply).toContain('Estimated agent usage:');
+    expect(goalReply).toContain('confidence:');
+    expect(goalReply).toContain('Baseline assignments:');
+    expect(goalReply).not.toContain('Estimated tokens:');
     expect(goalReply).toContain('structured tasks:');
     expect(goalReply).toContain('Do you want me to execute?');
 
@@ -184,6 +188,8 @@ describe('InteractiveShell (REPL)', () => {
     // 1. Submit initial goal
     const planProposal = await shell.handleInput('create customer billing service and webhook integration');
     expect(planProposal).toContain('✦ Plan Proposal');
+    expect(planProposal).toContain('Estimated agent usage:');
+    expect(planProposal).toContain('Baseline assignments:');
     expect(planProposal).toContain('structured tasks:');
 
     const initialGraph = (shell as any).currentGraph;
@@ -194,6 +200,8 @@ describe('InteractiveShell (REPL)', () => {
     // 2. Submit natural language plan revision: add constraint
     const constraintReply = await shell.handleInput('do not modify stripe-secrets.json');
     expect(constraintReply).toContain('✦ Revised Plan');
+    expect(constraintReply).toContain('Estimated agent usage:');
+    expect(constraintReply).toContain('Baseline assignments:');
 
     const graphAfterConstraint = (shell as any).currentGraph;
     expect(graphAfterConstraint).toBeDefined();

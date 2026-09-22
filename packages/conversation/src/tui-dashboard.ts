@@ -143,7 +143,7 @@ export class TuiDashboard {
       }
       if (data.costReport) {
         lines.push(
-          `│  Estimated cost: $${data.costReport.totalCostUsd.toFixed(4)} USD (${data.costReport.totalInputTokens} in / ${data.costReport.totalOutputTokens} out)`.padEnd(64) + '│',
+          `│  Estimated cost: ${data.costReport.totalCostUsd.toFixed(4)} USD • observed: ${data.costReport.totalTokens} tokens`.padEnd(64) + '│',
         );
       }
       lines.push('└────────────────────────────────────────────────────────────────┘');

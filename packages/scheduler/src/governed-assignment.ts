@@ -6,6 +6,7 @@ import {
   AgentStreamBus,
   CollaborationProposal,
   TaskForgeConfig,
+  AgentUsage,
 } from '@taskforge/shared';
 import { Task, TaskGraph, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter, AgentActivityTracker } from '@taskforge/agents';
@@ -53,6 +54,8 @@ export interface GovernedAssignmentContext {
   /** Optional hooks for callers that also track task-level (not just assignment-level) state. */
   onAttention?: (kind: 'waiting_permission' | 'waiting_input' | 'waiting_auth') => void;
   onResumed?: () => void;
+  /** Called once when the harness reports observable provider token usage. */
+  onUsage?: (usage: AgentUsage) => void;
 }
 
 export interface GovernedAssignmentResult {
@@ -67,6 +70,7 @@ export interface GovernedAssignmentResult {
   findings?: import('@taskforge/shared').ReviewFinding[];
   normalizedOutcome?: import('@taskforge/shared').ProviderExecutionOutcome;
   completionReason?: import('@taskforge/shared').CompletionFailureReason;
+  usage?: AgentUsage;
 }
 
 /**
@@ -282,6 +286,14 @@ export async function executeGovernedAssignment(
         }
       },
     });
+
+    if (agentResult.usage?.source === 'provider_reported') {
+      try {
+        ctx.onUsage?.(agentResult.usage);
+      } catch {
+        // Usage telemetry is observational and must never fail execution.
+      }
+    }
   } catch (err) {
     thrownError = err instanceof Error ? err : new Error(String(err));
     agentResult = {
@@ -425,6 +437,7 @@ export async function executeGovernedAssignment(
     findings: resolvedFindings,
     normalizedOutcome: agentResult.normalizedOutcome,
     completionReason: agentResult.completionReason,
+    usage: agentResult.usage,
   };
 }
 

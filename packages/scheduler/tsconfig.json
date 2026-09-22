@@ -18,7 +18,8 @@
     { "path": "../planner" },
     { "path": "../router" },
     { "path": "../git-workflow" },
-    { "path": "../collaboration" }
+    { "path": "../collaboration" },
+    { "path": "../telemetry" }
   ],
   "include": ["src/**/*"]
 }

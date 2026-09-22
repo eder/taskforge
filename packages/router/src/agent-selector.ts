@@ -11,6 +11,19 @@ export interface SelectedAgentAssignment {
 export class AgentSelector {
   constructor(private registry: AgentRegistry) {}
 
+  async listAvailableAgentIds(): Promise<string[]> {
+    const quotaTracker = AgentQuotaTracker.getInstance();
+    const available: string[] = [];
+
+    for (const agent of this.registry.list()) {
+      if (!quotaTracker.isAvailable(agent.id)) continue;
+      if (!(await agent.detect())) continue;
+      available.push(agent.id);
+    }
+
+    return available;
+  }
+
   async selectAgents(roleRequests: RoleRequest[]): Promise<SelectedAgentAssignment[]> {
     const results: SelectedAgentAssignment[] = [];
     const usedAgentIds = new Set<string>();

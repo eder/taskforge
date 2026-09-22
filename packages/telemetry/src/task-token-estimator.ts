@@ -8,6 +8,12 @@ export interface TaskTokenEstimate {
   complexity: 'lightweight' | 'standard' | 'heavy';
 }
 
+/**
+ * Legacy single-task heuristic retained for compatibility and low-level tests.
+ * Do not use this for user-facing run forecasts: it does not account for the
+ * original request, assignment count, repository context, collaboration,
+ * retries or failover. Use ExecutionUsageEstimator for plan UX.
+ */
 export class TaskTokenEstimator {
   /**
    * Estimates token demands for a task based on its contract, objective, and repository profile.

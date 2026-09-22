@@ -1,5 +1,10 @@
 import { Task, TaskGraph } from '@taskforge/core';
-import { TaskType, TaskContract } from '@taskforge/shared';
+import {
+  TaskType,
+  TaskContract,
+  CompletionMode,
+  VerificationExpectation,
+} from '@taskforge/shared';
 
 export interface ValidationIssue {
   field: string;
@@ -24,6 +29,11 @@ export interface RawPlanTask {
   allowedScope?: string[];
   forbiddenChanges?: string[];
   acceptanceCriteria: string[];
+  completionMode?: string;
+  verification?: {
+    commands: string[];
+    expectation: string;
+  } | null;
 }
 
 export interface RawPlanOutput {
@@ -39,6 +49,71 @@ const VALID_TASK_TYPES = new Set<TaskType>([
   'refactoring',
   'architecture',
 ]);
+
+const VALID_COMPLETION_MODES = new Set<CompletionMode>([
+  'mutation',
+  'report',
+  'verification',
+  'review',
+]);
+
+const VALID_VERIFICATION_EXPECTATIONS = new Set<VerificationExpectation>(['observe', 'pass']);
+
+function taskText(task: RawPlanTask): string {
+  return `${task.title ?? ''} ${task.description ?? ''} ${task.objective ?? ''}`.toLowerCase();
+}
+
+function inferCompletionMode(task: RawPlanTask, taskType: TaskType): CompletionMode {
+  if (taskType === 'implementation' || taskType === 'refactoring') return 'mutation';
+  if (taskType === 'investigation') return 'report';
+  if (taskType === 'review') return 'review';
+
+  const text = taskText(task);
+  if (taskType === 'architecture') {
+    return /\b(scaffold|bootstrap|create files?|initialize|skeleton|workspace|directory structure)\b/i.test(text)
+      ? 'mutation'
+      : 'report';
+  }
+
+  const authorsTests =
+    /\b(write|add|create|implement|author|introduce|scaffold|generate|update|modify|refactor)\b.*\b(tests?|specs?|fixtures?|suites?)\b/i.test(text) ||
+    /\b(new tests?|unit tests?|integration tests?|regression tests?|e2e tests?|acceptance tests?|test coverage)\b/i.test(text);
+
+  if (authorsTests) return 'mutation';
+
+  if (
+    /\b(run|execute|verify|validate|check|assert|inspect|establish)\b.*\b(tests?|suite|typecheck|lint|build|compile|compilation|baseline|verification|checks?)\b/i.test(text) ||
+    /\b(typecheck|lint|build|compile|compilation)\b/i.test(text)
+  ) {
+    return 'verification';
+  }
+
+  // Legacy TESTING tasks were ambiguous. Preserve the old mutation default only
+  // at the planning boundary; the CompletionGate itself no longer guesses.
+  return 'mutation';
+}
+
+function inferVerificationCommands(task: RawPlanTask): string[] {
+  const text = `${task.title ?? ''}\n${task.description ?? ''}\n${task.objective ?? ''}`;
+  const commands = new Set<string>();
+  const packageCommands = text.match(/\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:typecheck|lint|build|test)\b/gi) ?? [];
+  for (const command of packageCommands) {
+    commands.add(command.trim().replace(/[.]+$/, ''));
+  }
+  return [...commands];
+}
+
+function scopesOverlap(allowed: string, forbidden: string): boolean {
+  const a = allowed.trim();
+  const f = forbidden.trim();
+  if (!a || !f) return false;
+  // A wildcard forbidden scope conflicts with every writable scope. A wildcard
+  // allowed scope with a specific forbidden exception is valid: the exception
+  // simply narrows the writable set.
+  if (f === '*') return true;
+  if (a === '*') return false;
+  return a === f;
+}
 
 export class TaskGraphValidator {
   public static readonly MIN_TASKS = 1;
@@ -159,6 +234,69 @@ export class TaskGraphValidator {
         }
       }
 
+      const explicitCompletionMode =
+        typeof rawTask.completionMode === 'string' && rawTask.completionMode.trim().length > 0;
+      const completionMode = explicitCompletionMode
+        ? (rawTask.completionMode!.toLowerCase() as CompletionMode)
+        : inferCompletionMode(rawTask, taskType);
+
+      if (!VALID_COMPLETION_MODES.has(completionMode)) {
+        const msg = `Task ${rawTask.taskId ?? i} has invalid completionMode: "${rawTask.completionMode}"`;
+        errors.push(msg);
+        issues.push({ field: `${indexField}.completionMode`, message: msg, taskId: rawTask.taskId });
+      } else {
+        const allowed = Array.isArray(rawTask.allowedScope) ? rawTask.allowedScope : [];
+        const forbidden = Array.isArray(rawTask.forbiddenChanges) ? rawTask.forbiddenChanges : [];
+
+        for (const allowedEntry of allowed) {
+          for (const forbiddenEntry of forbidden) {
+            if (scopesOverlap(allowedEntry, forbiddenEntry)) {
+              const msg = `Task ${rawTask.taskId ?? i} has contradictory scope: "${allowedEntry}" is both allowed and forbidden`;
+              errors.push(msg);
+              issues.push({ field: `${indexField}.allowedScope`, message: msg, taskId: rawTask.taskId });
+            }
+          }
+        }
+
+        if (
+          explicitCompletionMode &&
+          completionMode !== 'mutation' &&
+          allowed.length > 0
+        ) {
+          const msg = `Task ${rawTask.taskId ?? i} is ${completionMode} but declares writable allowedScope; non-mutation tasks must be read-only`;
+          errors.push(msg);
+          issues.push({ field: `${indexField}.allowedScope`, message: msg, taskId: rawTask.taskId });
+        }
+
+        if (completionMode === 'mutation' && forbidden.includes('*')) {
+          const msg = `Task ${rawTask.taskId ?? i} requires mutation but forbids all repository changes`;
+          errors.push(msg);
+          issues.push({ field: `${indexField}.forbiddenChanges`, message: msg, taskId: rawTask.taskId });
+        }
+
+        if (completionMode === 'verification') {
+          const commands =
+            rawTask.verification?.commands?.filter((command) => typeof command === 'string' && command.trim()) ??
+            inferVerificationCommands(rawTask);
+          const expectation =
+            (rawTask.verification?.expectation?.toLowerCase() as VerificationExpectation | undefined) ??
+            (/\b(baseline|establish baseline|current state|capture current)\b/i.test(taskText(rawTask))
+              ? 'observe'
+              : 'pass');
+
+          if (commands.length === 0) {
+            const msg = `Task ${rawTask.taskId ?? i} is verification-only but declares no executable verification command`;
+            errors.push(msg);
+            issues.push({ field: `${indexField}.verification.commands`, message: msg, taskId: rawTask.taskId });
+          }
+          if (!VALID_VERIFICATION_EXPECTATIONS.has(expectation)) {
+            const msg = `Task ${rawTask.taskId ?? i} has invalid verification expectation: "${rawTask.verification?.expectation}"`;
+            errors.push(msg);
+            issues.push({ field: `${indexField}.verification.expectation`, message: msg, taskId: rawTask.taskId });
+          }
+        }
+      }
+
       // Acceptance criteria
       if (
         !Array.isArray(rawTask.acceptanceCriteria) ||
@@ -266,12 +404,43 @@ export class TaskGraphValidator {
     const now = new Date();
     const tasks: Task[] = plan.tasks.map((rt) => {
       const id = rt.taskId.trim().toUpperCase();
+      const taskType = rt.type.toLowerCase() as TaskType;
+      const completionMode =
+        rt.completionMode && VALID_COMPLETION_MODES.has(rt.completionMode.toLowerCase() as CompletionMode)
+          ? (rt.completionMode.toLowerCase() as CompletionMode)
+          : inferCompletionMode(rt, taskType);
+      const inferredVerificationCommands =
+        completionMode === 'verification' ? inferVerificationCommands(rt) : [];
+      const verificationExpectation: VerificationExpectation =
+        (rt.verification?.expectation?.toLowerCase() as VerificationExpectation | undefined) ??
+        (/\b(baseline|establish baseline|current state|capture current)\b/i.test(taskText(rt))
+          ? 'observe'
+          : 'pass');
+
       const contract: TaskContract = {
         objective: rt.objective.trim(),
-        allowedScope: rt.allowedScope && rt.allowedScope.length > 0 ? rt.allowedScope : ['*'],
-        forbiddenChanges: rt.forbiddenChanges ?? [],
+        allowedScope:
+          completionMode === 'mutation'
+            ? rt.allowedScope && rt.allowedScope.length > 0
+              ? rt.allowedScope
+              : ['*']
+            : [],
+        forbiddenChanges:
+          completionMode === 'mutation'
+            ? (rt.forbiddenChanges ?? [])
+            : Array.from(new Set(['*', ...(rt.forbiddenChanges ?? [])])),
         acceptanceCriteria: rt.acceptanceCriteria.map((c) => c.trim()),
         dependencies: (rt.dependencies ?? []).map((d) => d.trim().toUpperCase()),
+        completionMode,
+        verification:
+          completionMode === 'verification'
+            ? {
+                commands:
+                  rt.verification?.commands?.map((command) => command.trim()).filter(Boolean) ??
+                  inferredVerificationCommands,
+                expectation: verificationExpectation,
+              }
+            : undefined,
       };
 
       return {
@@ -279,7 +448,7 @@ export class TaskGraphValidator {
         goalId,
         title: rt.title.trim(),
         description: rt.description.trim(),
-        type: rt.type.toLowerCase() as TaskType,
+        type: taskType,
         status: 'proposed',
         dependencies: contract.dependencies,
         contract,

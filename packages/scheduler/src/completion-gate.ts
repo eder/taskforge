@@ -6,6 +6,7 @@ import {
   CompletionEvidence,
   ProviderExecutionOutcome,
   TaskType,
+  VerificationCheck,
 } from '@taskforge/shared';
 import { GitService } from '@taskforge/workspace';
 
@@ -62,6 +63,7 @@ export function sanitizeTaskOutput(output?: string): string {
 export type CompletionRequirement =
   | 'code_change_required'
   | 'substantive_report_required'
+  | 'verification_evidence_required'
   | 'review_findings_required';
 
 export interface TaskCompletionPolicy {
@@ -90,7 +92,8 @@ export function isTestingCodeTask(task: Task): boolean {
   }
 
   const executionPatterns = [
-    /\b(run|execute|verify|validate|check|assert|inspect)\b.*\b(tests?|suite|regression|criteria|verification)\b/i,
+    /\b(run|execute|verify|validate|check|assert|inspect|establish)\b.*\b(tests?|suite|regression|criteria|verification|typecheck|lint|build|compile|compilation|baseline|checks?)\b/i,
+    /\b(typecheck|lint|build|compile|compilation)\b/i,
     /\bverify all\b/i,
   ];
   if (executionPatterns.some((p) => p.test(text))) {
@@ -135,6 +138,39 @@ export function isArchitectureCodeTask(task: Task): boolean {
  * Resolves the completion policy for a given task using an explicit exhaustive switch over TaskType.
  */
 export function resolveCompletionPolicy(task: Task): TaskCompletionPolicy {
+  // New task contracts carry explicit completion semantics. Keep the task-type
+  // switch below only as a compatibility path for persisted legacy runs.
+  switch (task.contract?.completionMode) {
+    case 'mutation':
+      return {
+        taskType: task.type,
+        requirement: 'code_change_required',
+        reason: 'Task contract explicitly requires repository mutation evidence.',
+      };
+    case 'report':
+      return {
+        taskType: task.type,
+        requirement: 'substantive_report_required',
+        reason: 'Task contract explicitly requires a substantive read-only report.',
+      };
+    case 'review':
+      return {
+        taskType: task.type,
+        requirement: 'review_findings_required',
+        reason: 'Task contract explicitly requires review findings or substantive commentary.',
+      };
+    case 'verification':
+      return {
+        taskType: task.type,
+        requirement: 'verification_evidence_required',
+        reason: 'Task contract explicitly requires deterministic command execution evidence.',
+      };
+    case undefined:
+      break;
+    default:
+      throw new Error(`Unsupported completionMode for task ${task.id}: ${task.contract.completionMode}`);
+  }
+
   switch (task.type) {
     case 'implementation':
       return {
@@ -202,6 +238,7 @@ export interface CompletionGateContext {
   resultingCommit?: string;
   worktreePath?: string;
   verificationPassed?: boolean;
+  verificationChecks?: VerificationCheck[];
   gitService?: GitService;
 }
 
@@ -329,7 +366,7 @@ export class CompletionGate {
         };
       }
     } else if (policy.requirement === 'substantive_report_required') {
-      // Investigation / Test verification / Design evidence requires a substantive report
+      // Investigation / design evidence requires a substantive report.
       const outputText = sanitizeTaskOutput(agentResult.output ?? agentResult.message ?? '').trim();
       if (outputText.length < 20) {
         return {
@@ -338,6 +375,53 @@ export class CompletionGate {
           evidence: {
             investigationReportLength: outputText.length,
             explanation: `${task.type.toUpperCase()} task '${task.id}' produced insufficient or empty analysis output (${outputText.length} chars). ${policy.reason}`,
+          },
+        };
+      }
+    } else if (policy.requirement === 'verification_evidence_required') {
+      const checks = ctx.verificationChecks ?? [];
+      const expectedCommands = task.contract.verification?.commands ?? [];
+      const expectation = task.contract.verification?.expectation ?? 'pass';
+
+      if (checks.length === 0) {
+        return {
+          accepted: false,
+          failureReason: 'VERIFICATION_FAILED',
+          evidence: {
+            verificationChecks: [],
+            verificationExpectation: expectation,
+            verificationPassed: false,
+            explanation: `Verification task '${task.id}' produced no deterministic command evidence. ${policy.reason}`,
+          },
+        };
+      }
+
+      const missingCommands = expectedCommands.filter(
+        (expected) => !checks.some((check) => check.command.trim() === expected.trim()),
+      );
+      if (missingCommands.length > 0) {
+        return {
+          accepted: false,
+          failureReason: 'VERIFICATION_FAILED',
+          evidence: {
+            verificationChecks: checks,
+            verificationExpectation: expectation,
+            verificationPassed: false,
+            explanation: `Verification task '${task.id}' did not execute required command(s): ${missingCommands.join(', ')}.`,
+          },
+        };
+      }
+
+      if (expectation === 'pass' && checks.some((check) => !check.success)) {
+        const failed = checks.find((check) => !check.success)!;
+        return {
+          accepted: false,
+          failureReason: 'VERIFICATION_FAILED',
+          evidence: {
+            verificationChecks: checks,
+            verificationExpectation: expectation,
+            verificationPassed: false,
+            explanation: `Verification command '${failed.command}' failed with exit code ${failed.exitCode}.`,
           },
         };
       }
@@ -378,6 +462,8 @@ export class CompletionGate {
       reviewFindingsCount: agentResult.findings?.length,
       investigationReportLength: (agentResult.output ?? '').trim().length,
       verificationPassed: ctx.verificationPassed ?? true,
+      verificationChecks: ctx.verificationChecks,
+      verificationExpectation: task.contract.verification?.expectation,
       explanation: `Completion gate accepted task '${task.id}' with verified evidence.`,
     };
 

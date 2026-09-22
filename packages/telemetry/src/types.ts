@@ -1,6 +1,8 @@
 export interface TokenUsage {
   inputTokens: number;
+  cachedInputTokens?: number;
   outputTokens: number;
+  totalTokens?: number;
 }
 
 export interface ModelPricing {
@@ -10,10 +12,16 @@ export interface ModelPricing {
 
 export interface TaskCostSummary {
   taskId: string;
+  assignmentId?: string;
   agentId: string;
+  role?: string;
   modelName: string;
   inputTokens: number;
+  cachedInputTokens: number;
   outputTokens: number;
+  totalTokens: number;
+  usageSource: string;
+  plannedEstimatedTokens: number;
   costUsd: number;
 }
 
@@ -21,8 +29,30 @@ export interface RunCostReport {
   runId: string;
   totalCostUsd: number;
   totalInputTokens: number;
+  totalCachedInputTokens: number;
   totalOutputTokens: number;
+  totalTokens: number;
+  totalPlannedEstimatedTokens: number;
   breakdown: TaskCostSummary[];
+}
+
+export interface UsageAccuracyReport {
+  runId: string;
+  observedTokens: number;
+  plannedEstimatedTokens: number;
+  varianceRatio?: number;
+  observedAssignments: number;
+}
+
+export interface UsageCalibration {
+  taskType: string;
+  agentId?: string;
+  role?: string;
+  sampleSize: number;
+  p25Ratio: number;
+  medianRatio: number;
+  p75Ratio: number;
+  confidence: 'low' | 'medium' | 'high';
 }
 
 export interface PerformanceDimensions {
