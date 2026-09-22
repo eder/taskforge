@@ -41,6 +41,47 @@ describe('AgentAvailabilityRepository', () => {
     db.close();
   });
 
+  it('merges active legacy quota state without overwriting newer global state', () => {
+    const sourceDb = new TaskForgeDatabase(':memory:');
+    const targetDb = new TaskForgeDatabase(':memory:');
+    const source = new AgentAvailabilityRepository(sourceDb);
+    const target = new AgentAvailabilityRepository(targetDb);
+    const now = Date.now();
+
+    source.upsert({
+      agentId: 'agy',
+      status: 'quota_exhausted',
+      reason: 'legacy quota',
+      recordedAt: now - 1000,
+      resetAt: now + 60_000,
+      source: 'runtime',
+    });
+    source.upsert({
+      agentId: 'codex',
+      status: 'rate_limited',
+      reason: 'expired legacy rate limit',
+      recordedAt: now - 2000,
+      resetAt: now - 1,
+      source: 'runtime',
+    });
+
+    target.upsert({
+      agentId: 'claude',
+      status: 'auth_failed',
+      reason: 'new global auth state',
+      recordedAt: now,
+      source: 'runtime',
+    });
+
+    expect(target.mergeFrom(source, now)).toBe(1);
+    expect(target.get('agy')?.reason).toBe('legacy quota');
+    expect(target.get('codex')).toBeUndefined();
+    expect(target.get('claude')?.reason).toBe('new global auth state');
+
+    sourceDb.close();
+    targetDb.close();
+  });
+
   it('upserts and deletes one provider without affecting others', () => {
     const db = new TaskForgeDatabase(dbPath);
     const repo = new AgentAvailabilityRepository(db);
