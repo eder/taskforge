@@ -1648,22 +1648,6 @@ export class InteractiveShell {
                   ? 'DELIVERY_READY'
                   : 'IDLE';
 
-              const efficiency = this.telemetry.getOrchestrationEfficiency(result.runId);
-              const staffing = this.telemetry.getStaffingMetrics(result.runId);
-              this.telemetry.recordRunMetrics({
-                runId: result.runId,
-                durationMs: result.durationMs,
-                tasksCount: efficiency.taskCount,
-                tasksCompleted: result.tasksCompleted,
-                tasksFailed: result.tasksFailed,
-                reworkCount: efficiency.reworkCount,
-                escalationsCount:
-                  staffing.collaborationApprovedCount +
-                  staffing.collaborationRejectedCount +
-                  staffing.collaborationDelayedCount,
-                firstPassRate: efficiency.firstPassRate,
-              });
-
               const summary = await this.formatRunSummary(result);
               this.viewport.writeUpper(`\n${summary}\n`);
               this.viewport.drawFooter('');
@@ -1708,22 +1692,6 @@ export class InteractiveShell {
             this.deliveryService.getDelivery(result.runId)?.status === 'ready_to_apply'
               ? 'DELIVERY_READY'
               : 'IDLE';
-
-          const efficiency = this.telemetry.getOrchestrationEfficiency(result.runId);
-          const staffing = this.telemetry.getStaffingMetrics(result.runId);
-          this.telemetry.recordRunMetrics({
-            runId: result.runId,
-            durationMs: result.durationMs,
-            tasksCount: efficiency.taskCount,
-            tasksCompleted: result.tasksCompleted,
-            tasksFailed: result.tasksFailed,
-            reworkCount: efficiency.reworkCount,
-            escalationsCount:
-              staffing.collaborationApprovedCount +
-              staffing.collaborationRejectedCount +
-              staffing.collaborationDelayedCount,
-            firstPassRate: efficiency.firstPassRate,
-          });
 
           return await this.formatRunSummary(result);
         } catch (err) {
