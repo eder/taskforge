@@ -64,7 +64,7 @@ export class RouterQualityGuard {
     const lightweightReadOnly =
       isReadOnly &&
       input.task.type === 'investigation' &&
-      /\b(summary|summarize|summarise|resum[oaie]|explain|explica|describe|overview|vis[aã]o geral|what does|how does|como funciona|entenda|understand)\b/i.test(text) &&
+      /\b(summary|summarize|summarise|resum(?:a|e|ir|o|indo|ido)?|explain|explica|describe|overview|vis[aã]o geral|what does|how does|como funciona|entenda|understand)\b/i.test(text) &&
       !/\b(root cause|reproduce|reproduction|bug|flaky|race|deadlock|incident|failure|security|audit|vulnerab|payment|pagamento|auth|inconsisten|corrupt)\b/i.test(text);
 
     if (lightweightReadOnly) {
@@ -93,11 +93,6 @@ export class RouterQualityGuard {
     }
 
     const textForSignals = text;
-      input.task.title,
-      input.task.description,
-      input.task.contract.objective,
-      ...(input.task.contract.acceptanceCriteria ?? []),
-    ].join(' ');
 
     const matchedReasons: string[] = [];
     for (const signal of this.DOMAIN_SIGNALS) {
