@@ -286,7 +286,37 @@ The router recommends the minimum useful team for a task:
 
 Agent choice is deliberately separated from registry order. When the router names a healthy preferred agent, TaskForge honors that decision. When no preference exists, the selector chooses among healthy capability-compatible agents using persisted per-role assignment history (least-used first, then overall usage and recency) and an order-independent rendezvous hash for exact ties. Registering Claude before Codex or Antigravity must never become an accidental routing policy.
 
+TaskForge also applies a deterministic fan-out admission gate before spending provider tokens. Multiple agents are admitted only when the proposed roles demonstrate at least one concrete execution benefit:
+
+- distinct objectives that can run concurrently;
+- a specialist quality role such as reviewer/tester/security reviewer paired with primary execution;
+- distinct complementary roles on high-risk work.
+
+Complexity by itself is not enough. Multiple agents doing the same repository read or producing duplicate summaries are collapsed to a single role.
+
 Routing is advisory. Deterministic code owns authoritative state.
+
+#### Orchestration efficiency
+
+After a run, TaskForge compares the routing hypothesis with observed execution evidence. `/stats` reports:
+
+- assignments that completed versus assignments that failed/cancelled;
+- retry/failover overhead;
+- provider-reported tokens spent on failed/cancelled assignments;
+- active execution time versus summed serial work;
+- observed execution overlap and parallelism factor;
+- first-pass completion rate, rework and Completion Gate rejections;
+- completed specialist quality assignments;
+- fan-out decisions admitted/rejected by the policy.
+
+The outcome is one of:
+
+- **RIGHT-SIZED** — single-agent execution completed first-pass without orchestration waste;
+- **FAN-OUT JUSTIFIED** — multi-agent execution completed with acceptable waste and observable parallel-time or specialist-quality evidence;
+- **INEFFICIENT** — retries/failovers, wasted assignments/tokens, or fan-out without an observable benefit made the orchestration more expensive than justified;
+- **INCONCLUSIVE** — the run does not contain enough reliable execution evidence to make the call.
+
+TaskForge deliberately does not claim hypothetical "time saved" or "tokens saved" without a counterfactual single-agent run. It reports only observable overlap, provider usage, waste and quality signals.
 
 ### Isolation
 
@@ -511,7 +541,7 @@ Useful cockpit commands:
 | `/pause` | Pause execution |
 | `/resume` | Resume execution |
 | `/cost` | Show token usage and cost information |
-| `/stats` | Show execution metrics for the current/recent run |
+| `/stats` | Show execution and orchestration efficiency metrics for the current/recent run |
 | `/diff [run-id]` | Inspect changes from a completed run |
 | `/apply [run-id]` | Apply a completed run to its target branch |
 | `/pr [run-id]` | Create a pull request for a completed run |
