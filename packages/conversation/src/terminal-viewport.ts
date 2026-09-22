@@ -8,6 +8,15 @@ export interface ViewportOptions {
   interactive?: boolean;
 }
 
+export interface FocusShortcutContext {
+  str?: string;
+  key?: readline.Key;
+  buffer: string;
+  focused: boolean;
+  onSwitch: (indexOneBased: number) => string;
+  onExit: () => string;
+}
+
 export class TerminalViewport {
   public readonly isInteractive: boolean;
   public rows: number;
@@ -89,6 +98,52 @@ export class TerminalViewport {
     this.outStream.write(`\x1b[1;${this.scrollBottom}r`);
     this.renderInputLine(this.currentBuffer, this.currentCursorIndex, this.currentStatus, this.currentPanelLines);
     onResize?.();
+  }
+
+  /**
+   * Handles Focus Mode's single-keystroke navigation inside the interactive
+   * terminal boundary. The shortcut is deliberately conservative: it only
+   * consumes 1-9 or Esc when an assignment is already focused and the prompt
+   * buffer is empty. Every other key falls through to the normal line editor.
+   *
+   * The shell owns focus state; the viewport owns the raw terminal gesture and
+   * renders the resulting focus/overview view into scrollback.
+   */
+  public handleFocusShortcut(context: FocusShortcutContext): boolean {
+    if (!this.isInteractive || !context.focused || context.buffer.trim().length !== 0) {
+      return false;
+    }
+
+    const { str, key } = context;
+
+    let response: string | undefined;
+    const digit =
+      !key?.ctrl &&
+      !key?.meta &&
+      !key?.shift &&
+      str &&
+      /^[1-9]$/.test(str)
+        ? Number(str)
+        : !key?.ctrl &&
+            !key?.meta &&
+            !key?.shift &&
+            key?.name &&
+            /^[1-9]$/.test(key.name)
+          ? Number(key.name)
+          : undefined;
+
+    if (digit !== undefined) {
+      response = context.onSwitch(digit);
+    } else if (key?.name === 'escape' || str === '\x1b') {
+      response = context.onExit();
+    } else {
+      return false;
+    }
+
+    if (response) {
+      this.writeUpper(response);
+    }
+    return true;
   }
 
   /**
