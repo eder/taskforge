@@ -70,7 +70,7 @@ function usageFromObject(raw: any, modelName?: string): AgentUsage | undefined {
     firstTokenNumber(raw, ['cache_read_input_tokens', 'cacheReadInputTokens']) ?? 0;
   const cacheCreation =
     firstTokenNumber(raw, ['cache_creation_input_tokens', 'cacheCreationInputTokens']) ?? 0;
-  const cachedInputTokens = directCached + cacheRead + cacheCreation;
+  const cachedInputTokens = directCached > 0 ? directCached : cacheRead + cacheCreation;
 
   const providerTotal = firstTokenNumber(raw, [
     'total_tokens',
