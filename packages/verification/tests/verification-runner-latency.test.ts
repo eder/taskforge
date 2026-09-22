@@ -45,4 +45,51 @@ describe('VerificationRunner latency policy', () => {
       fs.rmSync(worktree, { recursive: true, force: true });
     }
   });
+
+  it('records a failing explicit command as successful baseline observation', async () => {
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-baseline-verification-'));
+
+    try {
+      const runner = new VerificationRunner();
+      const result = await runner.verify({
+        taskId: 'TASK-BASELINE',
+        runId: 'run-baseline',
+        worktreePath: worktree,
+        config: getDefaultConfig(),
+        taskType: 'testing',
+        explicitCommands: ['node -p process.exitCode=7'],
+        expectation: 'observe',
+      });
+
+      expect(result.passed).toBe(true);
+      expect(result.checks).toHaveLength(1);
+      expect(result.checks[0].exitCode).toBe(7);
+      expect(result.checks[0].success).toBe(false);
+    } finally {
+      fs.rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('fails when an explicit verification command is required to pass', async () => {
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-pass-verification-'));
+
+    try {
+      const runner = new VerificationRunner();
+      const result = await runner.verify({
+        taskId: 'TASK-VERIFY',
+        runId: 'run-verify',
+        worktreePath: worktree,
+        config: getDefaultConfig(),
+        taskType: 'testing',
+        explicitCommands: ['node -p process.exitCode=7'],
+        expectation: 'pass',
+      });
+
+      expect(result.passed).toBe(false);
+      expect(result.checks[0].exitCode).toBe(7);
+      expect(result.failureReason).toContain('exit code 7');
+    } finally {
+      fs.rmSync(worktree, { recursive: true, force: true });
+    }
+  });
 });
