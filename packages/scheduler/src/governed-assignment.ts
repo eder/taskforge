@@ -559,5 +559,66 @@ export function parseStructuredFindings(
     }
   }
 
+  // 4. Defense in depth for CLI harnesses that ignore the requested JSON
+  // review contract but still emit conventional severity labels. Keep this
+  // deliberately narrow: only explicit P0-P3 / severity-prefixed findings are
+  // converted, so ordinary prose containing words like "critical" is not
+  // accidentally promoted to a blocker.
+  const textualFindings: import('@taskforge/shared').ReviewFinding[] = [];
+  const prioritySeverity: Record<string, import('@taskforge/shared').ReviewFinding['severity']> = {
+    P0: 'critical',
+    P1: 'major',
+    P2: 'minor',
+    P3: 'suggestion',
+  };
+
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const priority = line.match(
+      /^(?:[-*]\s*)?(?:\d+[.)]\s*)?(P[0-3])\s*(?:[:\-—–]\s*|\s+)(.+)$/i,
+    );
+    if (priority) {
+      textualFindings.push({
+        severity: prioritySeverity[priority[1].toUpperCase()],
+        description: priority[2].trim(),
+      });
+      continue;
+    }
+
+    const named = line.match(
+      /^(?:[-*]\s*)?(?:\d+[.)]\s*)?\[?(critical|major|minor|suggestion)\]?\s*(?:[:\-—–]\s*|\s+)(.+)$/i,
+    );
+    if (named) {
+      textualFindings.push({
+        severity: named[1].toLowerCase() as import('@taskforge/shared').ReviewFinding['severity'],
+        description: named[2].trim(),
+      });
+    }
+  }
+
+  if (textualFindings.length > 0) return textualFindings;
+
+  // A reviewer explicitly saying the review is rejected is itself blocking
+  // evidence even when it failed to serialize individual findings.
+  if (
+    /\b(review\s+rejected|review\s+failed|not\s+approved|do\s+not\s+approve|revis[aã]o\s+reprovada|revis[aã]o\s+rejeitada)\b/i.test(
+      text,
+    )
+  ) {
+    const firstMeaningfulLine =
+      text
+        .split('\n')
+        .map((line) => line.trim())
+        .find(Boolean) ?? 'Reviewer explicitly rejected the implementation.';
+    return [
+      {
+        severity: 'major',
+        description: firstMeaningfulLine,
+      },
+    ];
+  }
+
   return undefined;
 }
