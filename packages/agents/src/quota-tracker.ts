@@ -137,6 +137,8 @@ export class AgentQuotaTracker {
       lower.includes('insufficient_quota') ||
       lower.includes('credit balance is too low') ||
       lower.includes('exceeded your current quota') ||
+      lower.includes('quota reached') ||
+      lower.includes('quota exceeded') ||
       lower.includes('resource_exhausted');
 
     const isRateLimit =
