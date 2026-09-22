@@ -183,6 +183,85 @@ describe('Router and AgentSelector', () => {
     expect(guarded.fanOutAssessment?.admitted).toBe(false);
   });
 
+  it('admits resource-partitioned work even when the surrounding wording is similar', () => {
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'collaborative',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'medium',
+        teamSize: 2,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Create a.txt',
+          },
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Create b.txt',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: false,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Partition the output by artifact',
+        source: 'openai',
+      },
+      { task: sampleTask, availableAgents: ['claude', 'codex'] },
+    );
+
+    expect(guarded.strategy).toBe('collaborative');
+    expect(guarded.roles).toHaveLength(2);
+    expect(guarded.fanOutAssessment?.admitted).toBe(true);
+    expect(guarded.fanOutAssessment?.benefits).toContain('parallel_work');
+  });
+
+  it('admits high-uncertainty competitive solutions as an explicit quality strategy', () => {
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'competitive',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'high',
+        teamSize: 3,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Solve it your own way',
+          },
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Solve it your own way',
+          },
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canWrite'],
+            objective: 'Solve it your own way',
+          },
+        ],
+        communication: {
+          required: false,
+          initialAlignment: false,
+          synthesisBeforeImplementation: false,
+        },
+        reason: 'Uncertain approach: compare independent full solutions',
+        source: 'openai',
+      },
+      { task: sampleTask, availableAgents: ['claude', 'codex', 'agy'] },
+    );
+
+    expect(guarded.strategy).toBe('competitive');
+    expect(guarded.roles).toHaveLength(3);
+    expect(guarded.fanOutAssessment?.admitted).toBe(true);
+    expect(guarded.fanOutAssessment?.benefits).toContain('solution_diversity');
+  });
+
   it('admits fan-out when objectives are genuinely partitioned for parallel work', () => {
     const guarded = RouterQualityGuard.evaluate(
       {
