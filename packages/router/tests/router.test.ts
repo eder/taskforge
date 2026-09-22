@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { StaticRoutingProvider, OpenAIRoutingProvider, AgentSelector } from '../src/index.js';
+import {
+  StaticRoutingProvider,
+  OpenAIRoutingProvider,
+  AgentSelector,
+  RouterQualityGuard,
+} from '../src/index.js';
 import { Task } from '@taskforge/core';
 import { AgentRegistry, FakeAgent } from '@taskforge/agents';
 
@@ -24,6 +29,56 @@ describe('Router and AgentSelector', () => {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+
+  it('forces an over-staffed router proposal to SINGLE for a lightweight read-only overview', () => {
+    const task: Task = {
+      ...sampleTask,
+      id: 'TASK-OVERVIEW',
+      title: 'Explain Project and Architecture',
+      description: 'Read the repository and answer: O que é esse projeto?',
+      type: 'investigation',
+      contract: {
+        objective: 'Explain the current repository using repository evidence only: O que é esse projeto?',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        acceptanceCriteria: ['Repository-grounded explanation'],
+        dependencies: [],
+        completionMode: 'report',
+        metadata: { lightweightReadOnlyInvariant: true },
+      },
+    };
+
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'high',
+        teamSize: 3,
+        roles: [
+          { role: 'reproduction_engineer', requiredCapabilities: ['canRead'], objective: 'Read files' },
+          { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Research' },
+          { role: 'architecture_reviewer', requiredCapabilities: ['canRead'], objective: 'Review' },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Model over-staffed a simple question',
+        source: 'openai',
+      },
+      { task, availableAgents: ['claude', 'codex', 'agy'] },
+    );
+
+    expect(guarded.strategy).toBe('single');
+    expect(guarded.complexity).toBe('low');
+    expect(guarded.risk).toBe('low');
+    expect(guarded.teamSize).toBe(1);
+    expect(guarded.roles).toHaveLength(1);
+    expect(guarded.roles[0].role).toBe('researcher');
+    expect(guarded.communication?.required).toBe(false);
+  });
 
   it('StaticRoutingProvider produces structured routing decision with neutral roles', async () => {
     const provider = new StaticRoutingProvider();
