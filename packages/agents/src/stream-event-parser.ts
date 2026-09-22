@@ -66,10 +66,22 @@ function parseStructuredLine(obj: any, identity: AgentStreamEventIdentity): Agen
     out.push({ ...base, type: 'status', status: desc });
   }
 
-  // Codex: item (command execution or generic step)
-  if (obj.type === 'item' && obj.item) {
-    if (typeof obj.item.command === 'string' && obj.item.command) {
+  // Codex JSONL lifecycle. Current codex exec --json emits
+  // item.started/item.completed envelopes with the item payload nested inside.
+  if (
+    (obj.type === 'item' || obj.type === 'item.started' || obj.type === 'item.completed') &&
+    obj.item
+  ) {
+    if (
+      obj.item.type === 'agent_message' &&
+      typeof obj.item.text === 'string' &&
+      obj.item.text.trim()
+    ) {
+      out.push({ ...base, type: 'agent_message', text: obj.item.text.trim() });
+    } else if (typeof obj.item.command === 'string' && obj.item.command) {
       out.push({ ...base, type: 'command_started', command: obj.item.command });
+    } else if (obj.item.type === 'error' && typeof obj.item.message === 'string') {
+      out.push({ ...base, type: 'error', message: obj.item.message });
     } else {
       out.push({ ...base, type: 'status', status: obj.item.type || 'Processing...' });
     }
