@@ -37,7 +37,38 @@ export function isLightweightGoal(description: string): boolean {
     /\b(typo|translate)\b/i,
     /\b(changelog|contributing)\b/i,
   ];
-  return lightweightPatterns.some((pattern) => pattern.test(desc));
+
+  if (!lightweightPatterns.some((pattern) => pattern.test(desc))) {
+    return false;
+  }
+
+  // "Lightweight" must mean the goal is primarily documentation/content work,
+  // not merely that a larger engineering objective happens to mention docs.
+  // Keep this fallback conservative: when semantic planning is unavailable,
+  // it is safer to produce the normal implementation/review plan than collapse
+  // a cross-cutting feature into a single "Documentation and Content Update".
+
+  const engineeringTargets =
+    /\b(provider|api|planner|router|runtime|control\s+plane|architecture|abstraction|interface|configuration|config|health|provenance|fallback|integration|scheduler|database|schema)\b/i;
+  const engineeringActions =
+    /\b(implement|build|create|introduce|support|refactor|fix|repair|migrate|extract|design|implementar|implemente|criar|crie|adicionar|adicione|corrigir|corrija|refatorar|refatore|migrar|extraia|extrair)\b/i;
+
+  // Look for an affirmative engineering action in a clause that is not simply
+  // a documentation instruction. This catches goals such as "create a
+  // pluggable provider architecture ... update the README" while preserving
+  // genuine requests like "update README to document the provider config".
+  const clauses = description
+    .split(/[.!?;\n]+/)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+
+  const hasNonDocumentationEngineeringWork = clauses.some((clause) => {
+    const lower = clause.toLowerCase();
+    const isDocumentationClause = lightweightPatterns.some((pattern) => pattern.test(lower));
+    return !isDocumentationClause && engineeringActions.test(lower) && engineeringTargets.test(lower);
+  });
+
+  return !hasNonDocumentationEngineeringWork;
 }
 
 export class HeuristicPlanner implements Planner {
