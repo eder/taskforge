@@ -74,7 +74,9 @@ export interface GovernedAssignmentResult {
  * single-agent scheduler path uses: isolated worktree, workspace + execution
  * records, and every AgentRuntimeEvent (permission/question/auth) routed
  * through the InteractionGateway. Callers own task-level status transitions,
- * verification and integration, and activityTracker.completeAssignment(assignment.id).
+ * verification and integration. This function owns assignment activity
+ * lifecycle so completed/failed/cancelled attempts never remain visible as
+ * active agents.
  */
 export async function executeGovernedAssignment(
   ctx: GovernedAssignmentContext,
@@ -93,335 +95,343 @@ export async function executeGovernedAssignment(
     lastActiveAt: new Date(),
   });
 
-  ctx.eventRepo.append({
-    id: `evt-${randomUUID()}`,
-    runId,
-    taskId: task.id,
-    type: 'ASSIGNMENT_CREATED',
-    payload: { assignmentId: assignment.id, agentId: agent.id },
-    timestamp: new Date(),
-  });
-
-  const wt = ctx.existingWorktree
-    ? { path: ctx.existingWorktree.path, branchName: ctx.existingWorktree.branchName ?? '' }
-    : await ctx.worktreeManager.createWorktree(task.id, assignment.id, baseCommit, {
-        detached: ctx.detached,
-      });
-  assignment.worktreePath = wt.path;
-  assignment.branchName = wt.branchName;
-
-  ctx.workspaceRepo.register({
-    id: `ws-${task.id}-${randomUUID().slice(0, 8)}`,
-    runId,
-    taskId: task.id,
-    assignmentId: assignment.id,
-    path: wt.path,
-    branch: wt.branchName,
-  });
-
-  const logPath = path.resolve(
-    ctx.repoRoot,
-    ctx.config.execution.runsDir,
-    runId,
-    `${task.id}-${assignment.id}.log`,
-  );
-
-  const activeState = ctx.activityTracker?.getByAssignment(assignment.id);
-  if (activeState) {
-    activeState.logPath = logPath;
-    activeState.status = 'Agent executing in worktree...';
-  }
-
-  const execRecord = ctx.executionRepo.create({
-    id: `exec-${task.id}-${randomUUID().slice(0, 8)}`,
-    runId,
-    taskId: task.id,
-    assignmentId: assignment.id,
-    agentId: agent.id,
-    logPath,
-  });
-
-  const taskContract = ctx.objectiveOverride
-    ? { ...task.contract, objective: ctx.objectiveOverride }
-    : task.contract;
-
-  // Derived from the task contract, not a separately tracked flag: a task
-  // whose forbidden changes are wildcarded is read-only. The Intent Guard
-  // normalizes forbiddenChanges to ['*'] for READ_ONLY_ANALYSIS tasks, so
-  // this stays authoritative even when routing/planning disagreed with the
-  // original user intent.
-  const mutationAllowed = !taskContract.forbiddenChanges?.includes('*');
-
-  if (ctx.concurrency) {
-    const priority =
-      ctx.priority ?? (ctx.graph ? computeTaskPriority(task, ctx.graph) : (task.priority ?? 0));
-    await ctx.concurrency.waitForSlot(agent.id, task.id, abortSignal, assignment.id, priority);
-    ctx.concurrency.acquire(assignment.id, agent.id, task.id);
-  }
-
-  if (ctx.communicationBus) {
-    ctx.communicationBus.registerAgent(assignment.id, agent);
-  }
-
-  let session: import('@taskforge/shared').AgentSession | undefined;
-  let agentResult: AgentResult = { success: false, message: 'Execution did not complete', durationMs: 0 };
-  let thrownError: Error | undefined;
-
   try {
-    if (agent.createSession) {
-      session = await agent.createSession(assignment, {
+    ctx.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId,
+      taskId: task.id,
+      type: 'ASSIGNMENT_CREATED',
+      payload: { assignmentId: assignment.id, agentId: agent.id },
+      timestamp: new Date(),
+    });
+
+    const wt = ctx.existingWorktree
+      ? { path: ctx.existingWorktree.path, branchName: ctx.existingWorktree.branchName ?? '' }
+      : await ctx.worktreeManager.createWorktree(task.id, assignment.id, baseCommit, {
+          detached: ctx.detached,
+        });
+    assignment.worktreePath = wt.path;
+    assignment.branchName = wt.branchName;
+
+    ctx.workspaceRepo.register({
+      id: `ws-${task.id}-${randomUUID().slice(0, 8)}`,
+      runId,
+      taskId: task.id,
+      assignmentId: assignment.id,
+      path: wt.path,
+      branch: wt.branchName,
+    });
+
+    const logPath = path.resolve(
+      ctx.repoRoot,
+      ctx.config.execution.runsDir,
+      runId,
+      `${task.id}-${assignment.id}.log`,
+    );
+
+    const activeState = ctx.activityTracker?.getByAssignment(assignment.id);
+    if (activeState) {
+      activeState.logPath = logPath;
+      activeState.status = 'Agent executing in worktree...';
+    }
+
+    const execRecord = ctx.executionRepo.create({
+      id: `exec-${task.id}-${randomUUID().slice(0, 8)}`,
+      runId,
+      taskId: task.id,
+      assignmentId: assignment.id,
+      agentId: agent.id,
+      logPath,
+    });
+
+    const taskContract = ctx.objectiveOverride
+      ? { ...task.contract, objective: ctx.objectiveOverride }
+      : task.contract;
+
+    // Derived from the task contract, not a separately tracked flag: a task
+    // whose forbidden changes are wildcarded is read-only. The Intent Guard
+    // normalizes forbiddenChanges to ['*'] for READ_ONLY_ANALYSIS tasks, so
+    // this stays authoritative even when routing/planning disagreed with the
+    // original user intent.
+    const mutationAllowed = !taskContract.forbiddenChanges?.includes('*');
+
+    if (ctx.concurrency) {
+      const priority =
+        ctx.priority ?? (ctx.graph ? computeTaskPriority(task, ctx.graph) : (task.priority ?? 0));
+      await ctx.concurrency.waitForSlot(agent.id, task.id, abortSignal, assignment.id, priority);
+      ctx.concurrency.acquire(assignment.id, agent.id, task.id);
+    }
+
+    if (ctx.communicationBus) {
+      ctx.communicationBus.registerAgent(assignment.id, agent);
+    }
+
+    let session: import('@taskforge/shared').AgentSession | undefined;
+    let agentResult: AgentResult = { success: false, message: 'Execution did not complete', durationMs: 0 };
+    let thrownError: Error | undefined;
+
+    try {
+      if (agent.createSession) {
+        session = await agent.createSession(assignment, {
+          worktreePath: wt.path,
+          task: taskContract,
+          assignment,
+          originalUserRequest: ctx.originalUserRequest,
+          abortSignal,
+        });
+
+        const sessionRegistry = ctx.sessionRegistry ?? ctx.communicationBus?.getSessionRegistry();
+        if (sessionRegistry && session) {
+          sessionRegistry.register({
+            assignmentId: assignment.id,
+            sessionId: session.sessionId,
+            adapter: agent,
+            taskId: task.id,
+            runId,
+          });
+        }
+
+        if (ctx.interactionGateway && session) {
+          (async () => {
+            try {
+              for await (const event of session.events()) {
+                if (event.type === 'permission_request') {
+                  ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
+                  ctx.onAttention?.('waiting_permission');
+                  ctx.activityTracker?.setAttention(assignment.id, {
+                    type: 'permission',
+                    prompt: (event as any).prompt || 'Permission approval required',
+                    resource: (event as any).resource,
+                    operation: (event as any).operation,
+                    category: (event as any).category,
+                    requestId: (event as any).requestId,
+                  });
+                } else if (event.type === 'question') {
+                  ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_input');
+                  ctx.onAttention?.('waiting_input');
+                  ctx.activityTracker?.setAttention(assignment.id, {
+                    type: 'question',
+                    prompt: (event as any).prompt || 'Question answer required',
+                    requestId: (event as any).requestId,
+                  });
+                } else if (event.type === 'authentication_required') {
+                  ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_auth');
+                  ctx.onAttention?.('waiting_auth');
+                  ctx.activityTracker?.setAttention(assignment.id, {
+                    type: 'auth',
+                    prompt: (event as any).prompt || 'Authentication required',
+                    requestId: (event as any).requestId,
+                  });
+                }
+
+                await ctx.interactionGateway!.handleEvent(event, session, {
+                  runId,
+                  taskId: task.id,
+                  assignmentId: assignment.id,
+                  agentId: agent.id,
+                });
+
+                ctx.activityTracker?.clearAttention(assignment.id);
+                ctx.activityTracker?.updateStatus(assignment.id, 'Resumed work after approval');
+                ctx.assignmentRepo.updateStatus(assignment.id, 'running');
+                ctx.onResumed?.();
+              }
+            } catch {
+              // session closed
+            }
+          })();
+        }
+      }
+
+      agentResult = await agent.execute(assignment, {
         worktreePath: wt.path,
         task: taskContract,
         assignment,
         originalUserRequest: ctx.originalUserRequest,
         abortSignal,
+        logPath,
+        timeoutMs: Math.max(1, ctx.config.execution.defaultTimeoutMinutes) * 60_000,
+        mutationAllowed,
+        runId,
+        onActivity: (activity: string) => {
+          ctx.activityTracker?.updateStatus(assignment.id, activity);
+        },
+        onStreamEvent: (event) => {
+          ctx.streamBus?.publish(event);
+        },
+        onEvent: async (event) => {
+          if (ctx.interactionGateway && session) {
+            if (event.type === 'permission_request') {
+              ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
+              ctx.onAttention?.('waiting_permission');
+              ctx.activityTracker?.setAttention(assignment.id, {
+                type: 'permission',
+                prompt: (event as any).prompt || 'Permission approval required',
+                resource: (event as any).resource,
+                operation: (event as any).operation,
+                category: (event as any).category,
+                requestId: (event as any).requestId,
+              });
+            }
+            await ctx.interactionGateway.handleEvent(event, session, {
+              runId,
+              taskId: task.id,
+              assignmentId: assignment.id,
+              agentId: agent.id,
+            });
+            ctx.activityTracker?.clearAttention(assignment.id);
+            ctx.activityTracker?.updateStatus(assignment.id, 'Resumed work after approval');
+            ctx.assignmentRepo.updateStatus(assignment.id, 'running');
+            ctx.onResumed?.();
+          }
+        },
       });
-
+    } catch (err) {
+      thrownError = err instanceof Error ? err : new Error(String(err));
+      agentResult = {
+        success: false,
+        message: `Adapter error: ${thrownError.message}`,
+        durationMs: 0,
+      };
+    } finally {
       const sessionRegistry = ctx.sessionRegistry ?? ctx.communicationBus?.getSessionRegistry();
-      if (sessionRegistry && session) {
-        sessionRegistry.register({
-          assignmentId: assignment.id,
-          sessionId: session.sessionId,
-          adapter: agent,
-          taskId: task.id,
-          runId,
-        });
+      if (sessionRegistry) {
+        sessionRegistry.unregister(assignment.id);
+      }
+      if (ctx.concurrency) {
+        ctx.concurrency.release(assignment.id, agent.id, task.id);
+      }
+      if (session) {
+        try {
+          await session.close();
+        } catch {
+          // ignore close error
+        }
+      }
+      try {
+        agent.releaseSession?.(assignment.id);
+      } catch {
+        // ignore release error
       }
 
-      if (ctx.interactionGateway && session) {
-        (async () => {
-          try {
-            for await (const event of session.events()) {
-              if (event.type === 'permission_request') {
-                ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
-                ctx.onAttention?.('waiting_permission');
-                ctx.activityTracker?.setAttention(assignment.id, {
-                  type: 'permission',
-                  prompt: (event as any).prompt || 'Permission approval required',
-                  resource: (event as any).resource,
-                  operation: (event as any).operation,
-                  category: (event as any).category,
-                  requestId: (event as any).requestId,
-                });
-              } else if (event.type === 'question') {
-                ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_input');
-                ctx.onAttention?.('waiting_input');
-                ctx.activityTracker?.setAttention(assignment.id, {
-                  type: 'question',
-                  prompt: (event as any).prompt || 'Question answer required',
-                  requestId: (event as any).requestId,
-                });
-              } else if (event.type === 'authentication_required') {
-                ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_auth');
-                ctx.onAttention?.('waiting_auth');
-                ctx.activityTracker?.setAttention(assignment.id, {
-                  type: 'auth',
-                  prompt: (event as any).prompt || 'Authentication required',
-                  requestId: (event as any).requestId,
-                });
-              }
+      const isCancelled =
+        abortSignal?.aborted ||
+        agentResult?.message?.includes('cancelled') ||
+        agentResult?.message?.includes('aborted');
+      const finalExecStatus = isCancelled ? 'cancelled' : agentResult?.success ? 'success' : 'failed';
+      const finalAsgnStatus = isCancelled ? 'cancelled' : agentResult?.success ? 'completed' : 'failed';
 
-              await ctx.interactionGateway!.handleEvent(event, session, {
-                runId,
-                taskId: task.id,
-                assignmentId: assignment.id,
-                agentId: agent.id,
-              });
+      try {
+        ctx.executionRepo.complete(
+          execRecord.id,
+          finalExecStatus,
+          agentResult?.success ? 0 : 1,
+          agentResult?.message ?? thrownError?.message ?? 'Execution error',
+        );
+      } catch {
+        // ignore persistence error
+      }
 
-              ctx.activityTracker?.clearAttention(assignment.id);
-              ctx.activityTracker?.updateStatus(assignment.id, 'Resumed work after approval');
-              ctx.assignmentRepo.updateStatus(assignment.id, 'running');
-              ctx.onResumed?.();
-            }
-          } catch {
-            // session closed
-          }
-        })();
+      try {
+        ctx.assignmentRepo.updateStatus(
+          assignment.id,
+          finalAsgnStatus,
+          undefined,
+          undefined,
+          agentResult?.completionReason,
+        );
+      } catch {
+        // ignore persistence error
       }
     }
 
-    agentResult = await agent.execute(assignment, {
-      worktreePath: wt.path,
-      task: taskContract,
-      assignment,
-      originalUserRequest: ctx.originalUserRequest,
-      abortSignal,
-      logPath,
-      timeoutMs: Math.max(1, ctx.config.execution.defaultTimeoutMinutes) * 60_000,
-      mutationAllowed,
-      runId,
-      onActivity: (activity: string) => {
-        ctx.activityTracker?.updateStatus(assignment.id, activity);
-      },
-      onStreamEvent: (event) => {
-        ctx.streamBus?.publish(event);
-      },
-      onEvent: async (event) => {
-        if (ctx.interactionGateway && session) {
-          if (event.type === 'permission_request') {
-            ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
-            ctx.onAttention?.('waiting_permission');
-            ctx.activityTracker?.setAttention(assignment.id, {
-              type: 'permission',
-              prompt: (event as any).prompt || 'Permission approval required',
-              resource: (event as any).resource,
-              operation: (event as any).operation,
-              category: (event as any).category,
-              requestId: (event as any).requestId,
-            });
-          }
-          await ctx.interactionGateway.handleEvent(event, session, {
+    // Defense in depth: enforcement inside individual adapters (e.g.
+    // BaseCliAdapter) is preferred, but is not guaranteed for every AgentAdapter
+    // implementation. Regardless of what the adapter did, a read-only task's
+    // worktree must never end up with an uncommitted mutation or a rogue commit
+    // ahead of baseCommit -- verify and revert here, at the single chokepoint
+    // every execution path (single-agent, collaborative, parallel, review,
+    // competitive) runs through.
+    if (!mutationAllowed) {
+      try {
+        const guardGit = new GitService(wt.path);
+        const guardStatus = await guardGit.getStatus(wt.path);
+        const committedBeyondBase = Boolean(
+          agentResult.commitHash && agentResult.commitHash !== baseCommit,
+        );
+        if (!guardStatus.isClean || committedBeyondBase) {
+          ctx.eventRepo.append({
+            id: `evt-${randomUUID()}`,
             runId,
             taskId: task.id,
-            assignmentId: assignment.id,
-            agentId: agent.id,
+            type: 'MUTATION_BLOCKED',
+            payload: {
+              taskId: task.id,
+              assignmentId: assignment.id,
+              agentId: agent.id,
+              uncommittedFiles: guardStatus.uncommittedFiles,
+              blockedCommit: committedBeyondBase ? agentResult.commitHash : undefined,
+            },
+            timestamp: new Date(),
           });
-          ctx.activityTracker?.clearAttention(assignment.id);
-          ctx.activityTracker?.updateStatus(assignment.id, 'Resumed work after approval');
-          ctx.assignmentRepo.updateStatus(assignment.id, 'running');
-          ctx.onResumed?.();
+          ctx.activityTracker?.updateStatus(
+            assignment.id,
+            'Blocked by task policy: reverted a repository mutation -- this task is read-only.',
+          );
+          await guardGit.discardAllChanges(wt.path, baseCommit);
+          agentResult.commitHash = baseCommit;
         }
-      },
+      } catch {
+        // best-effort guard; do not fail the task solely because the guard check itself errored
+      }
+    }
+
+    const resolvedFindings =
+      agentResult.findings && agentResult.findings.length > 0
+        ? agentResult.findings
+        : parseStructuredFindings(agentResult.output) ??
+          parseStructuredFindings(agentResult.message);
+
+    if (resolvedFindings && resolvedFindings.length > 0 && ctx.activityTracker) {
+      const criticals = resolvedFindings.filter(
+        (f) => f.severity === 'critical' || f.severity === 'major',
+      );
+      if (criticals.length > 0) {
+        ctx.activityTracker.setCriticalFindings(assignment.id, criticals);
+      }
+    }
+
+    ctx.streamBus?.publish({
+      type: 'completed',
+      timestamp: new Date(),
+      runId,
+      taskId: task.id,
+      assignmentId: assignment.id,
+      agentId: agent.id,
+      role: assignment.role,
+      success: agentResult.success,
+      summary: agentResult.message,
     });
-  } catch (err) {
-    thrownError = err instanceof Error ? err : new Error(String(err));
-    agentResult = {
-      success: false,
-      message: `Adapter error: ${thrownError.message}`,
-      durationMs: 0,
+
+    return {
+      success: agentResult.success,
+      commitHash: agentResult.commitHash,
+      output: agentResult.output,
+      message: agentResult.message,
+      worktreePath: wt.path,
+      durationMs: agentResult.durationMs,
+      collaborationProposal: agentResult.collaborationProposal,
+      findings: resolvedFindings,
+      normalizedOutcome: agentResult.normalizedOutcome,
+      completionReason: agentResult.completionReason,
     };
   } finally {
-    const sessionRegistry = ctx.sessionRegistry ?? ctx.communicationBus?.getSessionRegistry();
-    if (sessionRegistry) {
-      sessionRegistry.unregister(assignment.id);
-    }
-    if (ctx.concurrency) {
-      ctx.concurrency.release(assignment.id, agent.id, task.id);
-    }
-    if (session) {
-      try {
-        await session.close();
-      } catch {
-        // ignore close error
-      }
-    }
-    try {
-      agent.releaseSession?.(assignment.id);
-    } catch {
-      // ignore release error
-    }
-
-    const isCancelled =
-      abortSignal?.aborted ||
-      agentResult?.message?.includes('cancelled') ||
-      agentResult?.message?.includes('aborted');
-    const finalExecStatus = isCancelled ? 'cancelled' : agentResult?.success ? 'success' : 'failed';
-    const finalAsgnStatus = isCancelled ? 'cancelled' : agentResult?.success ? 'completed' : 'failed';
-
-    try {
-      ctx.executionRepo.complete(
-        execRecord.id,
-        finalExecStatus,
-        agentResult?.success ? 0 : 1,
-        agentResult?.message ?? thrownError?.message ?? 'Execution error',
-      );
-    } catch {
-      // ignore persistence error
-    }
-
-    try {
-      ctx.assignmentRepo.updateStatus(
-        assignment.id,
-        finalAsgnStatus,
-        undefined,
-        undefined,
-        agentResult?.completionReason,
-      );
-    } catch {
-      // ignore persistence error
-    }
+    // AgentActivityTracker represents only live assignments. Keeping a
+    // completed attempt here makes the cockpit/footer report ghost agents,
+    // especially after investigation failover where both the failed attempt
+    // and its replacement have distinct assignment IDs.
+    ctx.activityTracker?.completeAssignment(assignment.id);
   }
-
-  // Defense in depth: enforcement inside individual adapters (e.g.
-  // BaseCliAdapter) is preferred, but is not guaranteed for every AgentAdapter
-  // implementation. Regardless of what the adapter did, a read-only task's
-  // worktree must never end up with an uncommitted mutation or a rogue commit
-  // ahead of baseCommit -- verify and revert here, at the single chokepoint
-  // every execution path (single-agent, collaborative, parallel, review,
-  // competitive) runs through.
-  if (!mutationAllowed) {
-    try {
-      const guardGit = new GitService(wt.path);
-      const guardStatus = await guardGit.getStatus(wt.path);
-      const committedBeyondBase = Boolean(
-        agentResult.commitHash && agentResult.commitHash !== baseCommit,
-      );
-      if (!guardStatus.isClean || committedBeyondBase) {
-        ctx.eventRepo.append({
-          id: `evt-${randomUUID()}`,
-          runId,
-          taskId: task.id,
-          type: 'MUTATION_BLOCKED',
-          payload: {
-            taskId: task.id,
-            assignmentId: assignment.id,
-            agentId: agent.id,
-            uncommittedFiles: guardStatus.uncommittedFiles,
-            blockedCommit: committedBeyondBase ? agentResult.commitHash : undefined,
-          },
-          timestamp: new Date(),
-        });
-        ctx.activityTracker?.updateStatus(
-          assignment.id,
-          'Blocked by task policy: reverted a repository mutation -- this task is read-only.',
-        );
-        await guardGit.discardAllChanges(wt.path, baseCommit);
-        agentResult.commitHash = baseCommit;
-      }
-    } catch {
-      // best-effort guard; do not fail the task solely because the guard check itself errored
-    }
-  }
-
-  const resolvedFindings =
-    agentResult.findings && agentResult.findings.length > 0
-      ? agentResult.findings
-      : parseStructuredFindings(agentResult.output) ??
-        parseStructuredFindings(agentResult.message);
-
-  if (resolvedFindings && resolvedFindings.length > 0 && ctx.activityTracker) {
-    const criticals = resolvedFindings.filter(
-      (f) => f.severity === 'critical' || f.severity === 'major',
-    );
-    if (criticals.length > 0) {
-      ctx.activityTracker.setCriticalFindings(assignment.id, criticals);
-    }
-  }
-
-  ctx.streamBus?.publish({
-    type: 'completed',
-    timestamp: new Date(),
-    runId,
-    taskId: task.id,
-    assignmentId: assignment.id,
-    agentId: agent.id,
-    role: assignment.role,
-    success: agentResult.success,
-    summary: agentResult.message,
-  });
-
-  return {
-    success: agentResult.success,
-    commitHash: agentResult.commitHash,
-    output: agentResult.output,
-    message: agentResult.message,
-    worktreePath: wt.path,
-    durationMs: agentResult.durationMs,
-    collaborationProposal: agentResult.collaborationProposal,
-    findings: resolvedFindings,
-    normalizedOutcome: agentResult.normalizedOutcome,
-    completionReason: agentResult.completionReason,
-  };
 }
 
 export function parseStructuredFindings(
