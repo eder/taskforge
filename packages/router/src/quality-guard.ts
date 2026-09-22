@@ -230,6 +230,10 @@ export class RouterQualityGuard {
       proposal.risk === 'high' &&
       hasDistinctWork &&
       distinctRoles.size >= 2;
+    const solutionDiversityCase =
+      proposal.strategy === 'competitive' &&
+      proposal.uncertainty === 'high' &&
+      proposal.roles.length >= 2;
 
     const benefits: import('./router-types.js').FanOutBenefit[] = [];
     const reasons: string[] = [];
@@ -244,6 +248,10 @@ export class RouterQualityGuard {
     if (complementaryHighRiskCase) {
       benefits.push('complementary_high_risk');
       reasons.push('high-risk work has distinct complementary roles and objectives');
+    }
+    if (solutionDiversityCase) {
+      benefits.push('solution_diversity');
+      reasons.push('high-uncertainty competitive execution intentionally compares independent solutions');
     }
 
     if (benefits.length > 0) {
@@ -306,6 +314,14 @@ export class RouterQualityGuard {
   }
 
   private static objectiveTokens(value: string): Set<string> {
+    // Preserve explicit resource identities before lexical normalization.
+    // "Create a.txt" and "Create b.txt" are genuinely partitioned work even
+    // though their surrounding language is nearly identical.
+    const resources = Array.from(
+      value.matchAll(/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g),
+      (match) => `resource:${match[0].toLowerCase()}`,
+    );
+
     const stopwords = new Set([
       'a',
       'an',
@@ -334,13 +350,13 @@ export class RouterQualityGuard {
       'find',
     ]);
 
-    return new Set(
-      value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ' ')
-        .split(/\s+/)
-        .filter((token) => token.length > 1 && !stopwords.has(token)),
-    );
+    const lexical = value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .filter((token) => token.length > 1 && !stopwords.has(token));
+
+    return new Set([...lexical, ...resources]);
   }
 
   private static jaccardSimilarity(left: Set<string>, right: Set<string>): number {
