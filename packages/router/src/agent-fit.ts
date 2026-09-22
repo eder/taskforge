@@ -71,7 +71,7 @@ export class AgentFitScorer {
 
     if (
       request.role === 'architecture_reviewer' ||
-      /\b(architecture|architect|design|invariant|trade-?off|synthesi[sz]|summar|explain|overview|what (?:is|does)|o que|como funciona)\b/i.test(text)
+      /\b(architecture|architect|design|invariant|trade-?off|synthesi[sz]|summar(?:y|i[sz](?:e|ation))|explain|overview|what (?:is|does)|o que|como funciona)\b/i.test(text)
     ) {
       signals.add('architecture_synthesis');
     }
