@@ -682,11 +682,15 @@ export class InteractiveShell {
     const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
 
     const usageAccuracy = this.telemetry.getUsageAccuracy(result.runId);
+    const varianceRatio = usageAccuracy.varianceRatio;
+    const highVariance = varianceRatio !== undefined && varianceRatio > 3;
     const usageBlock =
       usageAccuracy.observedAssignments > 0
         ? usageAccuracy.plannedEstimatedTokens > 0
-          ? `    ${colors.dim}Observed usage:${colors.reset}     ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Assignment baseline:${colors.reset} ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} (${((usageAccuracy.varianceRatio ?? 1) * 100).toFixed(0)}% observed / baseline)`
-          : `    ${colors.dim}Observed usage:${colors.reset}     ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
+          ? highVariance
+            ? `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Planning baseline:${colors.reset}       ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} ${colors.yellow}▲ ${varianceRatio!.toFixed(1)}× variance${colors.reset}\n    ${colors.dim}Usage note:${colors.reset}              Baseline excludes retries and provider/runtime context; use /cost for input/cache/output detail.`
+            : `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Planning baseline:${colors.reset}       ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} (${((varianceRatio ?? 1) * 100).toFixed(0)}% provider / baseline)`
+          : `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
         : '';
 
     const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
