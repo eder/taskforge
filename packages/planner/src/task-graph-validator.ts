@@ -428,7 +428,7 @@ export class TaskGraphValidator {
         forbiddenChanges:
           completionMode === 'mutation'
             ? (rt.forbiddenChanges ?? [])
-            : ['*'],
+            : Array.from(new Set(['*', ...(rt.forbiddenChanges ?? [])])),
         acceptanceCriteria: rt.acceptanceCriteria.map((c) => c.trim()),
         dependencies: (rt.dependencies ?? []).map((d) => d.trim().toUpperCase()),
         completionMode,
