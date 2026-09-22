@@ -234,6 +234,7 @@ export class TelemetryCollector {
       `  Shape: ${report.taskCount} task(s), ${report.assignmentCount} assignment(s), ${report.uniqueAgents} agent(s)`,
       `  Assignment yield: ${report.usefulAssignments} useful / ${report.wastedAssignments} wasted (${pct(report.wastedAssignmentRatio)} waste)`,
       `  Recovery overhead: ${report.retryOrFailoverAssignments} retry/failover assignment(s)`,
+      `  Fan-out decisions: ${report.admittedFanOutDecisions} admitted / ${report.rejectedFanOutDecisions} rejected (${report.fanOutDecisions} requested)`,
       `  Time: ${ms(report.activeExecutionMs)} active, ${ms(report.serialExecutionMs)} serial work, ${ms(report.observedParallelOverlapMs)} observed overlap (${report.parallelismFactor.toFixed(2)}× parallelism)`,
       report.providerReportedTokens > 0
         ? `  Tokens: ${tokens(report.providerReportedTokens)} provider-reported, ${tokens(report.wastedProviderTokens)} wasted${report.wastedTokenRatio !== undefined ? ` (${pct(report.wastedTokenRatio)})` : ''}`
