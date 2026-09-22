@@ -24,6 +24,8 @@ function createTask(
       forbiddenChanges: overrides?.forbiddenChanges ?? [],
       acceptanceCriteria: overrides?.acceptanceCriteria ?? ['Criteria 1'],
       dependencies: [],
+      completionMode: overrides?.completionMode,
+      verification: overrides?.verification,
     },
     acceptanceCriteria: ['Criteria 1'],
     reworkCount: 0,
@@ -295,6 +297,110 @@ describe('CompletionGate - Task-Type Aware Policy Matrix', () => {
         verificationPassed: true,
       });
       expect(reportResult.accepted).toBe(true);
+    });
+
+    it('accepts a baseline verification with zero git changes even when the command exits non-zero', async () => {
+      const task = createTask('testing', {
+        title: 'Run pnpm typecheck to establish a baseline',
+        objective: 'Run pnpm typecheck to establish a baseline',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        completionMode: 'verification',
+        verification: {
+          commands: ['pnpm typecheck'],
+          expectation: 'observe',
+        },
+      });
+
+      const policy = resolveCompletionPolicy(task);
+      expect(policy.requirement).toBe('verification_evidence_required');
+
+      const result = await gate.evaluate({
+        task,
+        agentResult: createAgentResult({ output: 'Baseline captured.' }),
+        baseCommit: 'commit-base',
+        resultingCommit: 'commit-base',
+        verificationPassed: true,
+        verificationChecks: [
+          {
+            name: 'explicit-1',
+            command: 'pnpm typecheck',
+            exitCode: 1,
+            stdout: '',
+            stderr: 'Existing type errors',
+            durationMs: 25,
+            success: false,
+          },
+        ],
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(result.evidence.verificationChecks).toHaveLength(1);
+      expect(result.evidence.filesModified).toEqual([]);
+    });
+
+    it('rejects a required-to-pass verification when its command fails', async () => {
+      const task = createTask('testing', {
+        title: 'Validate integration with pnpm typecheck',
+        objective: 'Validate integration with pnpm typecheck',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        completionMode: 'verification',
+        verification: {
+          commands: ['pnpm typecheck'],
+          expectation: 'pass',
+        },
+      });
+
+      const result = await gate.evaluate({
+        task,
+        agentResult: createAgentResult({ output: 'Typecheck completed.' }),
+        baseCommit: 'commit-base',
+        resultingCommit: 'commit-base',
+        verificationPassed: false,
+        verificationChecks: [
+          {
+            name: 'explicit-1',
+            command: 'pnpm typecheck',
+            exitCode: 2,
+            stdout: '',
+            stderr: 'New type error',
+            durationMs: 25,
+            success: false,
+          },
+        ],
+      });
+
+      expect(result.accepted).toBe(false);
+      expect(result.failureReason).toBe('VERIFICATION_FAILED');
+      expect(result.evidence.explanation).toContain('exit code 2');
+    });
+
+    it('rejects verification-only completion without command evidence', async () => {
+      const task = createTask('testing', {
+        title: 'Run pnpm lint',
+        objective: 'Run pnpm lint',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        completionMode: 'verification',
+        verification: {
+          commands: ['pnpm lint'],
+          expectation: 'pass',
+        },
+      });
+
+      const result = await gate.evaluate({
+        task,
+        agentResult: createAgentResult({ output: 'Lint done.' }),
+        baseCommit: 'commit-base',
+        resultingCommit: 'commit-base',
+        verificationPassed: true,
+        verificationChecks: [],
+      });
+
+      expect(result.accepted).toBe(false);
+      expect(result.failureReason).toBe('VERIFICATION_FAILED');
+      expect(result.evidence.explanation).toContain('no deterministic command evidence');
     });
   });
 
