@@ -469,6 +469,36 @@ export class OperatorIntentParser {
   }
 }
 
+function formatLiveReset(resetAt?: Date | string): string | undefined {
+  if (!resetAt) return undefined;
+  const target = resetAt instanceof Date ? resetAt : new Date(resetAt);
+  const remainingMs = target.getTime() - Date.now();
+  if (!Number.isFinite(remainingMs)) return undefined;
+  if (remainingMs <= 0) return 'reset window elapsed; available for provider probe';
+
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0 || days > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
+  if (days === 0 && hours === 0) parts.push(`${seconds}s`);
+
+  const absolute = new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(target);
+
+  return `resets in ${parts.join('')} (at ${absolute})`;
+}
+
 export class OperatorAgent {
   public parseIntent(input: string, context?: IntentParsingContext): OperatorIntent {
     return OperatorIntentParser.parse(input, context);
@@ -505,15 +535,18 @@ export class OperatorAgent {
             ready: boolean;
             quotaStatus?: string;
             quotaReason?: string;
+            resetAt?: Date | string;
           }>) || [];
         return [
           'Available agents:',
           ...agents.map((a) => {
             let status = a.ready ? '● ready' : '○ not detected';
             if (a.quotaStatus === 'quota_exhausted') {
-              status = `▲ quota exhausted${a.quotaReason ? ` (${a.quotaReason})` : ''}`;
+              const liveReset = formatLiveReset(a.resetAt);
+              status = `▲ quota exhausted${liveReset ? ` (${liveReset})` : a.quotaReason ? ` (${a.quotaReason})` : ''}`;
             } else if (a.quotaStatus === 'rate_limited') {
-              status = `▲ rate limited${a.quotaReason ? ` (${a.quotaReason})` : ''}`;
+              const liveReset = formatLiveReset(a.resetAt);
+              status = `▲ rate limited${liveReset ? ` (${liveReset})` : a.quotaReason ? ` (${a.quotaReason})` : ''}`;
             }
             return `  ${a.name.padEnd(16)}: ${status}`;
           }),
