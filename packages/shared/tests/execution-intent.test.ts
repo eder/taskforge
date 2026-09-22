@@ -49,6 +49,35 @@ describe('detectExecutionIntent', () => {
     ).toBe(false);
   });
 
+  it('classifies natural Portuguese project-overview question variants as lightweight read-only', () => {
+    for (const request of [
+      'O que é esse projeto?',
+      'O que é este repositório?',
+      'Para que serve esse projeto?',
+      'Como esse projeto funciona?',
+      'Qual é o objetivo desse sistema?',
+    ]) {
+      expect(isLightweightReadOnlyRequest(request)).toBe(true);
+      const decision = detectExecutionIntent(request);
+      expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
+      expect(decision.mutationAllowed).toBe(false);
+      expect(decision.deliveryAllowed).toBe(false);
+      expect(decision.forbiddenChanges).toEqual(['*']);
+    }
+  });
+
+  it('classifies natural English project-overview question variants as lightweight read-only', () => {
+    for (const request of [
+      'What is this project?',
+      'What does this repository do?',
+      'How does this application work?',
+      'What is this codebase for?',
+    ]) {
+      expect(isLightweightReadOnlyRequest(request)).toBe(true);
+      expect(detectExecutionIntent(request).intent).toBe('READ_ONLY_ANALYSIS');
+    }
+  });
+
   it('classifies "O que esse projeto faz?" as lightweight read-only analysis', () => {
     expect(isLightweightReadOnlyRequest('O que esse projeto faz?')).toBe(true);
 
