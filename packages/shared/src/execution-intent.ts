@@ -58,9 +58,12 @@ const EXPLANATION_PATTERN =
  * README.md intact.
  */
 const SCOPED_NO_MUTATION_PATTERNS: RegExp[] = [
-  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|write|create|implement|delete|remove|touch|update)\s+(.+?)(?=\s+(?:but|however)\s+|\s+and\s+(?=(?:create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
-  /\bn[ãa]o\s+(?:altere|modifique|implemente|crie|edite|escreva|apague|delete|remova|toque|atualize)\s+(.+?)(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
-  /\bsem\s+(?:alterar|modificar|editar|escrever|criar|remover)\s+(.+?)(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  // Scoped repository restrictions must be explicit edit prohibitions.
+  // Deliberately exclude "implement/create/write" and subordinate "without
+  // changing..." phrasing: those commonly describe architectural outcomes
+  // rather than files/components the current run is forbidden to touch.
+  /\b(?:do\s*not|don'?t)\s+(?:modify|change|edit|alter|delete|remove|touch|update)\s+(.+?)(?=\s+(?:but|however)\s+|\s+and\s+(?=(?:create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
+  /\bn[ãa]o\s+(?:altere|modifique|edite|apague|delete|remova|toque|atualize)\s+(.+?)(?=\s+(?:mas|por[eé]m)\s+|\s+e\s+(?=(?:crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b)|[!?;]|\.(?=\s|$)|\n|$)/gi,
 ];
 
 const NEGATED_MUTATION_CLAUSE_PATTERNS: RegExp[] = [
@@ -134,6 +137,8 @@ function isExplanationOnlyHeuristic(text: string): boolean {
  * - "Do not modify anything" is a GLOBAL read-only directive.
  * - "Implement X, but do not modify Y" is IMPLEMENTATION with Y propagated
  *   as a scoped forbidden change.
+ * - Architectural outcome language such as "support providers without changing
+ *   Planner/Router" is not promoted into forbiddenChanges automatically.
  *
  * This prevents a normal engineering constraint from disabling the entire run.
  */
