@@ -118,7 +118,6 @@ export class StaticRoutingProvider implements RoutingProvider {
             role: 'implementer',
             requiredCapabilities: ['canWrite', 'canExecute'],
             objective: input.task.contract.objective,
-            preferredAgent: 'claude',
           },
         ],
         communication: {
