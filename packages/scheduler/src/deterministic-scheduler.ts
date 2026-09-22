@@ -999,10 +999,14 @@ export class DeterministicScheduler {
       }
       this.failedAgentsByTask.get(task.id)!.add(agentId);
 
-      if (
-        gateResult.failureReason === 'REQUIRED_ACTION_DENIED' ||
-        (task.type === 'review' && gateResult.failureReason === 'ACCEPTANCE_NOT_MET')
-      ) {
+      if (gateResult.failureReason === 'REQUIRED_ACTION_DENIED') {
+        graph.updateTaskStatus(task.id, 'failed');
+        taskRepo.updateStatus(task.id, 'failed');
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+        return;
+      }
+
+      if (task.type === 'review' && gateResult.failureReason === 'ACCEPTANCE_NOT_MET') {
         graph.updateTaskStatus(task.id, 'failed');
         taskRepo.updateStatus(task.id, 'failed');
         graph.updateTaskStatus(task.id, 'blocked');
