@@ -1339,6 +1339,11 @@ export class InteractiveShell {
               `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`,
           )
           .join(', ');
+        const fanOutRationale = routing.fanOutAssessment
+          ? routing.fanOutAssessment.admitted
+            ? `Fan-out rationale: ${colors.green}admitted${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
+            : `Fan-out rationale: ${colors.yellow}rejected${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
+          : '';
 
         const primaryAssignmentCount = Math.max(
           1,
@@ -1406,6 +1411,7 @@ export class InteractiveShell {
           `  ${colors.dim}Router:${colors.reset}   ${routerSource}${policyBadge}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
+          fanOutRationale,
           `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
           `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
@@ -1472,6 +1478,11 @@ export class InteractiveShell {
               `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`,
           )
           .join(', ');
+        const fanOutRationale = routing.fanOutAssessment
+          ? routing.fanOutAssessment.admitted
+            ? `Fan-out rationale: ${colors.green}admitted${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
+            : `Fan-out rationale: ${colors.yellow}rejected${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
+          : '';
 
         const primaryAssignmentCount = Math.max(
           1,
@@ -1507,6 +1518,7 @@ export class InteractiveShell {
           `${colors.brand}✦ Revised Plan${colors.reset} ${colors.dim}(Revision: ${intent.revision.details})${colors.reset}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
+          fanOutRationale,
           `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
           `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
