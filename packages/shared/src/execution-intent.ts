@@ -139,17 +139,29 @@ export function isLightweightReadOnlyRequest(text: string): boolean {
       source,
     );
 
-  const englishProjectQuestion =
-    /\b(?:what\s+(?:is|does)|how\s+does)\b.{0,80}\b(?:project|repo|repository|codebase|app|application|system)\b/i.test(
+  const projectSubject =
+    /\b(project|repo|repository|codebase|app|application|system|projeto|reposit[oó]rio|aplica[cç][aã]o|sistema)\b/i.test(
       source,
     );
 
-  const portugueseProjectQuestion =
-    /\b(?:o\s+que|qual|para\s+que|como)\b.{0,80}\b(?:projeto|repo|reposit[oó]rio|codebase|app|aplica[cç][aã]o|sistema)\b.{0,80}\b(?:faz|[ée]|serve|funciona|funcionamento|objetivo|prop[oó]sito|finalidade)\b/i.test(
+  // Repository-overview questions are read-only by construction unless the
+  // same request also contains an affirmative mutation verb (guarded above).
+  // Keep this deliberately grammar-tolerant: natural Portuguese puts the
+  // copula before the subject ("O que é esse projeto?"), while other forms put
+  // the subject first ("O que esse projeto faz?").
+  const overviewQuestionLead =
+    /^\s*(?:what|what'?s|which|how|tell\s+me|o\s+que|qual|como|para\s+que|me\s+diga)\b/i.test(
       source,
     );
+  const overviewQuestionShape =
+    projectSubject &&
+    (overviewQuestionLead ||
+      /\?\s*$/.test(source) ||
+      /\b(?:what\s+is|what\s+does|how\s+does|o\s+que\s+[ée]|o\s+que.+faz|para\s+que.+serve|como.+funciona|qual.+(?:objetivo|prop[oó]sito|finalidade))\b/i.test(
+        source,
+      ));
 
-  return directExplanation || englishProjectQuestion || portugueseProjectQuestion;
+  return directExplanation || overviewQuestionShape;
 }
 
 function isExplanationOnlyHeuristic(text: string): boolean {
