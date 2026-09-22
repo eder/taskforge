@@ -19,6 +19,8 @@ class TimeoutProbeAgent implements AgentAdapter {
   readonly id = 'timeout-probe';
   readonly name = 'Timeout Probe';
   public observedTimeoutMs?: number;
+  public observedOriginalUserRequest?: string;
+  public observedRole?: AgentAssignment['role'];
 
   async detect(): Promise<boolean> {
     return true;
@@ -39,6 +41,8 @@ class TimeoutProbeAgent implements AgentAdapter {
     context: AgentContext,
   ): Promise<AgentResult> {
     this.observedTimeoutMs = context.timeoutMs;
+    this.observedOriginalUserRequest = context.originalUserRequest;
+    this.observedRole = _assignment.role;
     return {
       success: true,
       message: 'Investigation completed successfully',
@@ -152,6 +156,10 @@ describe('governed assignment execution timeout', () => {
 
     expect(result.status).toBe('completed');
     expect(agent.observedTimeoutMs).toBe(17 * 60_000);
+    expect(agent.observedOriginalUserRequest).toBe(
+      'Analyze the runtime timeout behavior without modifying anything.',
+    );
+    expect(agent.observedRole).toBe('researcher');
 
     db.close();
   });

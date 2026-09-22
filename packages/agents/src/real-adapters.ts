@@ -65,20 +65,38 @@ export abstract class BaseCliAdapter implements AgentAdapter {
   }
 
   protected buildPrompt(assignment: AgentAssignment, context: AgentContext): string {
+    const originalUserRequest = context.originalUserRequest;
+    const hasOriginalUserRequest = Boolean(originalUserRequest?.trim());
+    const readOnly =
+      context.mutationAllowed === false || context.task.forbiddenChanges.includes('*');
+    const writableScope =
+      context.task.allowedScope.length === 0
+        ? 'not explicitly scoped'
+        : context.task.allowedScope.includes('*')
+          ? 'all repository files'
+          : context.task.allowedScope.join(', ');
+
     return [
+      hasOriginalUserRequest ? 'Original user request:' : undefined,
+      hasOriginalUserRequest ? originalUserRequest : undefined,
+      hasOriginalUserRequest ? '' : undefined,
+      'TaskForge assignment:',
       `Task ID: ${assignment.taskId}`,
       `Assignment ID: ${assignment.id}`,
       `Role: ${assignment.role}`,
       `Objective: ${assignment.objective}`,
-      `Allowed scope: ${
-        context.task.allowedScope.length === 0 || context.task.allowedScope.includes('*')
-          ? 'all files'
-          : context.task.allowedScope.join(', ')
-      }`,
-      `Forbidden changes: ${context.task.forbiddenChanges.join(', ') || 'none'}`,
-      `Acceptance criteria:`,
-      ...context.task.acceptanceCriteria.map((c) => `- ${c}`),
-    ].join('\n');
+      `Execution mode: ${readOnly ? 'READ_ONLY' : 'IMPLEMENTATION'}`,
+      readOnly
+        ? 'Repository access: read any repository files needed for this assignment'
+        : `Writable scope: ${writableScope}`,
+      readOnly
+        ? 'Repository mutation: forbidden'
+        : `Forbidden changes: ${context.task.forbiddenChanges.join(', ') || 'none'}`,
+      'Acceptance criteria:',
+      ...context.task.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join('\n');
   }
 
   protected formatArgs(prompt: string): string[] {

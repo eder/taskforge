@@ -8,7 +8,7 @@ import {
   AntigravityAdapter,
 } from '../src/real-adapters.js';
 import { RealCliAgentSession } from '../src/agent-session.js';
-import type { AgentRuntimeEvent } from '@taskforge/shared';
+import type { AgentAssignment, AgentContext, AgentRuntimeEvent } from '@taskforge/shared';
 import { InteractionGateway } from '@taskforge/execution';
 
 describe('Real-Agent Hardening - Safety & Adapters', () => {
@@ -32,6 +32,43 @@ describe('Real-Agent Hardening - Safety & Adapters', () => {
     // Antigravity CLI must never bypass approvals
     expect(agyArgs).not.toContain('--dangerously-skip-permissions');
     expect(agyArgs).toContain('stream-json');
+  });
+
+  it('preserves the original user request and renders read-only control context without contradicting it', () => {
+    const claude = new ClaudeCodeAdapter();
+    const assignment: AgentAssignment = {
+      id: 'asgn-explain',
+      taskId: 'TASK-01',
+      agentId: 'claude',
+      role: 'researcher',
+      objective: 'Analyze the repository and explain its architecture',
+      status: 'running',
+    };
+    const context: AgentContext = {
+      worktreePath: '/tmp/taskforge-readonly',
+      originalUserRequest: 'Me explique esse projeto',
+      assignment,
+      mutationAllowed: false,
+      task: {
+        objective: assignment.objective,
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        acceptanceCriteria: ['Provide a clear explanation grounded in the repository'],
+        dependencies: [],
+      },
+    };
+
+    const prompt = (claude as any).buildPrompt(assignment, context) as string;
+
+    expect(prompt).toContain('Original user request:\nMe explique esse projeto');
+    expect(prompt).toContain('Role: researcher');
+    expect(prompt).toContain('Execution mode: READ_ONLY');
+    expect(prompt).toContain(
+      'Repository access: read any repository files needed for this assignment',
+    );
+    expect(prompt).toContain('Repository mutation: forbidden');
+    expect(prompt).not.toContain('Allowed scope: all files');
+    expect(prompt).not.toContain('Role: implementer');
   });
 
   it('declares standard coding capabilities', async () => {

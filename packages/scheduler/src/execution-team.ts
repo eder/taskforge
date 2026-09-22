@@ -1135,6 +1135,7 @@ function buildGovernedCtx(
     runId: ctx.runId,
     baseCommit,
     repoRoot: ctx.repoRoot,
+    originalUserRequest: ctx.originalUserRequest,
     config: ctx.config,
     task,
     assignment,

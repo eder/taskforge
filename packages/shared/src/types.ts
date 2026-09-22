@@ -259,6 +259,12 @@ export interface AgentContext {
   worktreePath: string;
   task: TaskContract;
   assignment: AgentAssignment;
+  /**
+   * The user's original request, preserved verbatim by TaskForge.
+   * Agents receive this alongside the structured assignment so orchestration
+   * adds context without rewriting away the user's intent.
+   */
+  originalUserRequest?: string;
   environment?: Record<string, string>;
   abortSignal?: AbortSignal;
   logPath?: string;

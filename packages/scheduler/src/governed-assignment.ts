@@ -24,6 +24,8 @@ export interface GovernedAssignmentContext {
   runId: string;
   baseCommit: string;
   repoRoot: string;
+  /** Verbatim request that started the run. */
+  originalUserRequest?: string;
   config: TaskForgeConfig;
   task: Task;
   /** Assignment must already be persisted via assignmentRepo.create before calling. */
@@ -171,6 +173,7 @@ export async function executeGovernedAssignment(
         worktreePath: wt.path,
         task: taskContract,
         assignment,
+        originalUserRequest: ctx.originalUserRequest,
         abortSignal,
       });
 
@@ -241,6 +244,7 @@ export async function executeGovernedAssignment(
       worktreePath: wt.path,
       task: taskContract,
       assignment,
+      originalUserRequest: ctx.originalUserRequest,
       abortSignal,
       logPath,
       timeoutMs: Math.max(1, ctx.config.execution.defaultTimeoutMinutes) * 60_000,
