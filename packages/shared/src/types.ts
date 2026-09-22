@@ -262,6 +262,13 @@ export interface AgentContext {
   environment?: Record<string, string>;
   abortSignal?: AbortSignal;
   logPath?: string;
+  /**
+   * Hard wall-clock budget for the provider process. TaskForge supplies this
+   * from execution.defaultTimeoutMinutes so complex tasks are not killed by a
+   * hidden adapter-local timeout and then redundantly restarted on another
+   * agent.
+   */
+  timeoutMs?: number;
   onEvent?: (event: AgentRuntimeEvent) => Promise<void>;
   onActivity?: (activity: string) => void;
   onProgress?: (progress: string) => void;
