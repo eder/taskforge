@@ -161,6 +161,89 @@ describe('TaskGraphValidator', () => {
     expect(res.errors.some((e) => e.includes('invalid type'))).toBe(true);
     expect(res.errors.some((e) => e.includes('acceptance criterion'))).toBe(true);
   });
+
+  it('normalizes typecheck baseline into explicit read-only verification semantics', () => {
+    const raw: RawPlanOutput = {
+      tasks: [
+        {
+          taskId: 'TASK-BASELINE',
+          title: 'Run pnpm typecheck to establish a baseline',
+          description: 'Run pnpm typecheck to establish a baseline',
+          type: 'testing',
+          dependencies: [],
+          objective: 'Run pnpm typecheck to establish a baseline',
+          allowedScope: [],
+          forbiddenChanges: ['*'],
+          acceptanceCriteria: ['Baseline result captured'],
+          completionMode: 'verification',
+          verification: {
+            commands: ['pnpm typecheck'],
+            expectation: 'observe',
+          },
+        },
+      ],
+    };
+
+    const res = TaskGraphValidator.validate(raw, 'goal-baseline');
+    expect(res.valid).toBe(true);
+
+    const contract = res.graph!.getTask('TASK-BASELINE')!.contract;
+    expect(contract.completionMode).toBe('verification');
+    expect(contract.allowedScope).toEqual([]);
+    expect(contract.forbiddenChanges).toEqual(['*']);
+    expect(contract.verification).toEqual({
+      commands: ['pnpm typecheck'],
+      expectation: 'observe',
+    });
+  });
+
+  it('rejects writable scope on an explicit read-only contract', () => {
+    const raw: RawPlanOutput = {
+      tasks: [
+        {
+          taskId: 'TASK-RESEARCH',
+          title: 'Inspect current LLMProvider implementation',
+          description: 'Inspect the provider abstraction',
+          type: 'investigation',
+          dependencies: [],
+          objective: 'Inspect the provider abstraction',
+          allowedScope: ['src/providers/LLMProvider.js'],
+          forbiddenChanges: [],
+          acceptanceCriteria: ['Findings documented'],
+          completionMode: 'report',
+          verification: null,
+        },
+      ],
+    };
+
+    const res = TaskGraphValidator.validate(raw, 'goal-research');
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes('declares writable allowedScope'))).toBe(true);
+  });
+
+  it('rejects paths that are simultaneously allowed and forbidden', () => {
+    const raw: RawPlanOutput = {
+      tasks: [
+        {
+          taskId: 'TASK-CONFLICT',
+          title: 'Conflicting scope task',
+          description: 'Task with inconsistent execution scope',
+          type: 'implementation',
+          dependencies: [],
+          objective: 'Implement provider',
+          allowedScope: ['src/providers/LLMProvider.js'],
+          forbiddenChanges: ['src/providers/LLMProvider.js'],
+          acceptanceCriteria: ['Provider implemented'],
+          completionMode: 'mutation',
+          verification: null,
+        },
+      ],
+    };
+
+    const res = TaskGraphValidator.validate(raw, 'goal-conflict');
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes('both allowed and forbidden'))).toBe(true);
+  });
 });
 
 describe('SemanticPlanner', () => {
