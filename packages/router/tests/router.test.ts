@@ -108,6 +108,79 @@ describe('Router and AgentSelector', () => {
     expect(guarded.teamSize).toBe(1);
     expect(guarded.roles).toHaveLength(1);
     expect(guarded.reason).toContain('Fan-out rejected by efficiency policy');
+    expect(guarded.fanOutAssessment).toMatchObject({
+      requested: true,
+      admitted: false,
+      requestedTeamSize: 3,
+      admittedTeamSize: 1,
+    });
+  });
+
+  it('rejects paraphrased duplicate objectives instead of treating wording changes as parallel work', () => {
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'medium',
+        teamSize: 2,
+        roles: [
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: 'Inspect the payment repository and find duplicate transaction behavior',
+          },
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: 'Analyze duplicate transaction behavior in the payment codebase',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: false,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Two researchers can both investigate',
+        source: 'openai',
+      },
+      { task: sampleTask, availableAgents: ['claude', 'codex'] },
+    );
+
+    expect(guarded.strategy).toBe('single');
+    expect(guarded.fanOutAssessment?.admitted).toBe(false);
+  });
+
+  it('normalizes an invalid multi-agent team size when only one executable role exists', () => {
+    const guarded = RouterQualityGuard.evaluate(
+      {
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'medium',
+        uncertainty: 'medium',
+        teamSize: 3,
+        roles: [
+          {
+            role: 'researcher',
+            requiredCapabilities: ['canRead'],
+            objective: 'Investigate the repository',
+          },
+        ],
+        communication: {
+          required: true,
+          initialAlignment: true,
+          synthesisBeforeImplementation: true,
+        },
+        reason: 'Router returned inconsistent team shape',
+        source: 'openai',
+      },
+      { task: sampleTask, availableAgents: ['claude', 'codex', 'agy'] },
+    );
+
+    expect(guarded.strategy).toBe('single');
+    expect(guarded.teamSize).toBe(1);
+    expect(guarded.roles).toHaveLength(1);
+    expect(guarded.fanOutAssessment?.admitted).toBe(false);
   });
 
   it('admits fan-out when objectives are genuinely partitioned for parallel work', () => {
@@ -144,6 +217,8 @@ describe('Router and AgentSelector', () => {
     expect(guarded.strategy).toBe('parallel');
     expect(guarded.teamSize).toBe(2);
     expect(guarded.roles).toHaveLength(2);
+    expect(guarded.fanOutAssessment?.admitted).toBe(true);
+    expect(guarded.fanOutAssessment?.benefits).toContain('parallel_work');
   });
 
   it('admits implementer plus specialist reviewer as a quality-oriented fan-out', () => {
@@ -179,6 +254,8 @@ describe('Router and AgentSelector', () => {
 
     expect(guarded.strategy).toBe('review');
     expect(guarded.roles).toHaveLength(2);
+    expect(guarded.fanOutAssessment?.admitted).toBe(true);
+    expect(guarded.fanOutAssessment?.benefits).toContain('quality_guard');
   });
 
   it('StaticRoutingProvider produces structured routing decision with neutral roles', async () => {
