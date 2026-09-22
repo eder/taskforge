@@ -134,13 +134,16 @@ export function isLightweightReadOnlyRequest(text: string): boolean {
   if (ACTION_VERB_PATTERN.test(positiveText)) return false;
 
   return (
-    EXPLANATION_PATTERN.test(text ?? '') ||
+    /\b(summari[sz]e|summary|overview|explain|describe|tell me about|resuma|resumir|resumo|explique|descreva|vis[aã]o geral)\b/i.test(
+      text ?? '',
+    ) ||
     /\b(?:what (?:is|does)|how does|como funciona|o que (?:faz|é))\b/i.test(text ?? '')
   );
 }
 
 function isExplanationOnlyHeuristic(text: string): boolean {
-  return isLightweightReadOnlyRequest(text);
+  const positiveText = stripNegatedMutationClauses(text);
+  return !ACTION_VERB_PATTERN.test(positiveText) && EXPLANATION_PATTERN.test(text);
 }
 
 /**
