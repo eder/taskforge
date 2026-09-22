@@ -237,9 +237,13 @@ describe('NegotiationManager', () => {
     expect(implementation.contract.dependencies).toContain(architectureTask!.id);
 
     const events = eventRepo.listByRun('run-cache-boundary');
-    expect(events.some((event) => event.type === 'ARCHITECTURE_BOUNDARY_GATE_INSERTED')).toBe(
-      true,
-    );
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'PLAN_INVARIANT_ENFORCED' &&
+          (event.payload as any).invariant === 'architecture_boundary_before_stateful_mutation',
+      ),
+    ).toBe(true);
 
     db.close();
   });
