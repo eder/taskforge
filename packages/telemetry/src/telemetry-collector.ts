@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { TaskForgeDatabase, CostRepository, RunMetricsRepository } from '@taskforge/persistence';
 import { CostEstimator } from './cost-estimator.js';
-import { RunCostReport, RunSummaryStats, TaskCostSummary, StaffingBottlenecks } from './types.js';
+import {
+  RunCostReport,
+  RunSummaryStats,
+  TaskCostSummary,
+  StaffingBottlenecks,
+  UsageAccuracyReport,
+} from './types.js';
 
 export class TelemetryCollector {
   private costRepo: CostRepository;
@@ -15,30 +21,58 @@ export class TelemetryCollector {
   recordTaskTokens(item: {
     runId: string;
     taskId: string;
+    assignmentId?: string;
     agentId: string;
+    role?: string;
     modelName: string;
     inputTokens: number;
+    cachedInputTokens?: number;
     outputTokens: number;
+    totalTokens?: number;
+    usageSource?: string;
+    plannedEstimatedTokens?: number;
   }): TaskCostSummary {
-    const costUsd = CostEstimator.estimateCost(item.modelName, item.inputTokens, item.outputTokens);
+    const cachedInputTokens = item.cachedInputTokens ?? 0;
+    const totalTokens =
+      item.totalTokens ?? item.inputTokens + cachedInputTokens + item.outputTokens;
+    // Cached input pricing differs by provider/model and is not normalized yet.
+    // Treat it as ordinary input for the existing *estimated* cost model while
+    // preserving the cached count separately for usage accuracy/calibration.
+    const costUsd = CostEstimator.estimateCost(
+      item.modelName,
+      item.inputTokens + cachedInputTokens,
+      item.outputTokens,
+    );
 
     this.costRepo.record({
       id: `cost-${randomUUID()}`,
       runId: item.runId,
       taskId: item.taskId,
+      assignmentId: item.assignmentId,
       agentId: item.agentId,
+      role: item.role,
       modelName: item.modelName,
       inputTokens: item.inputTokens,
+      cachedInputTokens,
       outputTokens: item.outputTokens,
+      totalTokens,
+      usageSource: item.usageSource ?? 'provider_reported',
+      plannedEstimatedTokens: item.plannedEstimatedTokens ?? 0,
       estimatedCostUsd: costUsd,
     });
 
     return {
       taskId: item.taskId,
+      assignmentId: item.assignmentId,
       agentId: item.agentId,
+      role: item.role,
       modelName: item.modelName,
       inputTokens: item.inputTokens,
+      cachedInputTokens,
       outputTokens: item.outputTokens,
+      totalTokens,
+      usageSource: item.usageSource ?? 'provider_reported',
+      plannedEstimatedTokens: item.plannedEstimatedTokens ?? 0,
       costUsd,
     };
   }
@@ -92,10 +126,16 @@ export class TelemetryCollector {
 
     const breakdown: TaskCostSummary[] = records.map((r) => ({
       taskId: r.taskId,
+      assignmentId: r.assignmentId,
       agentId: r.agentId,
+      role: r.role,
       modelName: r.modelName,
       inputTokens: r.inputTokens,
+      cachedInputTokens: r.cachedInputTokens,
       outputTokens: r.outputTokens,
+      totalTokens: r.totalTokens,
+      usageSource: r.usageSource,
+      plannedEstimatedTokens: r.plannedEstimatedTokens,
       costUsd: r.estimatedCostUsd,
     }));
 
@@ -103,8 +143,32 @@ export class TelemetryCollector {
       runId,
       totalCostUsd: totals.totalCostUsd,
       totalInputTokens: totals.totalInputTokens,
+      totalCachedInputTokens: totals.totalCachedInputTokens,
       totalOutputTokens: totals.totalOutputTokens,
+      totalTokens: totals.totalTokens,
+      totalPlannedEstimatedTokens: totals.totalPlannedEstimatedTokens,
       breakdown,
+    };
+  }
+
+  getUsageAccuracy(runId: string): UsageAccuracyReport {
+    const report = this.getCostReport(runId);
+    const observed = report.breakdown.filter(
+      (item) => item.usageSource === 'provider_reported' && item.totalTokens > 0,
+    );
+    const observedTokens = observed.reduce((sum, item) => sum + item.totalTokens, 0);
+    const plannedEstimatedTokens = observed.reduce(
+      (sum, item) => sum + item.plannedEstimatedTokens,
+      0,
+    );
+
+    return {
+      runId,
+      observedTokens,
+      plannedEstimatedTokens,
+      varianceRatio:
+        plannedEstimatedTokens > 0 ? observedTokens / plannedEstimatedTokens : undefined,
+      observedAssignments: observed.length,
     };
   }
 
@@ -168,16 +232,23 @@ export class TelemetryCollector {
       return `No costs recorded for run ${runId}. (Tokens: 0, Cost: $0.000)`;
     }
 
+    const accuracy = this.getUsageAccuracy(runId);
+    const comparison =
+      accuracy.observedAssignments > 0 && accuracy.plannedEstimatedTokens > 0
+        ? `Observed vs assignment baseline: ${accuracy.observedTokens.toLocaleString()} / ${accuracy.plannedEstimatedTokens.toLocaleString()} tokens (${((accuracy.varianceRatio ?? 1) * 100).toFixed(0)}%)`
+        : undefined;
+
     const lines = [
       `Cost Report - Run ${runId}`,
-      `Total estimated: $${report.totalCostUsd.toFixed(4)} USD`,
-      `Tokens: ${report.totalInputTokens.toLocaleString()} in / ${report.totalOutputTokens.toLocaleString()} out`,
+      `Total estimated: ${report.totalCostUsd.toFixed(4)} USD`,
+      `Observed tokens: ${report.totalTokens.toLocaleString()} total (${report.totalInputTokens.toLocaleString()} input / ${report.totalCachedInputTokens.toLocaleString()} cached / ${report.totalOutputTokens.toLocaleString()} output)`,
+      comparison,
       'Task breakdown:',
       ...report.breakdown.map(
         (b) =>
-          `  - ${b.taskId} [${b.agentId} (${b.modelName})]: $${b.costUsd.toFixed(4)} (${b.inputTokens.toLocaleString()} in / ${b.outputTokens.toLocaleString()} out)`,
+          `  - ${b.taskId} [${b.agentId} (${b.modelName})]: ${b.costUsd.toFixed(4)} (${b.totalTokens.toLocaleString()} observed; source=${b.usageSource}${b.plannedEstimatedTokens > 0 ? `; baseline=${b.plannedEstimatedTokens.toLocaleString()}` : ''})`,
       ),
-    ];
+    ].filter((line): line is string => Boolean(line));
     return lines.join('\n');
   }
 
