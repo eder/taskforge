@@ -29,7 +29,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   { cmd: '/pause', desc: 'Pause orchestrator execution' },
   { cmd: '/resume', desc: 'Resume paused execution' },
   { cmd: '/cost', desc: 'Show token usage and financial cost report' },
-  { cmd: '/stats', desc: 'Show run execution metrics' },
+  { cmd: '/stats', desc: 'Show execution and orchestration efficiency metrics' },
   { cmd: '/diff', desc: 'Inspect changes from a completed run' },
   { cmd: '/apply', desc: 'Apply a completed run to its target branch' },
   { cmd: '/pr', desc: 'Create a pull request for a completed run' },

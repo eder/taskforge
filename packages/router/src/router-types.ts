@@ -34,6 +34,21 @@ export interface RoleRequest {
   preferredAgent?: string;
 }
 
+export type FanOutBenefit =
+  | 'parallel_work'
+  | 'quality_guard'
+  | 'complementary_high_risk'
+  | 'solution_diversity';
+
+export interface FanOutAssessment {
+  requested: boolean;
+  admitted: boolean;
+  requestedTeamSize: number;
+  admittedTeamSize: number;
+  benefits: FanOutBenefit[];
+  reasons: string[];
+}
+
 export interface RoutingDecision {
   strategy: CollaborationMode;
   complexity: 'low' | 'medium' | 'high';
@@ -60,6 +75,7 @@ export interface RoutingDecision {
   // Quality Guard Adjustments
   routerProposal?: RouterProposal;
   policyAdjustment?: PolicyAdjustment;
+  fanOutAssessment?: FanOutAssessment;
 
   // Provenance grouping
   provenance?: {

@@ -419,10 +419,11 @@ export class RunOrchestrator {
 
       try {
         const collabReq = task.contract.metadata?.collaboration as CollaborationProposal | undefined;
-        let routing: RoutingDecision;
+        const availableAgents = await this.agentSelector.listAvailableAgentIds();
+        let routingProposal: RoutingDecision;
 
         if (task.contract.metadata?.recommendCollaboration && collabReq?.requestedRoles?.length) {
-          routing = {
+          routingProposal = {
             strategy: collaborationModeFor(collabReq.requestedRoles),
             source: 'static',
             complexity: 'high',
@@ -442,16 +443,18 @@ export class RunOrchestrator {
             reason: `Preflight recommended collaboration: ${collabReq.reason}`,
           };
         } else {
-          const availableAgents = await this.agentSelector.listAvailableAgentIds();
-          const routingProposal = await this.router.route({
-            task,
-            availableAgents,
-          });
-          routing = RouterQualityGuard.evaluate(routingProposal, {
+          routingProposal = await this.router.route({
             task,
             availableAgents,
           });
         }
+
+        // Single product boundary for every staffing source, including
+        // preflight/emergent collaboration. Nothing bypasses fan-out economics.
+        const routing = RouterQualityGuard.evaluate(routingProposal, {
+          task,
+          availableAgents,
+        });
 
         const maxAgents = this.config.collaboration?.maxAgentsPerTask ?? 3;
         if (routing.roles.length > maxAgents) {
@@ -477,6 +480,23 @@ export class RunOrchestrator {
             `[${task.id}] Staffing capped from ${originalCount} to ${maxAgents} agents (collaboration.maxAgentsPerTask limit)`,
           );
         }
+
+        this.eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'ROUTING_DECIDED',
+          payload: {
+            taskId: task.id,
+            strategy: routing.strategy,
+            teamSize: routing.teamSize,
+            roles: routing.roles.map((role) => role.role),
+            reason: routing.reason,
+            source: routing.source,
+            fanOutAssessment: routing.fanOutAssessment,
+          },
+          timestamp: new Date(),
+        });
 
         let selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${task.id}`,
@@ -668,6 +688,26 @@ export class RunOrchestrator {
     }
 
     const durationMs = Date.now() - startTime;
+
+    // Run-level metrics belong to the orchestration boundary, not to a
+    // presentation surface. This keeps interactive, headless and API-driven
+    // executions equally observable.
+    const efficiency = this.telemetry.getOrchestrationEfficiency(runId);
+    const staffing = this.telemetry.getStaffingMetrics(runId);
+    this.telemetry.recordRunMetrics({
+      runId,
+      durationMs,
+      tasksCount: efficiency.taskCount,
+      tasksCompleted: schedulerResult.tasksCompleted,
+      tasksFailed: schedulerResult.tasksFailed,
+      reworkCount: efficiency.reworkCount,
+      escalationsCount:
+        staffing.collaborationApprovedCount +
+        staffing.collaborationRejectedCount +
+        staffing.collaborationDelayedCount,
+      firstPassRate: efficiency.firstPassRate,
+    });
+
     options.onProgress?.(`Run finished with status ${schedulerResult.status} in ${durationMs}ms`);
 
     return {

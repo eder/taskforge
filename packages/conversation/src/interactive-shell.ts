@@ -694,6 +694,28 @@ export class InteractiveShell {
           : `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
         : '';
 
+    const efficiency = this.telemetry.getOrchestrationEfficiency(result.runId);
+    const efficiencyLabel =
+      efficiency.outcome === 'right_sized'
+        ? `${colors.green}RIGHT-SIZED${colors.reset}`
+        : efficiency.outcome === 'fan_out_justified'
+          ? `${colors.green}FAN-OUT JUSTIFIED${colors.reset}`
+          : efficiency.outcome === 'inefficient'
+            ? `${colors.red}INEFFICIENT${colors.reset}`
+            : `${colors.yellow}INCONCLUSIVE${colors.reset}`;
+    const efficiencyBlock = [
+      `    ${colors.dim}Orchestration:${colors.reset}      ${efficiencyLabel}`,
+      `    ${colors.dim}Assignments:${colors.reset}        ${efficiency.usefulAssignments} useful / ${efficiency.wastedAssignments} wasted across ${efficiency.uniqueAgents} agent(s)`,
+      `    ${colors.dim}Parallel overlap:${colors.reset}   ${(efficiency.observedParallelOverlapMs / 1000).toFixed(1)}s (${efficiency.parallelismFactor.toFixed(2)}×)`,
+      efficiency.providerReportedTokens > 0
+        ? `    ${colors.dim}Wasted tokens:${colors.reset}      ${formatApproxTokens(efficiency.wastedProviderTokens)} / ${formatApproxTokens(efficiency.providerReportedTokens)}`
+        : '',
+      `    ${colors.dim}First-pass quality:${colors.reset} ${(efficiency.firstPassRate * 100).toFixed(0)}% · rework ${efficiency.reworkCount} · gate rejects ${efficiency.completionGateRejections}`,
+      `    ${colors.dim}Why:${colors.reset}                ${efficiency.reasons[0] ?? 'No efficiency rationale available.'}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
     const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
     let deliveryBlock = '';
     let repositoryBlock = '';
@@ -746,6 +768,7 @@ export class InteractiveShell {
       `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
       repositoryBlock,
       usageBlock,
+      efficiencyBlock,
       deliveryBlock,
       result.error
         ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
@@ -1316,6 +1339,11 @@ export class InteractiveShell {
               `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`,
           )
           .join(', ');
+        const fanOutRationale = routing.fanOutAssessment
+          ? routing.fanOutAssessment.admitted
+            ? `Fan-out rationale: ${colors.green}admitted${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
+            : `Fan-out rationale: ${colors.yellow}rejected${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
+          : '';
 
         const primaryAssignmentCount = Math.max(
           1,
@@ -1383,6 +1411,7 @@ export class InteractiveShell {
           `  ${colors.dim}Router:${colors.reset}   ${routerSource}${policyBadge}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
+          fanOutRationale,
           `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
           `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
@@ -1449,6 +1478,11 @@ export class InteractiveShell {
               `${colors.bold}${s.agent.name}${colors.reset} ${colors.dim}(${s.roleRequest.role})${colors.reset}`,
           )
           .join(', ');
+        const fanOutRationale = routing.fanOutAssessment
+          ? routing.fanOutAssessment.admitted
+            ? `Fan-out rationale: ${colors.green}admitted${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
+            : `Fan-out rationale: ${colors.yellow}rejected${colors.reset} — ${routing.fanOutAssessment.reasons.join('; ')}.`
+          : '';
 
         const primaryAssignmentCount = Math.max(
           1,
@@ -1484,6 +1518,7 @@ export class InteractiveShell {
           `${colors.brand}✦ Revised Plan${colors.reset} ${colors.dim}(Revision: ${intent.revision.details})${colors.reset}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
+          fanOutRationale,
           `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
           `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
@@ -1613,16 +1648,6 @@ export class InteractiveShell {
                   ? 'DELIVERY_READY'
                   : 'IDLE';
 
-              this.telemetry.recordRunMetrics({
-                runId: result.runId,
-                durationMs: result.durationMs,
-                tasksCount: result.tasksCompleted + result.tasksFailed,
-                tasksCompleted: result.tasksCompleted,
-                tasksFailed: result.tasksFailed,
-                reworkCount: 0,
-                escalationsCount: 0,
-              });
-
               const summary = await this.formatRunSummary(result);
               this.viewport.writeUpper(`\n${summary}\n`);
               this.viewport.drawFooter('');
@@ -1667,16 +1692,6 @@ export class InteractiveShell {
             this.deliveryService.getDelivery(result.runId)?.status === 'ready_to_apply'
               ? 'DELIVERY_READY'
               : 'IDLE';
-
-          this.telemetry.recordRunMetrics({
-            runId: result.runId,
-            durationMs: result.durationMs,
-            tasksCount: result.tasksCompleted + result.tasksFailed,
-            tasksCompleted: result.tasksCompleted,
-            tasksFailed: result.tasksFailed,
-            reworkCount: 0,
-            escalationsCount: 0,
-          });
 
           return await this.formatRunSummary(result);
         } catch (err) {

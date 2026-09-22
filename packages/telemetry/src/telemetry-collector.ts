@@ -7,15 +7,19 @@ import {
   TaskCostSummary,
   StaffingBottlenecks,
   UsageAccuracyReport,
+  OrchestrationEfficiencyReport,
 } from './types.js';
+import { OrchestrationEfficiencyAnalyzer } from './orchestration-efficiency.js';
 
 export class TelemetryCollector {
   private costRepo: CostRepository;
   private metricsRepo: RunMetricsRepository;
+  private efficiencyAnalyzer: OrchestrationEfficiencyAnalyzer;
 
   constructor(private db: TaskForgeDatabase) {
     this.costRepo = new CostRepository(this.db);
     this.metricsRepo = new RunMetricsRepository(this.db);
+    this.efficiencyAnalyzer = new OrchestrationEfficiencyAnalyzer(this.db);
   }
 
   recordTaskTokens(item: {
@@ -86,13 +90,21 @@ export class TelemetryCollector {
     tasksFailed: number;
     reworkCount: number;
     escalationsCount: number;
+    firstPassRate?: number;
   }): RunSummaryStats {
     const costTotals = this.costRepo.getTotalCostByRun(metrics.runId);
     const totalCostUsd = metrics.totalCostUsd ?? costTotals.totalCostUsd;
 
-    const firstPassCount = Math.max(0, metrics.tasksCompleted - metrics.reworkCount);
     const firstPassRate =
-      metrics.tasksCount > 0 ? Number((firstPassCount / metrics.tasksCount).toFixed(3)) : 1.0;
+      metrics.firstPassRate ??
+      (metrics.tasksCount > 0
+        ? Number(
+            (
+              Math.max(0, metrics.tasksCompleted - Math.min(metrics.tasksCompleted, metrics.reworkCount)) /
+              metrics.tasksCount
+            ).toFixed(3),
+          )
+        : 1.0);
 
     this.metricsRepo.save({
       id: `rm-${randomUUID()}`,
@@ -208,6 +220,44 @@ export class TelemetryCollector {
     }
   }
 
+  getOrchestrationEfficiency(runId: string): OrchestrationEfficiencyReport {
+    return this.efficiencyAnalyzer.analyze(runId);
+  }
+
+  formatOrchestrationEfficiencyReport(runId: string): string {
+    const report = this.getOrchestrationEfficiency(runId);
+    const outcomeLabel: Record<OrchestrationEfficiencyReport['outcome'], string> = {
+      right_sized: 'RIGHT-SIZED',
+      fan_out_justified: 'FAN-OUT JUSTIFIED',
+      inefficient: 'INEFFICIENT',
+      inconclusive: 'INCONCLUSIVE',
+    };
+    const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+    const ms = (value: number) => `${(value / 1000).toFixed(1)}s`;
+    const tokens = (value: number) => value.toLocaleString();
+
+    const lines = [
+      `Orchestration Efficiency - Run ${runId}`,
+      `  Outcome: ${outcomeLabel[report.outcome]}`,
+      `  Shape: ${report.taskCount} task(s), ${report.assignmentCount} assignment(s), ${report.uniqueAgents} agent(s)`,
+      `  Assignment yield: ${report.usefulAssignments} useful / ${report.wastedAssignments} wasted (${pct(report.wastedAssignmentRatio)} waste)`,
+      `  Recovery overhead: ${report.retryOrFailoverAssignments} retry/failover assignment(s)`,
+      `  Fan-out decisions: ${report.admittedFanOutDecisions} admitted / ${report.rejectedFanOutDecisions} rejected (${report.fanOutDecisions} requested)`,
+      `  Time: ${ms(report.activeExecutionMs)} active, ${ms(report.serialExecutionMs)} serial work, ${ms(report.observedParallelOverlapMs)} observed overlap (${report.parallelismFactor.toFixed(2)}× parallelism)`,
+      report.providerReportedTokens > 0
+        ? `  Tokens: ${tokens(report.providerReportedTokens)} provider-reported, ${tokens(report.wastedProviderTokens)} wasted${report.wastedTokenRatio !== undefined ? ` (${pct(report.wastedTokenRatio)})` : ''}`
+        : '  Tokens: provider-reported usage unavailable',
+      report.tokenVarianceRatio !== undefined
+        ? `  Token baseline variance: ${report.tokenVarianceRatio.toFixed(1)}×`
+        : undefined,
+      `  Quality: ${pct(report.firstPassRate)} first-pass, ${report.reworkCount} rework, ${report.completionGateRejections} completion rejection(s), ${report.specializedQualityAssignments} specialist quality assignment(s)`,
+      `  Signals: time=${report.timeBenefitObserved ? 'observed' : 'not observed'}, quality=${report.qualityGuardSignalObserved ? 'observed' : 'not observed'}, token-waste=${report.tokenWasteAcceptable ? 'acceptable' : 'high'}`,
+      ...report.reasons.map((reason) => `  - ${reason}`),
+    ].filter((line): line is string => Boolean(line));
+
+    return lines.join('\n');
+  }
+
   getRunSummary(runId: string): RunSummaryStats | undefined {
     const m = this.metricsRepo.getByRun(runId);
     if (!m) return undefined;
@@ -255,7 +305,12 @@ export class TelemetryCollector {
   formatStatsReport(runId: string): string {
     const summary = this.getRunSummary(runId);
     if (!summary) {
-      return `No metrics recorded for run ${runId}.`;
+      return [
+        `Run Metrics - ${runId}`,
+        '  Run summary metrics unavailable (legacy or incomplete execution).',
+        '',
+        this.formatOrchestrationEfficiencyReport(runId),
+      ].join('\n');
     }
 
     const durationSec = (summary.durationMs / 1000).toFixed(1);
@@ -265,7 +320,7 @@ export class TelemetryCollector {
       `Run Metrics - ${runId}`,
       `  Duration: ${durationSec}s`,
       `  Tasks: ${summary.tasksCompleted}/${summary.tasksCount} completed (${summary.tasksFailed} failed)`,
-      `  First-pass verification rate: ${passPct}%`,
+      `  First-pass completion rate: ${passPct}%`,
       `  Rework cycles: ${summary.reworkCount}`,
       `  Collaboration escalations: ${summary.escalationsCount}`,
       `  Total cost: $${summary.totalCostUsd.toFixed(4)} USD`,
@@ -296,6 +351,7 @@ export class TelemetryCollector {
       }
     }
 
+    lines.push('', this.formatOrchestrationEfficiencyReport(runId));
     return lines.join('\n');
   }
 }
