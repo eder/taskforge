@@ -449,7 +449,7 @@ describe('Router and AgentSelector', () => {
     expect(first[0].agent.id).toBe(reversed[0].agent.id);
   });
 
-  it('prefers the least-used eligible agent when no router preference exists', async () => {
+  it('prefers current-task fit over historical fairness when no router preference exists', async () => {
     const registry = new AgentRegistry(false);
     registry.register(new FakeAgent('claude', 'Claude Code'));
     registry.register(new FakeAgent('codex', 'Codex CLI'));
@@ -484,7 +484,39 @@ describe('Router and AgentSelector', () => {
     );
 
     expect(selected).toHaveLength(1);
+    expect(selected[0].agent.id).toBe('claude');
+    expect(selected[0].selectionReason).toContain('best task fit');
+    expect(selected[0].fitScore).toBeGreaterThan(50);
+  });
+
+  it('selects Codex for implementation/reproduction work even when Claude is less used', async () => {
+    const registry = new AgentRegistry(false);
+    registry.register(new FakeAgent('claude', 'Claude Code'));
+    registry.register(new FakeAgent('codex', 'Codex CLI'));
+
+    const history = {
+      getAgentSelectionStats(agentId: string, role: string) {
+        return {
+          agentId,
+          roleAssignments: agentId === 'claude' ? 0 : 50,
+          totalAssignments: agentId === 'claude' ? 0 : 100,
+          lastAssignedAt: '2026-09-22T12:00:00.000Z',
+        };
+      },
+    };
+
+    const selector = new AgentSelector(registry, { selectionHistory: history });
+    const selected = await selector.selectAgents([
+      {
+        role: 'reproduction_engineer',
+        requiredCapabilities: ['canRead', 'canWrite', 'canExecute'],
+        objective: 'Reproduce the failing test, implement the fix, and run the regression suite',
+      },
+    ]);
+
+    expect(selected).toHaveLength(1);
     expect(selected[0].agent.id).toBe('codex');
+    expect(selected[0].selectionReason).toContain('reproduction and test execution');
   });
 
   it('still honors an explicit healthy router preference over fairness history', async () => {
