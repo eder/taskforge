@@ -229,7 +229,11 @@ export class RunOrchestrator {
     this.negotiator =
       options.negotiator ?? new NegotiationManager(undefined, this.eventRepo, this.db);
     this.router = options.router ?? new StaticRoutingProvider();
-    this.agentSelector = options.agentSelector ?? new AgentSelector(this.agentRegistry);
+    this.agentSelector =
+      options.agentSelector ??
+      new AgentSelector(this.agentRegistry, {
+        selectionHistory: this.assignmentRepo,
+      });
 
     this.gitService = options.gitService ?? new GitService(this.repoRoot);
     this.worktreeManager =
@@ -440,7 +444,9 @@ export class RunOrchestrator {
           );
         }
 
-        let selected = await this.agentSelector.selectAgents(routing.roles);
+        let selected = await this.agentSelector.selectAgents(routing.roles, {
+          selectionKey: `${this.repoRoot}:${task.id}`,
+        });
 
         // In fakeFallback mode, if roles were requested, ensure fake agent fills them
         if (selected.length === 0 && fallbackAgent) {
