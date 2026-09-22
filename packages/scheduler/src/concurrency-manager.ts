@@ -220,8 +220,18 @@ export class ConcurrencyManager {
       const resolvedAgent = agentId ?? asgnInfo?.agentId;
       const resolvedTask = taskId ?? asgnInfo?.taskId;
 
-      // If this assignment used the task-level reservation, outer task release will handle agentActiveCounts
+      // If this assignment consumed the scheduler's task-level reservation,
+      // release that reservation now. Keeping it until the outer task finishes
+      // can deadlock sequential collaborative teams: every running task holds
+      // one slot while its partner waits forever for a second slot.
       if (resolvedTask && this.activeTasks.get(resolvedTask) === resolvedAgent) {
+        this.activeTasks.delete(resolvedTask);
+        if (resolvedAgent) {
+          const count = this.agentActiveCounts.get(resolvedAgent) ?? 0;
+          if (count > 0) {
+            this.agentActiveCounts.set(resolvedAgent, count - 1);
+          }
+        }
         this.notifyWaiters();
         return;
       }

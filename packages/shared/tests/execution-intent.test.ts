@@ -49,6 +49,22 @@ describe('detectExecutionIntent', () => {
     ).toBe(false);
   });
 
+  it('classifies "O que esse projeto faz?" as lightweight read-only analysis', () => {
+    expect(isLightweightReadOnlyRequest('O que esse projeto faz?')).toBe(true);
+
+    const decision = detectExecutionIntent('O que esse projeto faz?');
+    expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
+    expect(decision.mutationAllowed).toBe(false);
+    expect(decision.deliveryAllowed).toBe(false);
+    expect(decision.forbiddenChanges).toEqual(['*']);
+  });
+
+  it('does not hide an explicit mutation request behind a project-overview question', () => {
+    const request = 'O que esse projeto faz? Depois atualize o README com essa explicação.';
+    expect(isLightweightReadOnlyRequest(request)).toBe(false);
+    expect(detectExecutionIntent(request).intent).toBe('IMPLEMENTATION');
+  });
+
   it('classifies a Portuguese repository summary request as READ_ONLY_ANALYSIS', () => {
     const decision = detectExecutionIntent('Resuma esse projeto para mim');
     expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
