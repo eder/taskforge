@@ -231,6 +231,7 @@ describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
   it('detects fallback interactive terminal prompts and answers', async () => {
     const receivedEvents: AgentRuntimeEvent[] = [];
     const session = new RealCliAgentSession('sess-4', 'asgn-4', {
+      rawTerminalPromptFallback: true,
       onEvent: (event) => receivedEvents.push(event),
     });
 
@@ -357,7 +358,8 @@ describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
     });
 
     const session = new RealCliAgentSession('sess-e2e-1', 'asgn-e2e-1', {
-      adapterId: 'claude',
+      adapterId: 'legacy-cli',
+      rawTerminalPromptFallback: true,
       onEvent: async (ev) => {
         await gateway.handleEvent(ev, session, {
           runId: 'run-e2e',
