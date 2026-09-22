@@ -243,6 +243,7 @@ export async function executeGovernedAssignment(
       assignment,
       abortSignal,
       logPath,
+      timeoutMs: Math.max(1, ctx.config.execution.defaultTimeoutMinutes) * 60_000,
       mutationAllowed,
       runId,
       onActivity: (activity: string) => {
