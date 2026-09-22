@@ -466,6 +466,7 @@ export class RunOrchestrator {
       runId,
       baseCommit,
       repoRoot: this.repoRoot,
+      originalUserRequest: goalDescription,
       config: this.config,
       graph,
       agentRegistry: this.agentRegistry,
