@@ -78,14 +78,8 @@ function formatApproxTokens(value: number): string {
   return `${thousands >= 10 ? thousands.toFixed(0) : thousands.toFixed(1)}k`;
 }
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^$()|[\]\\{}]/g, '\\function formatApproxTokens(value: number): string {
-  if (value < 1000) return value.toLocaleString();
-  const thousands = value / 1000;
-  return `${thousands >= 10 ? thousands.toFixed(0) : thousands.toFixed(1)}k`;
+  return value.replace(/[.*+?^$()|[\]\\{}]/g, (match) => `\\${match}`);
 }
-');
-}
-
 /**
  * Agent output should describe the user's repository, not TaskForge's internal
  * worktree implementation. Convert absolute repo/worktree paths to stable
