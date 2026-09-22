@@ -15,6 +15,7 @@ import {
   AgentStreamBus,
   AgentMessage,
   ActiveAgentState,
+  detectExecutionIntent,
 } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import {
@@ -24,7 +25,11 @@ import {
   AgentQuotaTracker,
 } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
-import { HeuristicPlanner, SemanticPlanner } from '@taskforge/planner';
+import {
+  HeuristicPlanner,
+  SemanticPlanner,
+  enforceLightweightReadOnlyPlanInvariant,
+} from '@taskforge/planner';
 import { NegotiationManager } from '@taskforge/negotiation';
 import {
   StaticRoutingProvider,
@@ -1250,8 +1255,18 @@ export class InteractiveShell {
         };
         this.activeGoal = goal;
 
+        const executionIntent = detectExecutionIntent(intent.goal);
         const proposedGraph = await this.planner.plan(goal);
-        this.currentGraph = await this.negotiator.negotiateGraph(proposedGraph, this.activeRunId);
+        const negotiatedGraph = await this.negotiator.negotiateGraph(
+          proposedGraph,
+          this.activeRunId,
+        );
+        const invariant = enforceLightweightReadOnlyPlanInvariant(
+          negotiatedGraph,
+          goal,
+          executionIntent,
+        );
+        this.currentGraph = invariant.graph;
 
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
