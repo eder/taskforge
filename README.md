@@ -258,6 +258,22 @@ from:
 
 The first is read-only. The second is implementation with a scoped constraint.
 
+#### Read-only overview invariant
+
+Simple repository-overview questions such as `What is this project?`, `O que é esse projeto?`, `How does this repository work?`, or `Resuma esse projeto` are protected by a deterministic production invariant:
+
+```text
+READ_ONLY_ANALYSIS
+→ exactly 1 investigation/report task
+→ exactly 1 healthy read-capable agent
+→ no collaboration/reviewer fan-out
+→ no repository mutation
+→ no build/lint/test pass unless explicitly requested as verification
+→ no delivery branch / apply / PR
+```
+
+Planner and Router output are advisory for this path. If a model over-decomposes the question or proposes a multi-agent team, TaskForge collapses it back to the invariant before execution. Read-only agent prompts also require the current repository to be treated as the source of truth and require inference to be distinguished from facts observed in repository files.
+
 ### Staffing
 
 The router recommends the minimum useful team for a task:
