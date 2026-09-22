@@ -51,7 +51,7 @@ function firstTokenNumber(obj: any, keys: string[]): number | undefined {
 function usageFromObject(raw: any, modelName?: string): AgentUsage | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
 
-  const inputTokens =
+  const rawInputTokens =
     firstTokenNumber(raw, [
       'input_tokens',
       'inputTokens',
@@ -68,6 +68,15 @@ function usageFromObject(raw: any, modelName?: string): AgentUsage | undefined {
       'candidatesTokenCount',
     ]) ?? 0;
 
+  // OpenAI/Codex and Gemini report cached input as a subset of input tokens.
+  // Claude reports cache read/creation as separate input categories. Normalize
+  // both shapes into one invariant:
+  //
+  //   inputTokens       = all observed input, including cached input
+  //   cachedInputTokens = subset of inputTokens
+  //   totalTokens       = inputTokens + outputTokens
+  //
+  // This prevents telemetry/cost reporting from counting cache twice.
   const directCached =
     firstTokenNumber(raw, [
       'cached_input_tokens',
@@ -80,14 +89,22 @@ function usageFromObject(raw: any, modelName?: string): AgentUsage | undefined {
     firstTokenNumber(raw, ['cache_read_input_tokens', 'cacheReadInputTokens']) ?? 0;
   const cacheCreation =
     firstTokenNumber(raw, ['cache_creation_input_tokens', 'cacheCreationInputTokens']) ?? 0;
-  const cachedInputTokens = directCached > 0 ? directCached : cacheRead + cacheCreation;
+  const additiveCached = cacheRead + cacheCreation;
+  const cachedInputTokens = directCached > 0 ? directCached : additiveCached;
+  const inputTokens = rawInputTokens + (directCached > 0 ? 0 : additiveCached);
 
   const providerTotal = firstTokenNumber(raw, [
     'total_tokens',
     'totalTokens',
     'totalTokenCount',
   ]);
-  const totalTokens = providerTotal ?? inputTokens + outputTokens + cachedInputTokens;
+  const normalizedTotal = inputTokens + outputTokens;
+  // Trust a provider total only when it follows the normalized invariant.
+  // Older/malformed harnesses have reported totals that add cached input twice.
+  const totalTokens =
+    providerTotal !== undefined && providerTotal === normalizedTotal
+      ? providerTotal
+      : normalizedTotal;
 
   if (totalTokens <= 0 && inputTokens <= 0 && outputTokens <= 0 && cachedInputTokens <= 0) {
     return undefined;
