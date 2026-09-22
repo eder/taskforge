@@ -221,7 +221,7 @@ export class TelemetryCollector {
     const outcomeLabel: Record<OrchestrationEfficiencyReport['outcome'], string> = {
       right_sized: 'RIGHT-SIZED',
       fan_out_justified: 'FAN-OUT JUSTIFIED',
-      fan_out_not_justified: 'INEFFICIENT',
+      inefficient: 'INEFFICIENT',
       inconclusive: 'INCONCLUSIVE',
     };
     const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
