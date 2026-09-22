@@ -726,7 +726,7 @@ Output strictly according to the json_schema.`,
               : 'mutation';
       const commandMatches =
         isVerification
-          ? clause.match(/\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:typecheck|lint|build|test)(?:\s+[^,;]*)?/gi) ?? []
+          ? clause.match(/\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:typecheck|lint|build|test)\b/gi) ?? []
           : [];
 
       tasks.push({
