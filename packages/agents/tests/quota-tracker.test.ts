@@ -57,6 +57,24 @@ describe('AgentQuotaTracker and Quota-Aware Detection', () => {
     expect(tracker.isAvailable('agy')).toBe(false);
   });
 
+  it('replays historical quota output using the original observation time', () => {
+    const tracker = AgentQuotaTracker.getInstance();
+    const observedAt = Date.now() - 60_000;
+
+    tracker.recordFailure(
+      'agy',
+      'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h0m0s.',
+      observedAt,
+    );
+
+    const status = tracker.getQuotaStatus('agy');
+    expect(status.status).toBe('quota_exhausted');
+    expect(status.resetAt).toBeInstanceOf(Date);
+    expect(Math.abs(status.resetAt!.getTime() - (observedAt + 2 * 60 * 60 * 1000))).toBeLessThan(
+      1000,
+    );
+  });
+
   it('hydrates quota state from durable storage across process-like singleton resets', () => {
     const records = new Map<string, any>();
     const store = {
