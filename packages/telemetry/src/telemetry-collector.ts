@@ -305,7 +305,12 @@ export class TelemetryCollector {
   formatStatsReport(runId: string): string {
     const summary = this.getRunSummary(runId);
     if (!summary) {
-      return `No metrics recorded for run ${runId}.`;
+      return [
+        `Run Metrics - ${runId}`,
+        '  Run summary metrics unavailable (legacy or incomplete execution).',
+        '',
+        this.formatOrchestrationEfficiencyReport(runId),
+      ].join('\n');
     }
 
     const durationSec = (summary.durationMs / 1000).toFixed(1);
