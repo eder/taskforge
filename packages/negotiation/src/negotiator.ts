@@ -380,8 +380,9 @@ export class NegotiationManager {
         id: `evt-${randomUUID()}`,
         runId,
         taskId: architectureGuard.architectureTaskId,
-        type: 'ARCHITECTURE_BOUNDARY_GATE_INSERTED',
+        type: 'PLAN_INVARIANT_ENFORCED',
         payload: {
+          invariant: 'architecture_boundary_before_stateful_mutation',
           taskId: architectureGuard.architectureTaskId,
           reason: architectureGuard.reason,
         },
