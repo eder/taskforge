@@ -130,20 +130,34 @@ function extractScopedNoMutationTargets(text: string): string[] {
 }
 
 export function isLightweightReadOnlyRequest(text: string): boolean {
-  const positiveText = stripNegatedMutationClauses(text ?? '');
+  const source = text ?? '';
+  const positiveText = stripNegatedMutationClauses(source);
   if (ACTION_VERB_PATTERN.test(positiveText)) return false;
 
-  return (
+  const directExplanation =
     /\b(summari[sz]e|summary|overview|explain|describe|tell me about|resuma|resumir|resumo|explique|descreva|vis[aã]o geral)\b/i.test(
-      text ?? '',
-    ) ||
-    /\b(?:what (?:is|does)|how does|como funciona|o que (?:faz|é))\b/i.test(text ?? '')
-  );
+      source,
+    );
+
+  const englishProjectQuestion =
+    /\b(?:what\s+(?:is|does)|how\s+does)\b.{0,80}\b(?:project|repo|repository|codebase|app|application|system)\b/i.test(
+      source,
+    );
+
+  const portugueseProjectQuestion =
+    /\b(?:o\s+que|qual|para\s+que|como)\b.{0,80}\b(?:projeto|repo|reposit[oó]rio|codebase|app|aplica[cç][aã]o|sistema)\b.{0,80}\b(?:faz|[ée]|serve|funciona|funcionamento|objetivo|prop[oó]sito|finalidade)\b/i.test(
+      source,
+    );
+
+  return directExplanation || englishProjectQuestion || portugueseProjectQuestion;
 }
 
 function isExplanationOnlyHeuristic(text: string): boolean {
   const positiveText = stripNegatedMutationClauses(text);
-  return !ACTION_VERB_PATTERN.test(positiveText) && EXPLANATION_PATTERN.test(text);
+  return (
+    isLightweightReadOnlyRequest(text) ||
+    (!ACTION_VERB_PATTERN.test(positiveText) && EXPLANATION_PATTERN.test(text))
+  );
 }
 
 /**
