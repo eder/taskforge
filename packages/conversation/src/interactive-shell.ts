@@ -1661,6 +1661,7 @@ export class InteractiveShell {
                   staffing.collaborationApprovedCount +
                   staffing.collaborationRejectedCount +
                   staffing.collaborationDelayedCount,
+                firstPassRate: efficiency.firstPassRate,
               });
 
               const summary = await this.formatRunSummary(result);
@@ -1721,6 +1722,7 @@ export class InteractiveShell {
               staffing.collaborationApprovedCount +
               staffing.collaborationRejectedCount +
               staffing.collaborationDelayedCount,
+            firstPassRate: efficiency.firstPassRate,
           });
 
           return await this.formatRunSummary(result);
