@@ -361,6 +361,21 @@ export class TaskForgeDatabase {
     } catch {
       // Column may already exist
     }
+
+    for (const migration of [
+      'ALTER TABLE cost_tracking ADD COLUMN assignment_id TEXT;',
+      'ALTER TABLE cost_tracking ADD COLUMN role TEXT;',
+      'ALTER TABLE cost_tracking ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0;',
+      'ALTER TABLE cost_tracking ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;',
+      "ALTER TABLE cost_tracking ADD COLUMN usage_source TEXT NOT NULL DEFAULT 'provider_reported';",
+      'ALTER TABLE cost_tracking ADD COLUMN planned_estimated_tokens INTEGER NOT NULL DEFAULT 0;',
+    ]) {
+      try {
+        this.db.exec(migration);
+      } catch {
+        // Column may already exist
+      }
+    }
   }
 
   public exec(sql: string): void {
