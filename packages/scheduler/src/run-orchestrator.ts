@@ -535,7 +535,16 @@ export class RunOrchestrator {
     );
 
     // 7. Deterministic Scheduler
-    options.onProgress?.(`Scheduling ${graph.getAllTasks().length} tasks across worktrees...`);
+    const scheduledTasks = graph.getAllTasks();
+    const isReadOnlyReportRun = scheduledTasks.every(
+      (task) =>
+        task.contract.completionMode === 'report' &&
+        task.contract.forbiddenChanges?.includes('*'),
+    );
+    const schedulingLabel = isReadOnlyReportRun
+      ? `Scheduling ${scheduledTasks.length} read-only task${scheduledTasks.length === 1 ? '' : 's'}...`
+      : `Scheduling ${scheduledTasks.length} task${scheduledTasks.length === 1 ? '' : 's'} across worktrees...`;
+    options.onProgress?.(schedulingLabel);
     const scheduler = new DeterministicScheduler({
       runId,
       baseCommit,

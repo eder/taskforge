@@ -59,6 +59,29 @@ describe('parseAgentStreamEvents', () => {
     expect(events[0]).toMatchObject({ type: 'agent_message', text: 'PatternEngine should remain deterministic.' });
   });
 
+  it('normalizes current Codex item.completed agent_message into live agent output', () => {
+    const chunk = JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item_7',
+        type: 'agent_message',
+        text: 'Repository analysis complete.',
+      },
+    });
+    const events = parseAgentStreamEvents(chunk, {
+      ...IDENTITY,
+      agentId: 'codex',
+      role: 'researcher',
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'agent_message',
+      text: 'Repository analysis complete.',
+      agentId: 'codex',
+    });
+  });
+
   it('normalizes a Codex item with a command into a command_started event', () => {
     const chunk = JSON.stringify({ type: 'item', item: { command: 'grep -R "ContextRetrievalEngine" server' } });
     const events = parseAgentStreamEvents(chunk, { ...IDENTITY, agentId: 'codex', role: 'reproduction_engineer' });
