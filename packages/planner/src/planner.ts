@@ -366,7 +366,9 @@ export class HeuristicPlanner implements Planner {
 
       if (task.contract.completionMode !== 'mutation') {
         task.contract.allowedScope = [];
-        task.contract.forbiddenChanges = ['*'];
+        task.contract.forbiddenChanges = Array.from(
+          new Set(['*', ...(task.contract.forbiddenChanges ?? [])]),
+        );
       }
     }
 
