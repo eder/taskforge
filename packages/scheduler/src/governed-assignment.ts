@@ -74,24 +74,13 @@ export interface GovernedAssignmentResult {
  * single-agent scheduler path uses: isolated worktree, workspace + execution
  * records, and every AgentRuntimeEvent (permission/question/auth) routed
  * through the InteractionGateway. Callers own task-level status transitions,
- * verification and integration, and activityTracker.completeAssignment(assignment.id).
+ * verification and integration. This function owns live assignment activity
+ * from agent start through every terminal outcome.
  */
 export async function executeGovernedAssignment(
   ctx: GovernedAssignmentContext,
 ): Promise<GovernedAssignmentResult> {
   const { task, assignment, agent, runId, baseCommit, abortSignal } = ctx;
-
-  ctx.activityTracker?.register({
-    taskId: task.id,
-    assignmentId: assignment.id,
-    taskTitle: task.title,
-    agentId: agent.id,
-    agentName: agent.name,
-    role: assignment.role,
-    status: 'Provisioning isolated workspace...',
-    startedAt: new Date(),
-    lastActiveAt: new Date(),
-  });
 
   ctx.eventRepo.append({
     id: `evt-${randomUUID()}`,
@@ -125,12 +114,6 @@ export async function executeGovernedAssignment(
     runId,
     `${task.id}-${assignment.id}.log`,
   );
-
-  const activeState = ctx.activityTracker?.getByAssignment(assignment.id);
-  if (activeState) {
-    activeState.logPath = logPath;
-    activeState.status = 'Agent executing in worktree...';
-  }
 
   const execRecord = ctx.executionRepo.create({
     id: `exec-${task.id}-${randomUUID().slice(0, 8)}`,
@@ -168,6 +151,22 @@ export async function executeGovernedAssignment(
   let thrownError: Error | undefined;
 
   try {
+    // Activity represents live agent execution, not provisioning or completed
+    // history. Register only once setup/concurrency acquisition succeeded so a
+    // setup failure cannot leave a ghost agent in the cockpit.
+    ctx.activityTracker?.register({
+      taskId: task.id,
+      assignmentId: assignment.id,
+      taskTitle: task.title,
+      agentId: agent.id,
+      agentName: agent.name,
+      role: assignment.role,
+      status: 'Agent executing in worktree...',
+      startedAt: new Date(),
+      lastActiveAt: new Date(),
+      logPath,
+    });
+
     if (agent.createSession) {
       session = await agent.createSession(assignment, {
         worktreePath: wt.path,
@@ -340,6 +339,11 @@ export async function executeGovernedAssignment(
     } catch {
       // ignore persistence error
     }
+
+    // AgentActivityTracker is an active-only view. Always retire this exact
+    // assignment ID on success, failure, cancellation, adapter exception, or
+    // failover before another attempt can be shown.
+    ctx.activityTracker?.completeAssignment(assignment.id);
   }
 
   // Defense in depth: enforcement inside individual adapters (e.g.

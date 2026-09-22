@@ -867,6 +867,12 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
     expect(failoverEvents[1].replacementAgentName).toBe('Spare Agent');
     expect(failoverEvents[2].replacementAgentName).toBe('Spare Agent');
 
+    // Every governed attempt owns its own activity entry. The failed
+    // investigator, recovered replacement, and implementation assignment must
+    // all be retired when they finish so the cockpit never reports ghost
+    // agents as still working.
+    expect(activityTracker.getActive()).toEqual([]);
+
     db.close();
   });
 
