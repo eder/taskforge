@@ -735,7 +735,10 @@ export class InteractiveShell {
       .filter(([, text]) => text && text.trim().length > 0)
       .map(([taskId, text]) => {
         const header = `Explanation & Analysis [${taskId}]`;
-        const sanitized = sanitizeTaskOutput(text.trim());
+        const sanitized = sanitizeDisplayedRepositoryPaths(
+          sanitizeTaskOutput(text.trim()),
+          this.repoRoot,
+        );
         const highlighted = theme.renderMarkdown(sanitized);
         const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
         return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
@@ -779,19 +782,26 @@ export class InteractiveShell {
     const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
 
     const usageAccuracy = this.telemetry.getUsageAccuracy(result.runId);
-    const varianceRatio = usageAccuracy.varianceRatio;
-    const highVariance = varianceRatio !== undefined && varianceRatio > 3;
-    const usageBlock =
-      usageAccuracy.observedAssignments > 0
-        ? usageAccuracy.plannedEstimatedTokens > 0
-          ? highVariance
-            ? `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Planning baseline:${colors.reset}       ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} ${colors.yellow}▲ ${varianceRatio!.toFixed(1)}× variance${colors.reset}\n    ${colors.dim}Usage note:${colors.reset}              Baseline excludes retries and provider/runtime context; use /cost for input/cache/output detail.`
-            : `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)\n    ${colors.dim}Planning baseline:${colors.reset}       ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} (${((varianceRatio ?? 1) * 100).toFixed(0)}% provider / baseline)`
-          : `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
-        : '';
-
     const efficiency = this.telemetry.getOrchestrationEfficiency(result.runId);
-    const efficiencyLabel =
+    const pct = (value: number) => `${(value * 100).toFixed(0)}%`;
+
+    const dimensionBadge = (status: 'healthy' | 'attention' | 'uncertain'): string =>
+      status === 'healthy'
+        ? `${colors.green}HEALTHY${colors.reset}`
+        : status === 'attention'
+          ? `${colors.yellow}NEEDS ATTENTION${colors.reset}`
+          : `${colors.yellow}UNCERTAIN${colors.reset}`;
+
+    const overallBadge =
+      efficiency.overallHealth === 'excellent'
+        ? `${colors.green}EXCELLENT${colors.reset}`
+        : efficiency.overallHealth === 'inefficient'
+          ? `${colors.red}INEFFICIENT${colors.reset}`
+          : efficiency.overallHealth === 'needs_attention'
+            ? `${colors.yellow}NEEDS ATTENTION${colors.reset}`
+            : `${colors.yellow}INCONCLUSIVE${colors.reset}`;
+
+    const staffingLabel =
       efficiency.outcome === 'right_sized'
         ? `${colors.green}RIGHT-SIZED${colors.reset}`
         : efficiency.outcome === 'fan_out_justified'
@@ -799,8 +809,32 @@ export class InteractiveShell {
           : efficiency.outcome === 'inefficient'
             ? `${colors.red}INEFFICIENT${colors.reset}`
             : `${colors.yellow}INCONCLUSIVE${colors.reset}`;
+
+    const usageBlock =
+      efficiency.providerReportedTokens > 0
+        ? [
+            `    ${colors.dim}Provider footprint:${colors.reset} ${colors.bold}${formatApproxTokens(efficiency.providerReportedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`,
+            `    ${colors.dim}Fresh-work usage:${colors.reset}   ${formatApproxTokens(efficiency.freshWorkTokens)} tokens (${formatApproxTokens(efficiency.uncachedInputTokens)} uncached input + ${formatApproxTokens(efficiency.providerOutputTokens)} output)`,
+            efficiency.cachedInputTokens > 0
+              ? `    ${colors.dim}Cache reuse:${colors.reset}        ${formatApproxTokens(efficiency.cachedInputTokens)} cached input${efficiency.cacheHitRatio !== undefined ? ` (${pct(efficiency.cacheHitRatio)} of input)` : ''}`
+              : '',
+            usageAccuracy.plannedEstimatedTokens > 0
+              ? `    ${colors.dim}Planning baseline:${colors.reset}  ${formatApproxTokens(usageAccuracy.plannedEstimatedTokens)} · fresh/baseline ${efficiency.freshWorkVarianceRatio?.toFixed(1) ?? '?'}× · confidence ${efficiency.tokenComparisonConfidence}`
+              : '',
+            efficiency.tokenVarianceRatio !== undefined && efficiency.tokenVarianceRatio > 3
+              ? `    ${colors.dim}Context note:${colors.reset}       total footprint is ${efficiency.tokenVarianceRatio.toFixed(1)}× baseline; cache/provider context makes this non-comparable as a direct efficiency ratio.`
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : '';
+
     const efficiencyBlock = [
-      `    ${colors.dim}Orchestration:${colors.reset}      ${efficiencyLabel}`,
+      `    ${colors.dim}Overall:${colors.reset}            ${overallBadge}`,
+      `    ${colors.dim}Staffing:${colors.reset}           ${staffingLabel}`,
+      `    ${colors.dim}Token efficiency:${colors.reset}   ${dimensionBadge(efficiency.tokenEfficiency)}`,
+      `    ${colors.dim}Quality:${colors.reset}            ${dimensionBadge(efficiency.qualityHealth)}`,
+      `    ${colors.dim}Recovery:${colors.reset}           ${dimensionBadge(efficiency.recoveryHealth)}`,
       `    ${colors.dim}Assignments:${colors.reset}        ${efficiency.usefulAssignments} useful / ${efficiency.wastedAssignments} wasted across ${efficiency.uniqueAgents} agent(s)`,
       `    ${colors.dim}Parallel overlap:${colors.reset}   ${(efficiency.observedParallelOverlapMs / 1000).toFixed(1)}s (${efficiency.parallelismFactor.toFixed(2)}×)`,
       efficiency.providerReportedTokens > 0
@@ -811,7 +845,6 @@ export class InteractiveShell {
     ]
       .filter(Boolean)
       .join('\n');
-
     const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
     let deliveryBlock = '';
     let repositoryBlock = '';
@@ -877,11 +910,7 @@ export class InteractiveShell {
   }
 
   async renderBanner(): Promise<string> {
-    const gitStatus = await this.gitService.getStatus().catch(() => ({
-      currentBranch: 'unknown',
-      headCommit: 'unknown',
-      isClean: true,
-    }));
+    const gitStatus = await this.gitService.getStatus().catch(() => undefined);
 
     const analyzer = new RepositoryAnalyzer(this.repoRoot, this.gitService);
     const profile = await analyzer.analyze().catch(() => ({
@@ -896,9 +925,13 @@ export class InteractiveShell {
     }));
 
     const reports = await AgentDetector.detect(this.agentRegistry.list());
-    const cleanLabel = gitStatus.isClean
-      ? `${colors.green}clean${colors.reset}`
-      : `${colors.yellow}modified${colors.reset}`;
+    const gitStatusLabel = gitStatus
+      ? `${colors.yellow}${gitStatus.currentBranch}${colors.reset} ${colors.dim}(${gitStatus.headCommit.slice(0, 7)})${colors.reset} • ${
+          gitStatus.isClean
+            ? `${colors.green}clean${colors.reset}`
+            : `${colors.yellow}modified${colors.reset}`
+        }`
+      : `${colors.gray}unavailable${colors.reset}`;
     const apiKey = resolveOpenAIApiKey(this.config);
     let routerStatus: string;
     if (this.config.router.provider === 'openai') {
@@ -931,7 +964,7 @@ export class InteractiveShell {
       ` ${colors.brand}╰─────────────────────────────────────────────────────────────────╯${colors.reset}`,
       '',
       `  ${colors.dim}Repository${colors.reset}  ${colors.bold}${this.repoRoot}${colors.reset}`,
-      `  ${colors.dim}Git Status${colors.reset}  ${colors.yellow}${gitStatus.currentBranch}${colors.reset} ${colors.dim}(${gitStatus.headCommit.slice(0, 7)})${colors.reset} • ${cleanLabel}`,
+      `  ${colors.dim}Git Status${colors.reset}  ${gitStatusLabel}`,
       '',
       `  ${colors.bold}Agents${colors.reset}`,
       ...reports.map(
@@ -1474,27 +1507,16 @@ export class InteractiveShell {
         const plannerMeta = this.currentGraph.metadata?.planner as
           | PlannerProvenance
           | undefined;
-        let plannerSource: string;
-        if (plannerMeta?.source === 'semantic_model') {
-          const providerLabel = plannerMeta.provider === 'custom' ? 'Custom' : 'Semantic';
-          plannerSource = `${providerLabel} / ${plannerMeta.model || 'gpt-5.6-luna'}`;
-        } else if (plannerMeta?.source === 'deterministic_decomposition') {
-          plannerSource = `Deterministic decomposition${plannerMeta.fallbackReason ? ` (Fallback: ${plannerMeta.fallbackReason})` : ''}`;
-        } else if (plannerMeta?.source === 'heuristic_fallback') {
-          plannerSource = `Fallback / heuristic${plannerMeta.fallbackReason ? ` (${plannerMeta.fallbackReason})` : ''}`;
-        } else if ((this.currentGraph.metadata as any)?.source === 'semantic') {
-          plannerSource = `Semantic / ${(this.currentGraph.metadata as any)?.model || 'gpt-5.6-luna'}`;
-        } else {
-          plannerSource = `Fallback / heuristic${(this.currentGraph.metadata as any)?.fallbackReason ? ` (${(this.currentGraph.metadata as any).fallbackReason})` : ''}`;
-        }
-
-        const routerSource =
-          (routing as any).source === 'openai'
-            ? `OpenAI / ${this.config.router.model || 'gpt-5.6-luna'}`
-            : (routing as any).source === 'adaptive'
-              ? 'Adaptive (historical performance)'
-              : `Static fallback${(routing as any).fallbackReason ? ` (Reason: ${(routing as any).fallbackReason})` : ''}`;
-
+        const graphMetadata = this.currentGraph.metadata as Record<string, unknown> | undefined;
+        const lightweightFastPath =
+          plannerMeta?.source === 'deterministic_decomposition' &&
+          plannerMeta.fallbackReason === 'lightweight_read_only_fast_path';
+        const plannerSource = plannerSourceLabel(plannerMeta, graphMetadata);
+        const routerSource = routerSourceLabel(
+          routing,
+          this.config.router.model || 'gpt-5.6-luna',
+          lightweightFastPath,
+        );
         const policyBadge = (routing as any).policyAdjustment
           ? `\n  ${colors.yellow}▲ Policy adjustment: ${(routing as any).policyAdjustment}${colors.reset}`
           : '';
