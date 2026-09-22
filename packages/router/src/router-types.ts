@@ -34,7 +34,11 @@ export interface RoleRequest {
   preferredAgent?: string;
 }
 
-export type FanOutBenefit = 'parallel_work' | 'quality_guard' | 'complementary_high_risk';
+export type FanOutBenefit =
+  | 'parallel_work'
+  | 'quality_guard'
+  | 'complementary_high_risk'
+  | 'solution_diversity';
 
 export interface FanOutAssessment {
   requested: boolean;
