@@ -49,11 +49,11 @@ describe('Phase 19: Adaptive Routing Provider', () => {
     const decision = await adaptiveProvider.route(input);
     expect(decision.strategy).toBeDefined();
     expect(decision.roles.length).toBeGreaterThan(0);
-    expect(decision.reason).toContain('insufficient historical data');
-    expect(decision.reason).toContain('Confidence: LOW');
+    expect(decision.reason).toContain('current-task fit');
+    expect(decision.roles.every((role) => role.preferredAgent === undefined)).toBe(true);
   });
 
-  it('biases role assignment toward historically higher-performing agent when data is sufficient', async () => {
+  it('does not let cross-project historical performance choose the agent', async () => {
     // Seed 4 successful executions for 'codex' as implementer
     const runId = 'run-seed';
     db.prepare(`INSERT INTO runs (id, status, created_at) VALUES (?, 'completed', ?)`).run(
@@ -116,7 +116,7 @@ describe('Phase 19: Adaptive Routing Provider', () => {
     const implementerRole = decision.roles.find((r) => r.role === 'implementer');
 
     expect(implementerRole).toBeDefined();
-    expect(implementerRole?.preferredAgent).toBe('codex');
-    expect(decision.reason).toContain('assigned to codex based on historical composite score');
+    expect(implementerRole?.preferredAgent).toBeUndefined();
+    expect(decision.reason).toContain('historical performance is observational only');
   });
 });
