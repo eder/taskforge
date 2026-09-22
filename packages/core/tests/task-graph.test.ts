@@ -55,7 +55,7 @@ describe('Core - TaskGraph and State Machine', () => {
     expect(order.indexOf('TASK-B')).toBeLessThan(order.indexOf('TASK-C'));
   });
 
-  it('returns runnable tasks based on dependency verification', () => {
+  it('only makes dependent tasks runnable after dependencies are integrated', () => {
     const taskA = createMockTask('TASK-A', [], 'accepted');
     const taskB = createMockTask('TASK-B', [], 'accepted');
     const taskC = createMockTask('TASK-C', ['TASK-A', 'TASK-B'], 'accepted');
@@ -79,7 +79,8 @@ describe('Core - TaskGraph and State Machine', () => {
     runnable = graph.getRunnableTasks().map((t) => t.id);
     expect(runnable).not.toContain('TASK-C'); // still waiting for B
 
-    // Mark B verified
+    // Mark B verified. C must still wait because neither dependency has
+    // finished integration into the cumulative run branch yet.
     graph.updateTaskStatus('TASK-B', 'ready');
     graph.updateTaskStatus('TASK-B', 'assigned');
     graph.updateTaskStatus('TASK-B', 'running');
@@ -87,7 +88,17 @@ describe('Core - TaskGraph and State Machine', () => {
     graph.updateTaskStatus('TASK-B', 'verification');
     graph.updateTaskStatus('TASK-B', 'verified');
 
-    // Now C is runnable!
+    runnable = graph.getRunnableTasks().map((t) => t.id);
+    expect(runnable).not.toContain('TASK-C');
+
+    graph.updateTaskStatus('TASK-A', 'integrated');
+    runnable = graph.getRunnableTasks().map((t) => t.id);
+    expect(runnable).not.toContain('TASK-C');
+
+    graph.updateTaskStatus('TASK-B', 'integrated');
+
+    // Only after both dependencies are integrated can C start from their
+    // cumulative repository state.
     runnable = graph.getRunnableTasks().map((t) => t.id);
     expect(runnable).toContain('TASK-C');
   });
