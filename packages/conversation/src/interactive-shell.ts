@@ -144,7 +144,11 @@ export class InteractiveShell {
     const openaiApiKey = resolveOpenAIApiKey(this.config);
     this.planner = new SemanticPlanner({
       apiKey: openaiApiKey,
-      model: process.env.PLANNER_MODEL || 'gpt-5.6-luna',
+      // Keep Planner and Router on the same configured model by default.
+      // PLANNER_MODEL remains an explicit override, but TaskForge should not
+      // silently route with one model while planning with a different hidden
+      // default -- that causes avoidable API failures and fallback latency.
+      model: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o',
     });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);

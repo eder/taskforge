@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TaskForgeDatabase } from '@taskforge/persistence';
+import { getDefaultConfig } from '@taskforge/shared';
 import { InteractiveShell } from '../src/interactive-shell.js';
 
 describe('InteractiveShell (REPL)', () => {
@@ -40,6 +41,31 @@ describe('InteractiveShell (REPL)', () => {
     expect(banner).toContain('TaskForge');
     expect(banner).toContain('Agents');
     expect(banner).toContain('Router');
+  });
+
+  it('uses the configured router model for the semantic planner unless PLANNER_MODEL explicitly overrides it', () => {
+    const config = getDefaultConfig();
+    config.router.model = 'gpt-4o';
+
+    const previousOverride = process.env.PLANNER_MODEL;
+    delete process.env.PLANNER_MODEL;
+
+    try {
+      const shell = new InteractiveShell({
+        repoRoot: tmpDir,
+        database: db,
+        config,
+      });
+      shellsToClean.push(shell);
+
+      expect((shell as any).planner.model).toBe('gpt-4o');
+    } finally {
+      if (previousOverride === undefined) {
+        delete process.env.PLANNER_MODEL;
+      } else {
+        process.env.PLANNER_MODEL = previousOverride;
+      }
+    }
   });
 
   it('processes user commands in conversational REPL', async () => {

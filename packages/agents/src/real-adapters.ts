@@ -459,7 +459,10 @@ export abstract class BaseCliAdapter implements AgentAdapter {
 
     const prompt = this.buildPrompt(assignment, context);
     const args = this.formatArgs(prompt);
-    const timeoutMs = this.options.timeoutMs ?? 300000; // 5 minutes default
+    const timeoutMs =
+      context.timeoutMs ??
+      this.options.timeoutMs ??
+      300000; // direct adapter callers retain the historical 5-minute fallback
 
     const caps = await this.capabilities();
     const closeStdinOnSpawn = caps.stdinMode === 'close_after_spawn';

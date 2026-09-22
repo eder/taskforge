@@ -79,6 +79,31 @@ describe('detectExecutionIntent', () => {
     expect(decision.forbiddenChanges).toEqual(['schema do banco']);
   });
 
+  it('does not promote architectural outcome wording into forbidden changes', () => {
+    const decision = detectExecutionIntent([
+      'Create a pluggable LLM provider architecture for TaskForge.',
+      'Do not implement this format blindly; inspect the existing code first.',
+      'Support an OpenAI-compatible provider without creating a hardcoded integration for every company.',
+      'The final architecture should allow changing providers without altering SemanticPlanner, Router, or the rest of the control plane.',
+    ].join('\n'));
+
+    expect(decision.intent).toBe('IMPLEMENTATION');
+    expect(decision.mutationAllowed).toBe(true);
+    expect(decision.forbiddenChanges).toEqual([]);
+  });
+
+  it('does not turn Portuguese architectural outcome language into repository constraints', () => {
+    const decision = detectExecutionIntent([
+      'Implemente suporte a múltiplos providers.',
+      'Não implemente esse formato cegamente.',
+      'Permita adicionar providers sem criar uma integração hardcoded.',
+      'O resultado deve funcionar sem alterar o SemanticPlanner ou Router para cada novo provider.',
+    ].join('\n'));
+
+    expect(decision.intent).toBe('IMPLEMENTATION');
+    expect(decision.forbiddenChanges).toEqual([]);
+  });
+
   it('keeps implementation intent with a concrete file restriction', () => {
     const decision = detectExecutionIntent(
       "Fix the scheduler. Don't change package.json.",

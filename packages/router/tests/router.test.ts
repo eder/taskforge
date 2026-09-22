@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { StaticRoutingProvider, OpenAIRoutingProvider, AgentSelector } from '../src/index.js';
 import { Task } from '@taskforge/core';
 import { AgentRegistry, FakeAgent } from '@taskforge/agents';
@@ -63,6 +63,35 @@ describe('Router and AgentSelector', () => {
 
     expect(decision).toBeDefined();
     expect(decision.strategy).toBe('parallel');
+  });
+
+  it('reuses fallback during a short provider failure cooldown instead of repeating the same failing HTTP call', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const provider = new OpenAIRoutingProvider('test-key', 'gpt-test', 1000);
+
+      const first = await provider.route({
+        task: sampleTask,
+        availableAgents: ['agent-a'],
+      });
+      const second = await provider.route({
+        task: sampleTask,
+        availableAgents: ['agent-a'],
+      });
+
+      expect(first.source).toBe('fallback');
+      expect(second.source).toBe('fallback');
+      expect(first.fallbackReason).toBe('http_error');
+      expect(second.fallbackReason).toBe('http_error');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('AgentSelector maps neutral role requests to available registered agents', async () => {
