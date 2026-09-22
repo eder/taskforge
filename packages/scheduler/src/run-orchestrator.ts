@@ -419,20 +419,24 @@ export class RunOrchestrator {
 
       try {
         const collabReq = task.contract.metadata?.collaboration as CollaborationProposal | undefined;
-        let routing: RoutingDecision;
+        const availableAgents = await this.agentSelector.listAvailableAgentIds();
+        let routingProposal: RoutingDecision;
 
         if (task.contract.metadata?.recommendCollaboration && collabReq?.requestedRoles?.length) {
-          routing = {
+          routingProposal = {
             strategy: collaborationModeFor(collabReq.requestedRoles),
             source: 'static',
             complexity: 'high',
             risk: 'high',
             uncertainty: 'medium',
             teamSize: collabReq.requestedRoles.length,
-            roles: collabReq.requestedRoles.map((role: AgentRole) => ({
+            roles: collabReq.requestedRoles.map((role: AgentRole, index: number) => ({
               role,
               requiredCapabilities: role === 'implementer' ? ['canWrite'] : ['canRead'],
-              objective: collabReq.reason || task.contract.objective,
+              objective:
+                collabReq.requestedRoles.length > 1
+                  ? `${collabReq.reason || task.contract.objective} [role ${index + 1}: ${role}]`
+                  : collabReq.reason || task.contract.objective,
             })),
             communication: {
               required: true,
@@ -442,16 +446,18 @@ export class RunOrchestrator {
             reason: `Preflight recommended collaboration: ${collabReq.reason}`,
           };
         } else {
-          const availableAgents = await this.agentSelector.listAvailableAgentIds();
-          const routingProposal = await this.router.route({
-            task,
-            availableAgents,
-          });
-          routing = RouterQualityGuard.evaluate(routingProposal, {
+          routingProposal = await this.router.route({
             task,
             availableAgents,
           });
         }
+
+        // Single product boundary for every staffing source, including
+        // preflight/emergent collaboration. Nothing bypasses fan-out economics.
+        let routing = RouterQualityGuard.evaluate(routingProposal, {
+          task,
+          availableAgents,
+        });
 
         const maxAgents = this.config.collaboration?.maxAgentsPerTask ?? 3;
         if (routing.roles.length > maxAgents) {
@@ -477,6 +483,23 @@ export class RunOrchestrator {
             `[${task.id}] Staffing capped from ${originalCount} to ${maxAgents} agents (collaboration.maxAgentsPerTask limit)`,
           );
         }
+
+        this.eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'ROUTING_DECIDED',
+          payload: {
+            taskId: task.id,
+            strategy: routing.strategy,
+            teamSize: routing.teamSize,
+            roles: routing.roles.map((role) => role.role),
+            reason: routing.reason,
+            source: routing.source,
+            fanOutAssessment: routing.fanOutAssessment,
+          },
+          timestamp: new Date(),
+        });
 
         let selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${task.id}`,
