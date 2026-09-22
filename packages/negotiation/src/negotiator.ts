@@ -130,6 +130,159 @@ export class DefaultPreflightEvaluator implements PreflightEvaluator {
   }
 }
 
+
+export interface ArchitectureBoundaryGuardResult {
+  changed: boolean;
+  architectureTaskId?: string;
+  reason?: string;
+}
+
+const STATEFUL_ARCHITECTURE_SIGNALS = [
+  /\b(cache|caching|invalidate|invalidation|ttl|snapshot)\b/i,
+  /\b(event[- ]driven|reactive|events?|webhooks?|pub\/?sub|queue|stream)\b/i,
+  /\b(consisten(?:cy|t)|state|sync(?:hroni[sz](?:e|ation))?|replication|materialized view|source of truth|persistence|persisted|offline)\b/i,
+];
+
+const ARCHITECTURE_BOUNDARY_SIGNALS =
+  /\b(layer|boundary|ownership|owner|client|frontend|app|mobile|device|backend|server|service|api|local|remote|cloud|camada|aplicativo|cliente|servidor)\b/i;
+
+function taskRequiresMutation(task: Task): boolean {
+  if (task.contract.completionMode === 'mutation') return true;
+  if (task.contract.forbiddenChanges?.includes('*')) return false;
+  return task.type === 'implementation' || task.type === 'refactoring';
+}
+
+/**
+ * Stateful features can be deceptively small while hiding an architectural
+ * ownership decision: which layer owns authoritative state, which events
+ * invalidate it, and which identity/security boundary scopes persistence.
+ *
+ * This guard is deliberately structural rather than cache-specific. It only
+ * fires when the proposed plan contains mutating work and the task text
+ * contains multiple state/consistency signals plus a placement/boundary signal.
+ * It inserts a read-only architecture decision before mutation so fallback
+ * planners cannot jump straight into whichever layer the implementation agent
+ * happens to notice first.
+ */
+export function enforceArchitectureBoundaryDecision(
+  graph: TaskGraph,
+): ArchitectureBoundaryGuardResult {
+  const tasks = graph.getAllTasks();
+  if (
+    tasks.some(
+      (task) =>
+        task.type === 'architecture' &&
+        task.contract.metadata?.architectureBoundaryDecision === true,
+    )
+  ) {
+    return { changed: false };
+  }
+
+  const mutatingTasks = tasks.filter(taskRequiresMutation);
+  if (mutatingTasks.length === 0) return { changed: false };
+
+  const text = tasks
+    .map((task) =>
+      [
+        task.title,
+        task.description,
+        task.contract.objective,
+        ...(task.contract.acceptanceCriteria ?? []),
+      ].join(' '),
+    )
+    .join(' ');
+
+  const stateSignalCount = STATEFUL_ARCHITECTURE_SIGNALS.filter((pattern) =>
+    pattern.test(text),
+  ).length;
+  if (stateSignalCount < 2 || !ARCHITECTURE_BOUNDARY_SIGNALS.test(text)) {
+    return { changed: false };
+  }
+
+  const first = mutatingTasks[0] ?? tasks[0];
+  const baseId = 'TASK-ARCH-BOUNDARY';
+  let architectureTaskId = baseId;
+  let suffix = 1;
+  while (graph.getTask(architectureTaskId)) {
+    architectureTaskId = `${baseId}-${suffix++}`;
+  }
+
+  const upstreamReadOnlyDependencies = Array.from(
+    new Set(
+      mutatingTasks.flatMap((task) =>
+        task.dependencies.filter((dependencyId) => {
+          const dependency = graph.getTask(dependencyId);
+          return dependency ? !taskRequiresMutation(dependency) : false;
+        }),
+      ),
+    ),
+  );
+
+  const now = new Date();
+  const architectureTask: Task = {
+    id: architectureTaskId,
+    goalId: first.goalId,
+    title: 'Resolve State Ownership and Consistency Boundary',
+    description:
+      'Inspect the current repository architecture before mutation and decide the authoritative state owner and cross-layer consistency boundary.',
+    type: 'architecture',
+    status: 'proposed',
+    dependencies: upstreamReadOnlyDependencies,
+    contract: {
+      objective:
+        'Before implementation, inspect the repository and produce a concrete architecture decision for state ownership, client/server responsibility, event-driven invalidation or synchronization, stale-data behavior, and identity/security scope. The decision must be repository-grounded and usable as constraints by downstream implementation.',
+      allowedScope: [],
+      forbiddenChanges: ['*'],
+      acceptanceCriteria: [
+        'Authoritative state owner and layer boundary are explicit',
+        'Event, invalidation or synchronization flow is explicit',
+        'Stale-data and failure behavior are explicit',
+        'Identity/security scope for persisted state is explicit',
+        'Downstream implementation constraints are concrete and repository-grounded',
+      ],
+      dependencies: upstreamReadOnlyDependencies,
+      completionMode: 'report',
+      metadata: {
+        architectureBoundaryDecision: true,
+      },
+    },
+    acceptanceCriteria: [
+      'Architecture boundary decision produced before repository mutation',
+    ],
+    reworkCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  graph.addTask(architectureTask);
+
+  for (const task of mutatingTasks) {
+    if (!task.dependencies.includes(architectureTaskId)) {
+      task.dependencies.push(architectureTaskId);
+    }
+    task.contract.dependencies = Array.from(
+      new Set([...(task.contract.dependencies ?? []), architectureTaskId]),
+    );
+  }
+
+  graph.validate();
+  graph.metadata = {
+    ...(graph.metadata ?? {}),
+    architectureBoundaryDecision: {
+      enforced: true,
+      taskId: architectureTaskId,
+      stateSignalCount,
+    },
+  };
+
+  return {
+    changed: true,
+    architectureTaskId,
+    reason:
+      'Stateful cross-layer mutation requires an explicit ownership/consistency decision before implementation.',
+  };
+}
+
 export class NegotiationManager {
   constructor(
     private evaluator: PreflightEvaluator = new AgentPreflightEvaluator(),
@@ -221,6 +374,21 @@ export class NegotiationManager {
   }
 
   async negotiateGraph(graph: TaskGraph, runId: string): Promise<TaskGraph> {
+    const architectureGuard = enforceArchitectureBoundaryDecision(graph);
+    if (architectureGuard.changed && this.eventRepo) {
+      this.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: architectureGuard.architectureTaskId,
+        type: 'ARCHITECTURE_BOUNDARY_GATE_INSERTED',
+        payload: {
+          taskId: architectureGuard.architectureTaskId,
+          reason: architectureGuard.reason,
+        },
+        timestamp: new Date(),
+      });
+    }
+
     const tasks = graph.getAllTasks();
 
     for (const task of tasks) {
