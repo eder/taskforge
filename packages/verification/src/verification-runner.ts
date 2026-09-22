@@ -106,9 +106,10 @@ export class VerificationRunner {
     );
     const buildResolved = resolveScript('build', customCommands?.buildCommand, 'pnpm build');
 
+    const hasExplicitCommandRequest = explicitCommands !== undefined;
     const requestedCommands = (explicitCommands ?? []).map((command) => command.trim()).filter(Boolean);
     const checksToRun: Array<{ name: string; command: string; enabled: boolean }> =
-      requestedCommands.length > 0
+      hasExplicitCommandRequest
         ? requestedCommands.map((command, index) => ({
             name: `explicit-${index + 1}`,
             command,
