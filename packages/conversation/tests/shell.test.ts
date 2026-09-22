@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TaskForgeDatabase } from '@taskforge/persistence';
 import { getDefaultConfig } from '@taskforge/shared';
-import { InteractiveShell } from '../src/interactive-shell.js';
+import { InteractiveShell, sanitizeDisplayedRepositoryPaths } from '../src/interactive-shell.js';
 import { SLASH_COMMANDS } from '../src/slash-menu.js';
 
 describe('InteractiveShell (REPL)', () => {
@@ -42,6 +42,40 @@ describe('InteractiveShell (REPL)', () => {
     expect(banner).toContain('TaskForge');
     expect(banner).toContain('Agents');
     expect(banner).toContain('Router');
+    expect(banner).toContain('Git Status');
+    expect(banner).toContain('unavailable');
+    expect(banner).not.toContain('unknown (unknown)');
+  });
+
+  it('hides internal TaskForge worktree paths from user-facing repository output', () => {
+    const raw =
+      '[index.js](' +
+      tmpDir +
+      '/.taskforge/worktrees/TASK-01/asgn-TASK-01-abc/index.js) and ' +
+      tmpDir +
+      '/README.md';
+
+    const sanitized = sanitizeDisplayedRepositoryPaths(raw, tmpDir);
+
+    expect(sanitized).toContain('[index.js](index.js)');
+    expect(sanitized).toContain('README.md');
+    expect(sanitized).not.toContain('.taskforge/worktrees');
+    expect(sanitized).not.toContain(tmpDir);
+  });
+
+  it('presents lightweight overview routing as a deliberate deterministic fast path', async () => {
+    const shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    shellsToClean.push(shell);
+
+    const reply = await shell.handleInput('O que esse projeto faz?');
+
+    expect(reply).toContain('Deterministic fast path');
+    expect(reply).toContain('lightweight read-only');
+    expect(reply).toContain('model call skipped');
+    expect(reply).toContain('Deterministic routing');
+    expect(reply).toContain('model call not required');
+    expect(reply).not.toContain('Fallback: lightweight_read_only_fast_path');
+    expect(reply).not.toContain('Static fallback');
   });
 
   it('uses the configured router model for the semantic planner unless PLANNER_MODEL explicitly overrides it', () => {
