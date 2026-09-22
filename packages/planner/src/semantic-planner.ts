@@ -589,6 +589,8 @@ export class SemanticPlanner implements Planner {
 Decompose the engineering objective into an optimal, typed DAG of tasks.
 Never collapse complex engineering requirements into generic 2-task plans.
 
+Before implementation, detect unresolved architecture-boundary decisions. If a request combines stateful mechanisms (for example cache, persistence, sessions, queues, read models), consistency or lifecycle behavior (for example invalidation, events, synchronization, refresh, source of truth), and multiple system layers (for example app/client/frontend vs backend/server/API/database), do not let the implementation task choose ownership implicitly. Add a read-only architecture task first. That task must inspect the existing repository and explicitly decide the authoritative owner/source of truth, layer boundary, consistency/invalidation lifecycle, affected components, and relevant identity/tenant/privacy/security constraints. Implementation must depend on that architecture task. Do not add this task for a simple localized change whose ownership is already explicit.
+
 Every task must declare explicit completion semantics:
 - mutation: repository changes are the completion evidence.
 - report: read-only analysis/report; allowedScope must be [] and forbiddenChanges must be ["*"].
