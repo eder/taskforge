@@ -694,6 +694,28 @@ export class InteractiveShell {
           : `    ${colors.dim}Provider-reported usage:${colors.reset} ${colors.bold}${formatApproxTokens(usageAccuracy.observedTokens)} tokens${colors.reset} across ${usageAccuracy.observedAssignments} assignment(s)`
         : '';
 
+    const efficiency = this.telemetry.getOrchestrationEfficiency(result.runId);
+    const efficiencyLabel =
+      efficiency.outcome === 'right_sized'
+        ? `${colors.green}RIGHT-SIZED${colors.reset}`
+        : efficiency.outcome === 'fan_out_justified'
+          ? `${colors.green}FAN-OUT JUSTIFIED${colors.reset}`
+          : efficiency.outcome === 'fan_out_not_justified'
+            ? `${colors.red}INEFFICIENT${colors.reset}`
+            : `${colors.yellow}INCONCLUSIVE${colors.reset}`;
+    const efficiencyBlock = [
+      `    ${colors.dim}Orchestration:${colors.reset}      ${efficiencyLabel}`,
+      `    ${colors.dim}Assignments:${colors.reset}        ${efficiency.usefulAssignments} useful / ${efficiency.wastedAssignments} wasted across ${efficiency.uniqueAgents} agent(s)`,
+      `    ${colors.dim}Parallel overlap:${colors.reset}   ${(efficiency.observedParallelOverlapMs / 1000).toFixed(1)}s (${efficiency.parallelismFactor.toFixed(2)}×)`,
+      efficiency.providerReportedTokens > 0
+        ? `    ${colors.dim}Wasted tokens:${colors.reset}      ${formatApproxTokens(efficiency.wastedProviderTokens)} / ${formatApproxTokens(efficiency.providerReportedTokens)}`
+        : '',
+      `    ${colors.dim}First-pass quality:${colors.reset} ${(efficiency.firstPassRate * 100).toFixed(0)}% · rework ${efficiency.reworkCount} · gate rejects ${efficiency.completionGateRejections}`,
+      `    ${colors.dim}Why:${colors.reset}                ${efficiency.reasons[0] ?? 'No efficiency rationale available.'}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
     const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
     let deliveryBlock = '';
     let repositoryBlock = '';
@@ -746,6 +768,7 @@ export class InteractiveShell {
       `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
       repositoryBlock,
       usageBlock,
+      efficiencyBlock,
       deliveryBlock,
       result.error
         ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
@@ -1613,14 +1636,19 @@ export class InteractiveShell {
                   ? 'DELIVERY_READY'
                   : 'IDLE';
 
+              const efficiency = this.telemetry.getOrchestrationEfficiency(result.runId);
+              const staffing = this.telemetry.getStaffingMetrics(result.runId);
               this.telemetry.recordRunMetrics({
                 runId: result.runId,
                 durationMs: result.durationMs,
-                tasksCount: result.tasksCompleted + result.tasksFailed,
+                tasksCount: efficiency.taskCount,
                 tasksCompleted: result.tasksCompleted,
                 tasksFailed: result.tasksFailed,
-                reworkCount: 0,
-                escalationsCount: 0,
+                reworkCount: efficiency.reworkCount,
+                escalationsCount:
+                  staffing.collaborationApprovedCount +
+                  staffing.collaborationRejectedCount +
+                  staffing.collaborationDelayedCount,
               });
 
               const summary = await this.formatRunSummary(result);
@@ -1668,14 +1696,19 @@ export class InteractiveShell {
               ? 'DELIVERY_READY'
               : 'IDLE';
 
+          const efficiency = this.telemetry.getOrchestrationEfficiency(result.runId);
+          const staffing = this.telemetry.getStaffingMetrics(result.runId);
           this.telemetry.recordRunMetrics({
             runId: result.runId,
             durationMs: result.durationMs,
-            tasksCount: result.tasksCompleted + result.tasksFailed,
+            tasksCount: efficiency.taskCount,
             tasksCompleted: result.tasksCompleted,
             tasksFailed: result.tasksFailed,
-            reworkCount: 0,
-            escalationsCount: 0,
+            reworkCount: efficiency.reworkCount,
+            escalationsCount:
+              staffing.collaborationApprovedCount +
+              staffing.collaborationRejectedCount +
+              staffing.collaborationDelayedCount,
           });
 
           return await this.formatRunSummary(result);
