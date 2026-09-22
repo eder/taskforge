@@ -8,6 +8,7 @@ import {
   AgentMessage,
   AgentResult,
   AgentSession,
+  AgentUsage,
 } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import { GitService } from '@taskforge/workspace';
@@ -21,6 +22,75 @@ export interface CliAdapterOptions {
   defaultArgs?: string[];
   timeoutMs?: number;
   env?: Record<string, string>;
+}
+
+function finiteTokenNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.round(value);
+}
+
+function firstTokenNumber(obj: any, keys: string[]): number | undefined {
+  if (!obj || typeof obj !== 'object') return undefined;
+  for (const key of keys) {
+    const value = finiteTokenNumber(obj[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function usageFromObject(raw: any, modelName?: string): AgentUsage | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+
+  const inputTokens =
+    firstTokenNumber(raw, [
+      'input_tokens',
+      'inputTokens',
+      'prompt_tokens',
+      'promptTokens',
+      'promptTokenCount',
+    ]) ?? 0;
+  const outputTokens =
+    firstTokenNumber(raw, [
+      'output_tokens',
+      'outputTokens',
+      'completion_tokens',
+      'completionTokens',
+      'candidatesTokenCount',
+    ]) ?? 0;
+
+  const directCached =
+    firstTokenNumber(raw, [
+      'cached_input_tokens',
+      'cachedInputTokens',
+      'cached_tokens',
+      'cachedTokens',
+      'cachedContentTokenCount',
+    ]) ?? 0;
+  const cacheRead =
+    firstTokenNumber(raw, ['cache_read_input_tokens', 'cacheReadInputTokens']) ?? 0;
+  const cacheCreation =
+    firstTokenNumber(raw, ['cache_creation_input_tokens', 'cacheCreationInputTokens']) ?? 0;
+  const cachedInputTokens = directCached + cacheRead + cacheCreation;
+
+  const providerTotal = firstTokenNumber(raw, [
+    'total_tokens',
+    'totalTokens',
+    'totalTokenCount',
+  ]);
+  const totalTokens = providerTotal ?? inputTokens + outputTokens + cachedInputTokens;
+
+  if (totalTokens <= 0 && inputTokens <= 0 && outputTokens <= 0 && cachedInputTokens <= 0) {
+    return undefined;
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    cachedInputTokens: cachedInputTokens > 0 ? cachedInputTokens : undefined,
+    totalTokens,
+    modelName,
+    source: 'provider_reported',
+  };
 }
 
 export abstract class BaseCliAdapter implements AgentAdapter {
@@ -225,6 +295,81 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     }
   }
 
+  /**
+   * Extract provider-reported usage from the structured JSON emitted by the
+   * CLI harnesses. Providers use different field names, so normalize only
+   * known metadata containers and never scrape arbitrary assistant/tool text.
+   *
+   * A single CLI invocation normally emits one final cumulative usage object.
+   * When intermediate snapshots are also present, prefer the last richest
+   * candidate rather than summing snapshots and double-counting tokens.
+   */
+  public extractReportedUsage(rawStdout: string, rawStderr: string): AgentUsage | undefined {
+    const combined = [rawStdout, rawStderr].filter(Boolean).join('\n');
+    let best: AgentUsage | undefined;
+    let bestScore = -1;
+
+    const fallbackModel =
+      this.id === 'agy' ? 'gemini' : this.id === 'claude' ? 'claude' : this.id;
+
+    const consider = (raw: any, modelName?: string) => {
+      const usage = usageFromObject(raw, modelName ?? fallbackModel);
+      if (!usage) return;
+      const score =
+        (usage.inputTokens > 0 ? 1 : 0) +
+        (usage.outputTokens > 0 ? 1 : 0) +
+        ((usage.cachedInputTokens ?? 0) > 0 ? 1 : 0) +
+        (usage.totalTokens > 0 ? 1 : 0) +
+        (usage.modelName && usage.modelName !== fallbackModel ? 1 : 0);
+      if (score >= bestScore) {
+        best = usage;
+        bestScore = score;
+      }
+    };
+
+    for (const line of combined.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
+
+      try {
+        const obj = JSON.parse(trimmed);
+        const eventModel =
+          (typeof obj.model === 'string' && obj.model) ||
+          (typeof obj.model_name === 'string' && obj.model_name) ||
+          (typeof obj.modelName === 'string' && obj.modelName) ||
+          (typeof obj.message?.model === 'string' && obj.message.model) ||
+          (typeof obj.result?.model === 'string' && obj.result.model) ||
+          undefined;
+
+        for (const candidate of [
+          obj.usage,
+          obj.usage_metadata,
+          obj.usageMetadata,
+          obj.token_usage,
+          obj.tokenUsage,
+          obj.result?.usage,
+          obj.result?.usage_metadata,
+          obj.result?.usageMetadata,
+          obj.message?.usage,
+          obj.stats?.usage,
+        ]) {
+          consider(candidate, eventModel);
+        }
+
+        const modelUsage = obj.modelUsage ?? obj.model_usage;
+        if (modelUsage && typeof modelUsage === 'object' && !Array.isArray(modelUsage)) {
+          for (const [model, usage] of Object.entries(modelUsage)) {
+            consider(usage, model);
+          }
+        }
+      } catch {
+        // Malformed provider line: ignore it exactly as normalizeOutcome does.
+      }
+    }
+
+    return best;
+  }
+
   public normalizeOutcome(
     rawStdout: string,
     rawStderr: string,
@@ -241,6 +386,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     const errors: string[] = [];
     const warnings: string[] = [];
     const artifacts: Array<{ path: string; description?: string; type?: string }> = [];
+    const usage = this.extractReportedUsage(rawStdout, rawStderr);
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -393,6 +539,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       warnings,
       artifacts,
       runtimeLogRef: logPath,
+      usage,
     };
   }
 
@@ -626,6 +773,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       durationMs: Date.now() - startTime,
       normalizedOutcome: outcome,
       completionReason,
+      usage: outcome.usage,
     };
   }
 
