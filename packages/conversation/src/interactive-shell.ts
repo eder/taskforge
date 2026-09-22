@@ -1369,11 +1369,7 @@ export class InteractiveShell {
       }
 
       case 'inspect_dashboard': {
-        const gitStatus = await this.gitService.getStatus().catch(() => ({
-          currentBranch: 'unknown',
-          headCommit: 'unknown',
-          isClean: true,
-        }));
+        const gitStatus = await this.gitService.getStatus().catch(() => undefined);
         const reports = await AgentDetector.detect(this.agentRegistry.list());
         const runStats = this.activeRunId
           ? this.telemetry.getRunSummary(this.activeRunId)
@@ -1381,15 +1377,20 @@ export class InteractiveShell {
         const costReport = this.activeRunId
           ? this.telemetry.getCostReport(this.activeRunId)
           : undefined;
+        const efficiencyReport = this.activeRunId
+          ? this.telemetry.getOrchestrationEfficiency(this.activeRunId)
+          : undefined;
         return TuiDashboard.render({
           repoRoot: this.repoRoot,
-          branch: gitStatus.currentBranch,
-          headCommit: gitStatus.headCommit,
-          isClean: gitStatus.isClean,
+          branch: gitStatus?.currentBranch ?? '',
+          headCommit: gitStatus?.headCommit ?? '',
+          isClean: gitStatus?.isClean ?? false,
+          gitAvailable: Boolean(gitStatus),
           graph: this.currentGraph,
           agents: reports,
           runStats,
           costReport,
+          efficiencyReport,
         });
       }
 
