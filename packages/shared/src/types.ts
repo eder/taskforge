@@ -24,6 +24,14 @@ export type TaskStatus =
 export type TaskType =
   'implementation' | 'investigation' | 'review' | 'testing' | 'refactoring' | 'architecture';
 
+export type CompletionMode = 'mutation' | 'report' | 'verification' | 'review';
+export type VerificationExpectation = 'observe' | 'pass';
+
+export interface TaskVerificationSpec {
+  commands: string[];
+  expectation: VerificationExpectation;
+}
+
 export type AgentRole =
   | 'lead'
   | 'implementer'
@@ -102,6 +110,15 @@ export interface TaskContract {
   forbiddenChanges: string[];
   acceptanceCriteria: string[];
   dependencies: string[];
+  /**
+   * Explicit completion semantics. New planner output should always set this.
+   * Optional only for backward compatibility with persisted legacy runs.
+   */
+  completionMode?: CompletionMode;
+  /**
+   * Deterministic command evidence required when completionMode=verification.
+   */
+  verification?: TaskVerificationSpec;
   metadata?: Record<string, any>;
 }
 
@@ -207,6 +224,8 @@ export interface CompletionEvidence {
   actionsDenied?: DeniedAction[];
   deniedActions?: DeniedAction[];
   verificationPassed?: boolean;
+  verificationChecks?: VerificationCheck[];
+  verificationExpectation?: VerificationExpectation;
   findings?: ReviewFinding[];
   analysisReport?: string;
   artifacts?: Array<{ path: string; description?: string; type?: string }>;
