@@ -47,14 +47,6 @@ export function isLightweightGoal(description: string): boolean {
   // Keep this fallback conservative: when semantic planning is unavailable,
   // it is safer to produce the normal implementation/review plan than collapse
   // a cross-cutting feature into a single "Documentation and Content Update".
-  const nonEmptyLines = description
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (description.length > 1200 || nonEmptyLines.length > 20) {
-    return false;
-  }
 
   const engineeringTargets =
     /\b(provider|api|planner|router|runtime|control\s+plane|architecture|abstraction|interface|configuration|config|health|provenance|fallback|integration|scheduler|database|schema)\b/i;
