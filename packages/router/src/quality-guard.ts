@@ -215,8 +215,33 @@ export class RouterQualityGuard {
       hasDistinctWork &&
       distinctRoles.size >= 2;
 
-    if (timeCase || qualityCase || complementaryHighRiskCase) {
-      return proposal;
+    const benefits: import('./router-types.js').FanOutBenefit[] = [];
+    const reasons: string[] = [];
+    if (timeCase) {
+      benefits.push('parallel_work');
+      reasons.push('roles have sufficiently distinct objectives that can execute independently');
+    }
+    if (qualityCase) {
+      benefits.push('quality_guard');
+      reasons.push('team includes a specialist quality role paired with primary execution');
+    }
+    if (complementaryHighRiskCase) {
+      benefits.push('complementary_high_risk');
+      reasons.push('high-risk work has distinct complementary roles and objectives');
+    }
+
+    if (benefits.length > 0) {
+      return {
+        ...proposal,
+        fanOutAssessment: {
+          requested: true,
+          admitted: true,
+          requestedTeamSize: proposal.teamSize,
+          admittedTeamSize: proposal.roles.length,
+          benefits,
+          reasons,
+        },
+      };
     }
 
     const primary = proposal.roles[0];
@@ -232,6 +257,17 @@ export class RouterQualityGuard {
       },
       reason:
         `Fan-out rejected by efficiency policy: proposed roles did not demonstrate distinct parallel work or a specialist quality guard. Original reason: ${proposal.reason}`,
+      fanOutAssessment: {
+        requested: true,
+        admitted: false,
+        requestedTeamSize: proposal.teamSize,
+        admittedTeamSize: 1,
+        benefits: [],
+        reasons: [
+          'proposed roles did not demonstrate distinct parallel work',
+          'no specialist quality guard justified additional provider cost',
+        ],
+      },
     };
   }
 
