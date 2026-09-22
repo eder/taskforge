@@ -72,6 +72,69 @@ describe('Dynamic Concurrency Slot Prioritization', () => {
     expect(computeTaskPriority(archTask)).toBe(15);
   });
 
+  it('releases a task-level reservation when its lead assignment finishes so a partner can run', async () => {
+    const config: TaskForgeConfig = {
+      agents: {
+        claude: { maxParallel: 2, command: 'echo', timeoutMs: 5000 },
+        codex: { maxParallel: 2, command: 'echo', timeoutMs: 5000 },
+        agy: { maxParallel: 1, command: 'echo', timeoutMs: 5000 },
+      },
+      execution: {
+        maxParallelTasks: 3,
+        defaultTimeoutMs: 5000,
+        enableInteractionGateway: true,
+      },
+      git: {
+        defaultBranch: 'main',
+        integrationBranchPrefix: 'tf/',
+        worktreeDir: '.taskforge/worktrees',
+        commitMessagePrefix: 'tf: ',
+      },
+      verification: {
+        maxReworkCycles: 2,
+        defaultChecks: [],
+      },
+    };
+
+    const cm = new ConcurrencyManager(config);
+
+    // Reproduce the scheduler state from the recorded hang: three tasks have
+    // consumed all global slots before their collaborative handoffs start.
+    cm.acquire('TASK-A', 'claude');
+    cm.acquire('TASK-B', 'codex');
+    cm.acquire('TASK-C', 'agy');
+    expect(cm.getActiveCount()).toBe(3);
+
+    // TASK-A's lead uses its existing task reservation.
+    await cm.waitForSlot('claude', 'TASK-A', undefined, 'asgn-a-lead');
+    cm.acquire('asgn-a-lead', 'claude', 'TASK-A');
+
+    // Partner cannot run while all three scheduler reservations are held.
+    let partnerAcquired = false;
+    const partnerPromise = cm
+      .waitForSlot('codex', 'TASK-A', undefined, 'asgn-a-partner')
+      .then(() => {
+        partnerAcquired = true;
+        cm.acquire('asgn-a-partner', 'codex', 'TASK-A');
+      });
+
+    expect(partnerAcquired).toBe(false);
+    expect(cm.getWaitingCount()).toBe(1);
+
+    // Finishing the lead must release TASK-A's scheduler reservation, opening
+    // a real assignment slot for the partner instead of waiting for task end.
+    cm.release('asgn-a-lead', 'claude', 'TASK-A');
+    await partnerPromise;
+
+    expect(partnerAcquired).toBe(true);
+    expect(cm.getWaitingCount()).toBe(0);
+    expect(cm.getActiveTaskCount()).toBe(2);
+
+    cm.release('asgn-a-partner', 'codex', 'TASK-A');
+    cm.release('TASK-B', 'codex');
+    cm.release('TASK-C', 'agy');
+  });
+
   it('prioritizes higher-priority queued tasks over lower-priority tasks when team slots are freed', async () => {
     const config: TaskForgeConfig = {
       agents: {
