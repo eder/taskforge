@@ -86,6 +86,125 @@ describe('Router and AgentSelector', () => {
     expect(decision.communication.required).toBe(false);
   });
 
+  it('does not hard-code Claude as the preferred agent for straightforward work', async () => {
+    const provider = new StaticRoutingProvider();
+    const task: Task = {
+      ...sampleTask,
+      id: 'TASK-SIMPLE',
+      title: 'Add health response header',
+      description: 'Add a response header to the health endpoint',
+      type: 'implementation',
+      contract: {
+        objective: 'Add the response header',
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Header is returned'],
+        dependencies: [],
+      },
+    };
+
+    const decision = await provider.route({
+      task,
+      availableAgents: ['claude', 'codex', 'agy'],
+    });
+
+    expect(decision.strategy).toBe('single');
+    expect(decision.roles).toHaveLength(1);
+    expect(decision.roles[0].role).toBe('implementer');
+    expect(decision.roles[0].preferredAgent).toBeUndefined();
+  });
+
+  it('selects the same unpreferred agent regardless of registry insertion order', async () => {
+    const makeSelector = (ids: string[]) => {
+      const registry = new AgentRegistry(false);
+      for (const id of ids) {
+        registry.register(new FakeAgent(id, id));
+      }
+      return new AgentSelector(registry);
+    };
+    const request = {
+      role: 'researcher' as const,
+      requiredCapabilities: ['canRead'],
+      objective: 'Summarize the repository architecture',
+    };
+    const context = { selectionKey: '/workspace/example:TASK-01' };
+
+    const first = await makeSelector(['claude', 'codex', 'agy']).selectAgents([request], context);
+    const reversed = await makeSelector(['agy', 'codex', 'claude']).selectAgents([request], context);
+
+    expect(first).toHaveLength(1);
+    expect(reversed).toHaveLength(1);
+    expect(first[0].agent.id).toBe(reversed[0].agent.id);
+  });
+
+  it('prefers the least-used eligible agent when no router preference exists', async () => {
+    const registry = new AgentRegistry(false);
+    registry.register(new FakeAgent('claude', 'Claude Code'));
+    registry.register(new FakeAgent('codex', 'Codex CLI'));
+    registry.register(new FakeAgent('agy', 'Google Antigravity'));
+
+    const history = {
+      getAgentSelectionStats(agentId: string, role: string) {
+        const roleAssignments: Record<string, number> = {
+          claude: 12,
+          codex: 3,
+          agy: 7,
+        };
+        return {
+          agentId,
+          roleAssignments: roleAssignments[agentId] ?? 0,
+          totalAssignments: (roleAssignments[agentId] ?? 0) + 5,
+          lastAssignedAt: '2026-09-22T12:00:00.000Z',
+        };
+      },
+    };
+
+    const selector = new AgentSelector(registry, { selectionHistory: history });
+    const selected = await selector.selectAgents(
+      [
+        {
+          role: 'researcher',
+          requiredCapabilities: ['canRead'],
+          objective: 'Read and summarize this repository',
+        },
+      ],
+      { selectionKey: '/workspace/example:TASK-01' },
+    );
+
+    expect(selected).toHaveLength(1);
+    expect(selected[0].agent.id).toBe('codex');
+  });
+
+  it('still honors an explicit healthy router preference over fairness history', async () => {
+    const registry = new AgentRegistry(false);
+    registry.register(new FakeAgent('claude', 'Claude Code'));
+    registry.register(new FakeAgent('codex', 'Codex CLI'));
+
+    const history = {
+      getAgentSelectionStats(agentId: string, role: string) {
+        return {
+          agentId,
+          roleAssignments: agentId === 'claude' ? 50 : 0,
+          totalAssignments: agentId === 'claude' ? 100 : 0,
+          lastAssignedAt: '2026-09-22T12:00:00.000Z',
+        };
+      },
+    };
+
+    const selector = new AgentSelector(registry, { selectionHistory: history });
+    const selected = await selector.selectAgents([
+      {
+        role: 'architecture_reviewer',
+        requiredCapabilities: ['canRead'],
+        objective: 'Review architecture invariants',
+        preferredAgent: 'claude',
+      },
+    ]);
+
+    expect(selected).toHaveLength(1);
+    expect(selected[0].agent.id).toBe('claude');
+  });
+
   it('OpenAIRoutingProvider gracefully falls back to static provider without API key', async () => {
     const provider = new OpenAIRoutingProvider(undefined);
     const decision = await provider.route({

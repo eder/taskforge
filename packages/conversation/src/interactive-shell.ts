@@ -192,7 +192,9 @@ export class InteractiveShell {
     } else {
       this.router = new StaticRoutingProvider();
     }
-    this.agentSelector = new AgentSelector(this.agentRegistry);
+    this.agentSelector = new AgentSelector(this.agentRegistry, {
+      selectionHistory: this.assignmentRepo,
+    });
     this.interactionRepo = new InteractionRepository(this.db);
     this.interactionGateway = new InteractionGateway({
       config: this.config,
@@ -1260,7 +1262,9 @@ export class InteractiveShell {
           availableAgents: availableAgentIds,
         });
 
-        const selected = await this.agentSelector.selectAgents(routing.roles);
+        const selected = await this.agentSelector.selectAgents(routing.roles, {
+          selectionKey: `${this.repoRoot}:${primaryTask.id}`,
+        });
 
         const strategyUpper = routing.strategy.toUpperCase();
         const strategyColor = strategyUpper === 'PARALLEL' ? colors.cyan : colors.green;
@@ -1387,7 +1391,9 @@ export class InteractiveShell {
           availableAgents: availableAgentIds,
         });
 
-        const selected = await this.agentSelector.selectAgents(routing.roles);
+        const selected = await this.agentSelector.selectAgents(routing.roles, {
+          selectionKey: `${this.repoRoot}:${primaryTask.id}`,
+        });
 
         const strategyUpper = routing.strategy.toUpperCase();
         const strategyColor = strategyUpper === 'PARALLEL' ? colors.cyan : colors.green;

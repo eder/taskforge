@@ -268,6 +268,8 @@ The router recommends the minimum useful team for a task:
 - collaborative/pair execution;
 - competitive candidates where appropriate.
 
+Agent choice is deliberately separated from registry order. When the router names a healthy preferred agent, TaskForge honors that decision. When no preference exists, the selector chooses among healthy capability-compatible agents using persisted per-role assignment history (least-used first, then overall usage and recency) and an order-independent rendezvous hash for exact ties. Registering Claude before Codex or Antigravity must never become an accidental routing policy.
+
 Routing is advisory. Deterministic code owns authoritative state.
 
 ### Isolation

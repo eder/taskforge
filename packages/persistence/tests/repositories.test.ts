@@ -107,6 +107,78 @@ describe('Persistence - SQLite Repositories', () => {
     expect(rework).toBe(1);
   });
 
+  it('reports per-agent selection history for fair routing', () => {
+    runRepo.create('run-fairness');
+    taskRepo.create({
+      id: 'TASK-R1',
+      runId: 'run-fairness',
+      title: 'Research one',
+      description: 'Research task',
+      type: 'investigation',
+      status: 'running',
+    });
+    taskRepo.create({
+      id: 'TASK-R2',
+      runId: 'run-fairness',
+      title: 'Research two',
+      description: 'Research task',
+      type: 'investigation',
+      status: 'running',
+    });
+    taskRepo.create({
+      id: 'TASK-I1',
+      runId: 'run-fairness',
+      title: 'Implement one',
+      description: 'Implementation task',
+      type: 'implementation',
+      status: 'running',
+    });
+
+    assignmentRepo.create(
+      {
+        id: 'ASGN-R1',
+        taskId: 'TASK-R1',
+        agentId: 'claude',
+        role: 'researcher',
+        objective: 'Research',
+        status: 'completed',
+      },
+      'run-fairness',
+    );
+    assignmentRepo.create(
+      {
+        id: 'ASGN-R2',
+        taskId: 'TASK-R2',
+        agentId: 'claude',
+        role: 'researcher',
+        objective: 'Research again',
+        status: 'completed',
+      },
+      'run-fairness',
+    );
+    assignmentRepo.create(
+      {
+        id: 'ASGN-I1',
+        taskId: 'TASK-I1',
+        agentId: 'claude',
+        role: 'implementer',
+        objective: 'Implement',
+        status: 'completed',
+      },
+      'run-fairness',
+    );
+
+    const claude = assignmentRepo.getAgentSelectionStats('claude', 'researcher');
+    const codex = assignmentRepo.getAgentSelectionStats('codex', 'researcher');
+
+    expect(claude.totalAssignments).toBe(3);
+    expect(claude.roleAssignments).toBe(2);
+    expect(claude.lastAssignedAt).toBeDefined();
+    expect(codex.totalAssignments).toBe(0);
+    expect(codex.roleAssignments).toBe(0);
+    expect(codex.lastAssignedAt).toBeUndefined();
+  });
+
   it('records process execution and events', () => {
     runRepo.create('run-1');
     taskRepo.create({

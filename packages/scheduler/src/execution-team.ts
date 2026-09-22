@@ -760,6 +760,7 @@ async function runConcurrentTeam(
 
         const replacement = await agentSelector.selectAgentForRole(roleRequest, {
           excludeAgentIds: triedAgentIds,
+          selectionKey: `${ctx.repoRoot}:${task.id}:failover:${asgn.role}`,
         });
 
         if (!replacement) {
