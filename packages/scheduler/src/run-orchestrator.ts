@@ -451,7 +451,7 @@ export class RunOrchestrator {
 
         // Single product boundary for every staffing source, including
         // preflight/emergent collaboration. Nothing bypasses fan-out economics.
-        let routing = RouterQualityGuard.evaluate(routingProposal, {
+        const routing = RouterQualityGuard.evaluate(routingProposal, {
           task,
           availableAgents,
         });
@@ -679,6 +679,26 @@ export class RunOrchestrator {
     }
 
     const durationMs = Date.now() - startTime;
+
+    // Run-level metrics belong to the orchestration boundary, not to a
+    // presentation surface. This keeps interactive, headless and API-driven
+    // executions equally observable.
+    const efficiency = this.telemetry.getOrchestrationEfficiency(runId);
+    const staffing = this.telemetry.getStaffingMetrics(runId);
+    this.telemetry.recordRunMetrics({
+      runId,
+      durationMs,
+      tasksCount: efficiency.taskCount,
+      tasksCompleted: schedulerResult.tasksCompleted,
+      tasksFailed: schedulerResult.tasksFailed,
+      reworkCount: efficiency.reworkCount,
+      escalationsCount:
+        staffing.collaborationApprovedCount +
+        staffing.collaborationRejectedCount +
+        staffing.collaborationDelayedCount,
+      firstPassRate: efficiency.firstPassRate,
+    });
+
     options.onProgress?.(`Run finished with status ${schedulerResult.status} in ${durationMs}ms`);
 
     return {
