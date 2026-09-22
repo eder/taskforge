@@ -27,6 +27,19 @@ export const colors = {
   white: '\x1b[97m', // Pure Bright White
 };
 
+function formatResetAtLocal(resetAt?: Date): string | undefined {
+  if (!resetAt) return undefined;
+  if (Number.isNaN(resetAt.getTime())) return undefined;
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(resetAt);
+}
+
 export const theme = {
   brand: (s: string) => `${colors.brand}${s}${colors.reset}`,
   brandBold: (s: string) => `${colors.bold}${colors.brand}${s}${colors.reset}`,
@@ -51,6 +64,7 @@ export const theme = {
     ready: boolean,
     quotaStatus?: string,
     quotaReason?: string,
+    resetAt?: Date,
   ): string => {
     let color = colors.cyan;
     if (id.includes('claude')) color = colors.coral;
@@ -65,11 +79,21 @@ export const theme = {
 
     if (quotaStatus === 'quota_exhausted') {
       icon = `${colors.yellow}▲${colors.reset}`;
-      const reasonDetail = quotaReason ? ` ${colors.dim}(${quotaReason})${colors.reset}` : '';
+      const resetLabel = formatResetAtLocal(resetAt);
+      const reasonDetail = resetLabel
+        ? ` ${colors.dim}(resets at ${resetLabel})${colors.reset}`
+        : quotaReason
+          ? ` ${colors.dim}(${quotaReason})${colors.reset}`
+          : '';
       statusText = `${colors.yellow}quota exhausted${colors.reset}${reasonDetail}`;
     } else if (quotaStatus === 'rate_limited') {
       icon = `${colors.yellow}▲${colors.reset}`;
-      const reasonDetail = quotaReason ? ` ${colors.dim}(${quotaReason})${colors.reset}` : '';
+      const resetLabel = formatResetAtLocal(resetAt);
+      const reasonDetail = resetLabel
+        ? ` ${colors.dim}(retry at ${resetLabel})${colors.reset}`
+        : quotaReason
+          ? ` ${colors.dim}(${quotaReason})${colors.reset}`
+          : '';
       statusText = `${colors.yellow}rate limited${colors.reset}${reasonDetail}`;
     } else if (quotaStatus === 'auth_failed') {
       icon = `${colors.red}▲${colors.reset}`;
