@@ -150,6 +150,26 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
          VALUES ('EXEC-B', ?, 'TASK-B', 'ASGN-TASK-B', 'claude', ?, ?, 0, 'success')`,
       ).run(runId, '2026-09-22T12:00:02.000Z', '2026-09-22T12:00:12.000Z');
 
+      db.prepare(
+        `INSERT INTO events (id, run_id, task_id, type, payload_json, timestamp)
+         VALUES ('EVT-ROUTE', ?, 'TASK-A', 'ROUTING_DECIDED', ?, ?)`,
+      ).run(
+        runId,
+        JSON.stringify({
+          strategy: 'parallel',
+          teamSize: 2,
+          fanOutAssessment: {
+            requested: true,
+            admitted: true,
+            requestedTeamSize: 2,
+            admittedTeamSize: 2,
+            benefits: ['parallel_work'],
+            reasons: ['distinct work'],
+          },
+        }),
+        '2026-09-22T12:00:00.000Z',
+      );
+
       for (const [taskId, assignmentId, agentId, role] of [
         ['TASK-A', 'ASGN-TASK-A', 'codex', 'implementer'],
         ['TASK-B', 'ASGN-TASK-B', 'claude', 'architecture_reviewer'],
@@ -176,6 +196,9 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(report.observedParallelOverlapMs).toBe(8_000);
       expect(report.parallelismFactor).toBeGreaterThan(1.5);
       expect(report.wastedAssignments).toBe(0);
+      expect(report.fanOutDecisions).toBe(1);
+      expect(report.admittedFanOutDecisions).toBe(1);
+      expect(report.rejectedFanOutDecisions).toBe(0);
     });
 
     it('classifies false failover with wasted provider tokens as INEFFICIENT', () => {
