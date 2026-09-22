@@ -85,6 +85,17 @@ export type ModelCaller = (
   schema: Record<string, unknown>,
 ) => Promise<RawPlanOutput>;
 
+function isTerminalProviderError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const statusMatch = error.message.match(/HTTP\s+(\d{3})/i);
+  if (!statusMatch) return false;
+  const status = Number(statusMatch[1]);
+
+  // Retrying these immediately only adds latency: auth/configuration errors
+  // and quota limits will not heal within the same planning loop.
+  return status === 400 || status === 401 || status === 403 || status === 404 || status === 429;
+}
+
 export class SemanticPlanner implements Planner {
   private apiKey?: string;
   private model: string;
@@ -203,6 +214,9 @@ export class SemanticPlanner implements Planner {
           lastErrors = validation.errors;
         } catch (err) {
           lastErrors = [(err as Error).message];
+          if (isTerminalProviderError(err)) {
+            break;
+          }
         }
       }
     }
