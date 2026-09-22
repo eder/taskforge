@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { detectExecutionIntent } from '@taskforge/shared';
-import { Goal } from '@taskforge/core';
+import { Goal, Task, TaskGraph } from '@taskforge/core';
 import { HeuristicPlanner } from '../src/planner.js';
-import { normalizeGraphForExecutionIntent } from '../src/intent-guard.js';
+import {
+  normalizeGraphForExecutionIntent,
+  enforceLightweightReadOnlyPlanInvariant,
+} from '../src/intent-guard.js';
 
 describe('normalizeGraphForExecutionIntent', () => {
   it('downgrades a planner-produced implementation task to investigation when the run intent is READ_ONLY_ANALYSIS', async () => {
@@ -35,6 +38,66 @@ describe('normalizeGraphForExecutionIntent', () => {
     expect(task.contract.verification).toBeUndefined();
     expect(task.contract.allowedScope).toEqual([]);
     expect(task.contract.forbiddenChanges).toEqual(['*']);
+  });
+
+  it('collapses an over-decomposed project overview into one canonical read-only report task', () => {
+    const goal: Goal = {
+      id: 'goal-overview-hardening',
+      description: 'O que é esse projeto?',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+    const makeTask = (id: string, type: Task['type']): Task => ({
+      id,
+      goalId: goal.id,
+      title: `Task ${id}`,
+      description: 'Planner over-decomposed repository overview',
+      type,
+      status: 'proposed',
+      dependencies: [],
+      contract: {
+        objective: 'Inspect the repository',
+        allowedScope: ['*'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['Done'],
+        dependencies: [],
+        completionMode: type === 'implementation' ? 'mutation' : 'report',
+        metadata: {
+          recommendCollaboration: true,
+          collaboration: { requestedRoles: ['researcher', 'reviewer'], reason: 'planner guess' },
+        },
+      },
+      acceptanceCriteria: ['Done'],
+      reworkCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const graph = new TaskGraph([
+      makeTask('TASK-01', 'investigation'),
+      makeTask('TASK-02', 'investigation'),
+      makeTask('TASK-03', 'architecture'),
+      makeTask('TASK-04', 'review'),
+    ]);
+    const intent = detectExecutionIntent(goal.description);
+
+    const result = enforceLightweightReadOnlyPlanInvariant(graph, goal, intent);
+    const tasks = result.graph.getAllTasks();
+
+    expect(result.changed).toBe(true);
+    expect(result.originalTaskCount).toBe(4);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].type).toBe('investigation');
+    expect(tasks[0].dependencies).toEqual([]);
+    expect(tasks[0].contract.completionMode).toBe('report');
+    expect(tasks[0].contract.allowedScope).toEqual([]);
+    expect(tasks[0].contract.forbiddenChanges).toEqual(['*']);
+    expect(tasks[0].contract.metadata?.lightweightReadOnlyInvariant).toBe(true);
+    expect(tasks[0].contract.metadata?.recommendCollaboration).toBeUndefined();
+    expect(result.graph.metadata?.planInvariant).toBe('lightweight_read_only_single_task');
+    expect(result.graph.metadata?.originalTaskCount).toBe(4);
   });
 
   it('leaves the graph untouched when the run intent is IMPLEMENTATION without scoped restrictions', async () => {
