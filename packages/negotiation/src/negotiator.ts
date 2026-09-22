@@ -139,7 +139,7 @@ export interface ArchitectureBoundaryGuardResult {
 
 const STATEFUL_ARCHITECTURE_SIGNALS = [
   /\b(cache|caching|invalidate|invalidation|ttl|snapshot)\b/i,
-  /\b(event[- ]driven|reactive|events?|webhooks?|pub\/?sub|queue|stream)\b/i,
+  /\b(event[- ]driven|reactive|reativ[oa]|events?|eventos?|webhooks?|pub\/?sub|queue|stream)\b/i,
   /\b(consisten(?:cy|t)|state|sync(?:hroni[sz](?:e|ation))?|replication|materialized view|source of truth|persistence|persisted|offline)\b/i,
 ];
 
