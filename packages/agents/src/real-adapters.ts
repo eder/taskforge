@@ -974,6 +974,46 @@ export class AntigravityAdapter extends BaseCliAdapter {
     });
   }
 
+  public static recoverQuotaFromRecentLogs(customHome?: string): boolean {
+    const tracker = AgentQuotaTracker.getInstance();
+    if (!tracker.isAvailable('agy')) return true;
+
+    try {
+      const home = customHome || process.env.HOME || os.homedir();
+      const logDir = path.join(home, '.gemini', 'antigravity-cli', 'log');
+      if (!fs.existsSync(logDir)) return false;
+
+      const files = fs
+        .readdirSync(logDir)
+        .filter((name) => name.endsWith('.log'))
+        .map((name) => {
+          const fullPath = path.join(logDir, name);
+          return { fullPath, mtimeMs: fs.statSync(fullPath).mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)
+        .slice(0, 8);
+
+      for (const file of files) {
+        const raw = fs.readFileSync(file.fullPath, 'utf8');
+        const tail = raw.slice(-131_072);
+        const quotaLine = tail
+          .split('\n')
+          .reverse()
+          .find((line) =>
+            /RESOURCE_EXHAUSTED|individual quota reached|quota (?:reached|exceeded)/i.test(line),
+          );
+
+        if (!quotaLine) continue;
+        tracker.recordFailure('agy', quotaLine, file.mtimeMs);
+        if (!tracker.isAvailable('agy')) return true;
+      }
+    } catch {
+      // Best-effort recovery: inability to read provider logs must never block startup.
+    }
+
+    return false;
+  }
+
   public static ensurePrerequisites(worktreeOrRepoPath?: string, customHome?: string): void {
     try {
       const home = customHome || process.env.HOME || os.homedir();
@@ -1051,6 +1091,7 @@ export class AntigravityAdapter extends BaseCliAdapter {
 
   async detect(): Promise<boolean> {
     AntigravityAdapter.ensurePrerequisites();
+    AntigravityAdapter.recoverQuotaFromRecentLogs();
     return super.detect();
   }
 
