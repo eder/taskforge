@@ -245,6 +245,15 @@ export function getGlobalConfigPath(): string {
   return path.resolve(os.homedir(), '.taskforge/config.yaml');
 }
 
+/**
+ * Provider availability belongs to the TaskForge installation/user, not to
+ * any individual repository. Keep this control-plane state global so a quota
+ * failure learned in one project is respected immediately in every project.
+ */
+export function getGlobalStateDatabasePath(): string {
+  return path.resolve(os.homedir(), '.taskforge/state.db');
+}
+
 export function resolveOpenAIApiKey(config?: TaskForgeConfig): string | undefined {
   if (process.env.TASKFORGE_OPENAI_API_KEY && process.env.TASKFORGE_OPENAI_API_KEY.trim().length > 0) {
     return process.env.TASKFORGE_OPENAI_API_KEY.trim();
