@@ -146,27 +146,27 @@ export async function executeGovernedAssignment(
     ctx.communicationBus.registerAgent(assignment.id, agent);
   }
 
-  // Activity represents live agent execution, not provisioning or completed
-  // history. Register only once setup/concurrency acquisition succeeded so a
-  // setup failure cannot leave a ghost agent in the cockpit.
-  ctx.activityTracker?.register({
-    taskId: task.id,
-    assignmentId: assignment.id,
-    taskTitle: task.title,
-    agentId: agent.id,
-    agentName: agent.name,
-    role: assignment.role,
-    status: 'Agent executing in worktree...',
-    startedAt: new Date(),
-    lastActiveAt: new Date(),
-    logPath,
-  });
-
   let session: import('@taskforge/shared').AgentSession | undefined;
   let agentResult: AgentResult = { success: false, message: 'Execution did not complete', durationMs: 0 };
   let thrownError: Error | undefined;
 
   try {
+    // Activity represents live agent execution, not provisioning or completed
+    // history. Register only once setup/concurrency acquisition succeeded so a
+    // setup failure cannot leave a ghost agent in the cockpit.
+    ctx.activityTracker?.register({
+      taskId: task.id,
+      assignmentId: assignment.id,
+      taskTitle: task.title,
+      agentId: agent.id,
+      agentName: agent.name,
+      role: assignment.role,
+      status: 'Agent executing in worktree...',
+      startedAt: new Date(),
+      lastActiveAt: new Date(),
+      logPath,
+    });
+
     if (agent.createSession) {
       session = await agent.createSession(assignment, {
         worktreePath: wt.path,
