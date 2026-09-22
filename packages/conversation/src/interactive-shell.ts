@@ -156,9 +156,11 @@ export class InteractiveShell {
     this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
     this.availabilityDb =
       options.database ?? new TaskForgeDatabase(getGlobalStateDatabasePath());
-    AgentQuotaTracker.getInstance().configureStore(
-      new AgentAvailabilityRepository(this.availabilityDb),
-    );
+    const globalAvailability = new AgentAvailabilityRepository(this.availabilityDb);
+    if (this.availabilityDb !== this.db) {
+      globalAvailability.mergeFrom(new AgentAvailabilityRepository(this.db));
+    }
+    AgentQuotaTracker.getInstance().configureStore(globalAvailability);
     this.eventRepo = new EventRepository(this.db);
     this.taskRepo = new TaskRepository(this.db);
     this.assignmentRepo = new AssignmentRepository(this.db);
