@@ -159,6 +159,17 @@ export interface DeniedAction {
   command?: string;
 }
 
+export type AgentUsageSource = 'provider_reported' | 'taskforge_estimated' | 'unavailable';
+
+export interface AgentUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens?: number;
+  totalTokens: number;
+  modelName?: string;
+  source: AgentUsageSource;
+}
+
 export interface ProviderExecutionOutcome {
   processExitCode: number;
   providerStatus?: string;
@@ -169,6 +180,7 @@ export interface ProviderExecutionOutcome {
   warnings: string[];
   artifacts: Array<{ path: string; description?: string; type?: string }>;
   runtimeLogRef?: string;
+  usage?: AgentUsage;
 }
 
 export type CompletionFailureReason =
@@ -219,6 +231,7 @@ export interface AgentResult {
   normalizedOutcome?: ProviderExecutionOutcome;
   completionReason?: CompletionFailureReason;
   completionEvidence?: CompletionEvidence;
+  usage?: AgentUsage;
 }
 
 export function generateRunId(): string {
