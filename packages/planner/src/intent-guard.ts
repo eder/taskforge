@@ -42,7 +42,11 @@ export function normalizeGraphForExecutionIntent(
         const originalForbiddenChanges = [...(task.contract.forbiddenChanges ?? [])];
         task.type = 'investigation';
         task.contract.allowedScope = [];
-        task.contract.forbiddenChanges = ['*'];
+        task.contract.forbiddenChanges = Array.from(
+          new Set(['*', ...originalForbiddenChanges, ...intent.forbiddenChanges]),
+        );
+        task.contract.completionMode = 'report';
+        task.contract.verification = undefined;
 
         normalizations.push({
           taskId: task.id,
@@ -50,7 +54,7 @@ export function normalizeGraphForExecutionIntent(
           normalizedTaskType: 'investigation',
           executionIntent: intent.intent,
           originalForbiddenChanges,
-          normalizedForbiddenChanges: ['*'],
+          normalizedForbiddenChanges: [...task.contract.forbiddenChanges],
           reason: `Execution intent is READ_ONLY_ANALYSIS (${intent.reason}) but task was planned as '${originalTaskType}' with a mutable scope; normalized to a read-only investigation.`,
         });
       }
