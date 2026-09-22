@@ -26,7 +26,7 @@ export class AdaptiveRoutingProvider implements RoutingProvider {
       provider: this.id,
       adaptive: true,
       details: hasEngine
-        ? `Adaptive engine active with fallback: ${this.fallbackProvider.id}`
+        ? `Adaptive structure active with deterministic task-agent fit; fallback: ${this.fallbackProvider.id}`
         : 'Performance engine not attached, falling back to static',
     };
   }
@@ -53,7 +53,5 @@ export class AdaptiveRoutingProvider implements RoutingProvider {
         policyAdjustment: baseDecision.policyAdjustment,
       },
     };
-
-}
   }
 }
