@@ -470,6 +470,13 @@ export class RunOrchestrator {
       }
     }
 
+    // Freeze calibration at run start so every assignment baseline is
+    // compared against history that existed before this run, not against
+    // sibling assignments that happened to finish a few milliseconds earlier.
+    const runUsageCalibration = this.usageCalibration.getTaskTypeCalibrations(
+      graph.getAllTasks().map((task) => task.type),
+    );
+
     // 7. Deterministic Scheduler
     options.onProgress?.(`Scheduling ${graph.getAllTasks().length} tasks across worktrees...`);
     const scheduler = new DeterministicScheduler({
@@ -499,14 +506,11 @@ export class RunOrchestrator {
       activityTracker: options.activityTracker ?? this.activityTracker,
       streamBus: options.streamBus ?? this.streamBus,
       onAgentUsage: ({ task, assignment, agentId, usage }) => {
-        const calibrationByTaskType = this.usageCalibration.getTaskTypeCalibrations([
-          task.type,
-        ]);
         const planned = ExecutionUsageEstimator.estimateRun({
           tasks: [task],
           originalUserRequest: goalDescription,
           assignmentCounts: { [task.id]: 1 },
-          calibrationByTaskType,
+          calibrationByTaskType: runUsageCalibration,
         }).expectedTokens;
 
         this.telemetry.recordTaskTokens({
