@@ -98,3 +98,39 @@ export interface RunSummaryStats {
   firstPassRate: number;
   staffingBottlenecks?: StaffingBottlenecks;
 }
+
+export type OrchestrationEfficiencyOutcome =
+  | 'right_sized'
+  | 'fan_out_justified'
+  | 'fan_out_not_justified'
+  | 'inconclusive';
+
+export interface OrchestrationEfficiencyReport {
+  runId: string;
+  outcome: OrchestrationEfficiencyOutcome;
+  reasons: string[];
+  taskCount: number;
+  assignmentCount: number;
+  usefulAssignments: number;
+  wastedAssignments: number;
+  wastedAssignmentRatio: number;
+  uniqueAgents: number;
+  multiAgent: boolean;
+  retryOrFailoverAssignments: number;
+  providerReportedTokens: number;
+  wastedProviderTokens: number;
+  wastedTokenRatio?: number;
+  tokenVarianceRatio?: number;
+  serialExecutionMs: number;
+  activeExecutionMs: number;
+  observedParallelOverlapMs: number;
+  parallelismFactor: number;
+  completionGateRejections: number;
+  reworkCount: number;
+  firstPassRate: number;
+  specializedQualityAssignments: number;
+  runSucceeded: boolean;
+  timeBenefitObserved: boolean;
+  qualityGuardSignalObserved: boolean;
+  tokenWasteAcceptable: boolean;
+}
