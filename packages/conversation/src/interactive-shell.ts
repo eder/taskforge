@@ -41,7 +41,7 @@ import {
   AssignmentRepository,
   AuditService,
 } from '@taskforge/persistence';
-import { TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '@taskforge/telemetry';
+import { TelemetryCollector, PerformanceEngine, ExecutionUsageEstimator } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
 import { SessionRegistry } from '@taskforge/collaboration';
@@ -52,6 +52,12 @@ import { SlashMenu } from './slash-menu.js';
 import { LiveTicker } from './live-ticker.js';
 import { StreamViewer } from './stream-viewer.js';
 import { CockpitPanels } from './cockpit-panels.js';
+
+function formatApproxTokens(value: number): string {
+  if (value < 1000) return value.toLocaleString();
+  const thousands = value / 1000;
+  return `${thousands >= 10 ? thousands.toFixed(0) : thousands.toFixed(1)}k`;
+}
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -1233,18 +1239,29 @@ export class InteractiveShell {
           )
           .join(', ');
 
-        const totalEstimatedTokens = tasks.reduce(
-          (sum, t) => sum + TaskTokenEstimator.estimateTask(t).totalEstimatedTokens,
-          0,
+        const primaryAssignmentCount = Math.max(
+          1,
+          selected.length || routing.teamSize || 1,
         );
-        const tokensFormatted = totalEstimatedTokens.toLocaleString();
+        const usageEstimate = ExecutionUsageEstimator.estimateRun({
+          tasks,
+          originalUserRequest: intent.goal,
+          assignmentCounts: {
+            [primaryTask.id]: primaryAssignmentCount,
+          },
+        });
+        const usageByTask = new Map(
+          usageEstimate.breakdown.map((estimate) => [estimate.taskId, estimate]),
+        );
 
         const taskFormattedList = tasks.map((t, idx) => {
           const icon = theme.taskTypeIcon(t.type);
           const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
           const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
-          const est = TaskTokenEstimator.estimateTask(t);
-          const tokenTag = `${colors.dim}(~${est.totalEstimatedTokens.toLocaleString()} tokens)${colors.reset}`;
+          const estimate = usageByTask.get(t.id);
+          const tokenTag = estimate
+            ? `${colors.dim}(~${formatApproxTokens(estimate.minTokens)}–${formatApproxTokens(estimate.maxTokens)} tokens, ${estimate.assignmentCount} baseline assignment${estimate.assignmentCount === 1 ? '' : 's'})${colors.reset}`
+            : '';
           return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
         });
 
@@ -1284,7 +1301,8 @@ export class InteractiveShell {
           `  ${colors.dim}Router:${colors.reset}   ${routerSource}${policyBadge}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
-          `Estimated tokens: ~${tokensFormatted} tokens.`,
+          `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
+          `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
@@ -1343,18 +1361,29 @@ export class InteractiveShell {
           )
           .join(', ');
 
-        const totalEstimatedTokens = tasks.reduce(
-          (sum, t) => sum + TaskTokenEstimator.estimateTask(t).totalEstimatedTokens,
-          0,
+        const primaryAssignmentCount = Math.max(
+          1,
+          selected.length || routing.teamSize || 1,
         );
-        const tokensFormatted = totalEstimatedTokens.toLocaleString();
+        const usageEstimate = ExecutionUsageEstimator.estimateRun({
+          tasks,
+          originalUserRequest: goal.description,
+          assignmentCounts: {
+            [primaryTask.id]: primaryAssignmentCount,
+          },
+        });
+        const usageByTask = new Map(
+          usageEstimate.breakdown.map((estimate) => [estimate.taskId, estimate]),
+        );
 
         const taskFormattedList = tasks.map((t, idx) => {
           const icon = theme.taskTypeIcon(t.type);
           const typeBadge = `${colors.brandLight}[${t.type.toUpperCase()}]${colors.reset}`;
           const titleStyled = `${colors.bold}${t.title}${colors.reset}`;
-          const est = TaskTokenEstimator.estimateTask(t);
-          const tokenTag = `${colors.dim}(~${est.totalEstimatedTokens.toLocaleString()} tokens)${colors.reset}`;
+          const estimate = usageByTask.get(t.id);
+          const tokenTag = estimate
+            ? `${colors.dim}(~${formatApproxTokens(estimate.minTokens)}–${formatApproxTokens(estimate.maxTokens)} tokens, ${estimate.assignmentCount} baseline assignment${estimate.assignmentCount === 1 ? '' : 's'})${colors.reset}`
+            : '';
           return `  ${colors.dim}${idx + 1}.${colors.reset} ${icon} ${typeBadge} ${titleStyled} ${tokenTag}`;
         });
 
@@ -1362,7 +1391,8 @@ export class InteractiveShell {
           `${colors.brand}✦ Revised Plan${colors.reset} ${colors.dim}(Revision: ${intent.revision.details})${colors.reset}`,
           `Understood. Recommended strategy: ${strategyColor}${colors.bold}${strategyUpper}${colors.reset} ${colors.dim}(Complexity: ${routing.complexity}, Risk: ${routing.risk})${colors.reset}.`,
           `Suggested team: ${teamFormatted}.`,
-          `Estimated tokens: ~${tokensFormatted} tokens.`,
+          `Estimated agent usage: ~${formatApproxTokens(usageEstimate.minTokens)}–${formatApproxTokens(usageEstimate.maxTokens)} tokens (expected ~${formatApproxTokens(usageEstimate.expectedTokens)}, confidence: ${usageEstimate.confidence}).`,
+          `Baseline assignments: ${usageEstimate.baselineAssignments}. Retries, failover, emergent collaboration and provider-hidden context are not included.`,
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
