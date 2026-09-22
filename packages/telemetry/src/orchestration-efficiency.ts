@@ -174,7 +174,7 @@ export class OrchestrationEfficiencyAnalyzer {
         outcome = 'right_sized';
         reasons.push('Single-agent execution completed first-pass without wasted assignments.');
       } else {
-        outcome = 'fan_out_not_justified';
+        outcome = 'inefficient';
         reasons.push('Execution was not multi-agent, but retries/rework created avoidable orchestration waste.');
       }
     } else if (
@@ -195,7 +195,7 @@ export class OrchestrationEfficiencyAnalyzer {
       !tokenWasteAcceptable ||
       (!timeBenefitObserved && !qualityGuardSignalObserved)
     ) {
-      outcome = 'fan_out_not_justified';
+      outcome = 'inefficient';
       if (!assignmentWasteAcceptable) {
         reasons.push('More than 20% of assignments failed or were cancelled.');
       }
