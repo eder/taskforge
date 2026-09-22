@@ -36,8 +36,9 @@ export function normalizeGraphForExecutionIntent(
         task.contract.allowedScope.length === 0 ||
         task.contract.allowedScope.every((s) => s === '');
       const isMutatingType = task.type === 'implementation' || task.type === 'refactoring';
+      const hasMutatingCompletionMode = task.contract.completionMode === 'mutation';
 
-      if (isMutatingType || !forbidsWildcard || !scopeIsClosed) {
+      if (isMutatingType || hasMutatingCompletionMode || !forbidsWildcard || !scopeIsClosed) {
         const originalTaskType = task.type;
         const originalForbiddenChanges = [...(task.contract.forbiddenChanges ?? [])];
         task.type = 'investigation';
