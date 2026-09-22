@@ -81,6 +81,29 @@ export class AgentAvailabilityRepository {
     this.db.exec('DELETE FROM agent_availability;');
   }
 
+  /**
+   * Merge still-active provider failures from a legacy/project-local store
+   * into this repository. Newer records win so opening an older project can
+   * never overwrite fresher global availability state.
+   */
+  mergeFrom(source: AgentAvailabilityRepository, now = Date.now()): number {
+    const persistable = new Set(['quota_exhausted', 'rate_limited', 'auth_failed']);
+    let merged = 0;
+
+    for (const record of source.list()) {
+      if (!persistable.has(record.status)) continue;
+      if (record.resetAt !== undefined && record.resetAt <= now) continue;
+
+      const existing = this.get(record.agentId);
+      if (existing && existing.recordedAt >= record.recordedAt) continue;
+
+      this.upsert(record);
+      merged++;
+    }
+
+    return merged;
+  }
+
   private mapRow(row: {
     agent_id: string;
     status: string;
