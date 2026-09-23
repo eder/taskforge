@@ -69,6 +69,7 @@ export interface RoutingDecision {
   provider?: string;
   model?: string;
   fallbackReason?: RouterFallbackReason;
+  fallbackDetail?: string;
   promptVersion?: string;
   contextHash?: string;
 
@@ -83,6 +84,7 @@ export interface RoutingDecision {
     provider?: string;
     model?: string;
     fallbackReason?: RouterFallbackReason;
+    fallbackDetail?: string;
     routerProposal?: RouterProposal;
     policyAdjustment?: PolicyAdjustment;
   };
