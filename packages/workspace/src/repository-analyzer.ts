@@ -69,6 +69,44 @@ export class RepositoryAnalyzer {
       }
     }
 
+    // Polyglot/subproject inspection. Root-only detection is insufficient for
+    // repositories that keep Python, Node, iOS, or other build systems in
+    // dedicated directories.
+    const topLevelEntries = fs.readdirSync(this.repoRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules');
+    for (const entry of topLevelEntries) {
+      const subdir = path.join(this.repoRoot, entry.name);
+      const subPkgPath = path.join(subdir, 'package.json');
+      if (fs.existsSync(subPkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(subPkgPath, 'utf8'));
+          languages.add('JavaScript');
+          if (fs.existsSync(path.join(subdir, 'tsconfig.json')) || pkg.devDependencies?.typescript || pkg.dependencies?.typescript) {
+            languages.add('TypeScript');
+          }
+          const pm = fs.existsSync(path.join(subdir, 'pnpm-lock.yaml')) ? 'pnpm'
+            : fs.existsSync(path.join(subdir, 'yarn.lock')) ? 'yarn'
+            : fs.existsSync(path.join(subdir, 'bun.lockb')) ? 'bun'
+            : 'npm';
+          if (pkg.scripts?.test) testCommands.push(`cd ${entry.name} && ${pm} test`);
+          if (pkg.scripts?.lint) lintCommands.push(`cd ${entry.name} && ${pm} run lint`);
+          if (pkg.scripts?.typecheck) typecheckCommands.push(`cd ${entry.name} && ${pm} run typecheck`);
+          if (pkg.scripts?.build) buildCommands.push(`cd ${entry.name} && ${pm} run build`);
+        } catch {
+          // invalid subproject package.json
+        }
+      }
+
+      if (fs.existsSync(path.join(subdir, 'pyproject.toml')) || fs.existsSync(path.join(subdir, 'requirements.txt'))) {
+        languages.add('Python');
+        testCommands.push(`python -m pytest ${entry.name}`);
+      }
+
+      if (entry.name === 'ios' && fs.readdirSync(subdir).some((name) => name.endsWith('.xcodeproj'))) {
+        languages.add('Swift');
+      }
+    }
+
     // Python inspection
     if (
       fs.existsSync(path.join(this.repoRoot, 'pyproject.toml')) ||
