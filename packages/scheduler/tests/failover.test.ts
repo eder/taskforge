@@ -101,8 +101,13 @@ describe('DeterministicScheduler Agent Failover', () => {
     taskRepo.create(task);
     const graph = new TaskGraph([task]);
 
-    // Agent 1 always fails
+    // Agent 1 fails twice: the first failure must trigger same-agent recovery,
+    // and the second must exhaust that repair path and trigger failover.
     const failingAgent = new FakeAgent('failing-codex', 'Failing Codex CLI', [
+      {
+        shouldFail: true,
+        failMessage: 'You have hit your usage limit',
+      },
       {
         shouldFail: true,
         failMessage: 'You have hit your usage limit',
@@ -163,7 +168,12 @@ describe('DeterministicScheduler Agent Failover', () => {
     expect(result.tasksCompleted).toBe(1);
     expect(result.tasksFailed).toBe(0);
 
-    // Verify progress captured failure and failover reassignment
+    // Verify progress captured same-agent recovery before failover reassignment.
+    const recoveryMsg = progressMessages.find((m) =>
+      m.includes('returning concrete failure evidence to the same agent'),
+    );
+    expect(recoveryMsg).toBeDefined();
+
     const failMsg = progressMessages.find((m) => m.includes('failed'));
     expect(failMsg).toBeDefined();
     expect(failMsg).toContain('Failing Codex CLI');
