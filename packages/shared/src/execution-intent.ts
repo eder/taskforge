@@ -58,6 +58,30 @@ const EXPLANATION_PATTERN =
   /\b(explain|analyze|analyse|evaluate|assess|review|opinion|what do you think|recommend|investigate|understand|summari[sz]e|summary|overview|describe|tell me about|avalie|analise|explique|opini[ãa]o|investigue|entenda|resuma|resumir|resumo|descreva|vis[aã]o geral)\b/i;
 
 /**
+ * Decision/advisory questions often contain implementation verbs inside a
+ * hypothetical ("should I add cache?", "faz sentido eu adicionar cache?").
+ * Those verbs describe the option being evaluated, not authorization to mutate.
+ */
+const ADVISORY_QUESTION_PATTERNS: RegExp[] = [
+  /\b(?:should|would|could)\s+i\s+(?:add|implement|create|build|use|move|replace|refactor|remove)\b/i,
+  /\b(?:does|would)\s+it\s+make\s+sense\s+to\s+(?:add|implement|create|build|use|move|replace|refactor|remove)\b/i,
+  /\b(?:is\s+it\s+worth|would\s+you\s+recommend)\b[^?\n]{0,120}\b(?:add|adding|implement|implementing|create|creating|use|using|move|moving|replace|replacing|refactor|refactoring|remove|removing)\b/i,
+  /\b(?:do\s+you\s+think\s+i\s+should)\b[^?\n]{0,120}\b(?:add|implement|create|build|use|move|replace|refactor|remove)\b/i,
+  /\b(?:faz\s+sentido|vale\s+a\s+pena)\b[^?\n]{0,120}\b(?:eu\s+)?(?:adicionar|implementar|criar|usar|mover|trocar|substituir|refatorar|remover)\b/i,
+  /\b(?:devo|deveria|seria\s+melhor)\b[^?\n]{0,120}\b(?:adicionar|implementar|criar|usar|mover|trocar|substituir|refatorar|remover)\b/i,
+  /\b(?:veja|avalie|analise)\s+se\b[^?\n]{0,160}\b(?:faz\s+sentido|vale\s+a\s+pena|devo|deveria)\b/i,
+];
+
+const EXPLICIT_FOLLOWUP_MUTATION_PATTERN =
+  /\b(?:and\s+then|then|if\s+so[, ]+|and\s+if\s+so[, ]+|e\s+depois|depois|se\s+sim[, ]+|e\s+se\s+sim[, ]+)\s*(?:please\s+)?(?:add|implement|create|build|fix|update|refactor|remove|adicione|implemente|crie|corrija|atualize|refatore|remova)\b/i;
+
+export function isAdvisoryReadOnlyRequest(text: string): boolean {
+  const source = text ?? '';
+  if (!ADVISORY_QUESTION_PATTERNS.some((pattern) => pattern.test(source))) return false;
+  return !EXPLICIT_FOLLOWUP_MUTATION_PATTERN.test(source);
+}
+
+/**
  * Clause terminators deliberately treat "." as punctuation only when it is
  * followed by whitespace/end. That keeps file names such as package.json or
  * README.md intact.
@@ -215,6 +239,7 @@ export function detectExecutionIntent(goalDescription: string): ExecutionIntentD
   const hasPositiveMutationRequest = ACTION_VERB_PATTERN.test(positiveMutationText);
 
   if (
+    isAdvisoryReadOnlyRequest(text) ||
     isExplanationOnlyHeuristic(text) ||
     (!hasPositiveMutationRequest && scopedRestrictions.length > 0)
   ) {
