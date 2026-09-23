@@ -1501,7 +1501,7 @@ export class InteractiveShell {
         // Read-only analysis is reversible and cannot produce delivery. Do not
         // force the user through a write-oriented approval ceremony for a
         // question that TaskForge already classified as non-mutating.
-        if (executionIntent.intent === 'READ_ONLY_ANALYSIS') {
+        if (executionIntent.intent === 'READ_ONLY_ANALYSIS' && selected.length > 0) {
           return this.handleInput('/approve', abortSignal);
         }
 
