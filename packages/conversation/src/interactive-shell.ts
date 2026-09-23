@@ -727,7 +727,10 @@ export class InteractiveShell {
     const outputs = Object.entries(result.taskOutputs ?? {})
       .filter(([, text]) => text && text.trim().length > 0)
       .map(([taskId, text]) => {
-        const header = `Explanation & Analysis [${taskId}]`;
+        const header =
+          result.status === 'completed'
+            ? `Explanation & Analysis [${taskId}]`
+            : `Last Attempt Output — NOT VERIFIED / NOT DELIVERED [${taskId}]`;
         const sanitized = sanitizeDisplayedRepositoryPaths(
           sanitizeTaskOutput(text.trim()),
           this.repoRoot,
@@ -738,7 +741,11 @@ export class InteractiveShell {
       })
       .join('\n\n');
 
-    const outputPrefix = outputs ? `${outputs}\n` : '';
+    const outputPrefix = outputs
+      ? result.status === 'completed'
+        ? `${outputs}\n`
+        : `  ${colors.yellow}▲ Agent output below is evidence from a failed run. TaskForge did not verify or deliver it.${colors.reset}\n\n${outputs}\n`
+      : '';
 
     const isSuccess = result.status === 'completed';
     const isCancelled = result.status === 'cancelled';
