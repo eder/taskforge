@@ -13,6 +13,16 @@ export const AgentConfigSchema = z.object({
   env: z.record(z.string()).optional(),
 });
 
+const OwnershipRuleSchema = z.object({
+  scope: z.string().min(1),
+  writers: z.array(z.string().min(1)).min(1),
+});
+
+const ScopedVerificationRuleSchema = z.object({
+  scope: z.string().min(1),
+  commands: z.array(z.string().min(1)).min(1),
+});
+
 export const TaskForgeConfigSchema = z.object({
   version: z.number().default(1),
   ui: z
@@ -72,6 +82,11 @@ export const TaskForgeConfigSchema = z.object({
     codex: { enabled: true, maxParallel: 2 },
     agy: { enabled: true, maxParallel: 1 },
   }),
+  ownership: z
+    .object({
+      rules: z.array(OwnershipRuleSchema).default([]),
+    })
+    .default({ rules: [] }),
   verification: z
     .object({
       tests: z.boolean().default(true),
@@ -79,6 +94,8 @@ export const TaskForgeConfigSchema = z.object({
       typecheck: z.boolean().default(true),
       review: z.boolean().default(true),
       maxReworkCycles: z.number().int().nonnegative().default(2),
+      commands: z.array(z.string().min(1)).default([]),
+      scopedCommands: z.array(ScopedVerificationRuleSchema).default([]),
     })
     .default({
       tests: true,
@@ -86,6 +103,8 @@ export const TaskForgeConfigSchema = z.object({
       typecheck: true,
       review: true,
       maxReworkCycles: 2,
+      commands: [],
+      scopedCommands: [],
     }),
   plugins: z
     .object({
