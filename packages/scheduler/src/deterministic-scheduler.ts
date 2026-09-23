@@ -396,10 +396,10 @@ export class DeterministicScheduler {
         const agentId = this.resolveAgentId(task);
         if (!agentId) {
           const allowedWriters = allowedWritersForTask(task, this.ctx.config);
-          const ownershipBlocked = allowedWriters !== undefined && allowedWriters.size > 0;
+          const ownershipBlocked = allowedWriters !== undefined;
           this.ctx.onProgress?.(
             ownershipBlocked
-              ? `[${task.id}] ✗ Task is BLOCKED: no healthy agent is authorized for scope ${task.contract.allowedScope.join(', ')}. Allowed writers: ${[...allowedWriters].join(', ')}.`
+              ? `[${task.id}] ✗ Task is BLOCKED: no healthy agent is authorized for scope ${task.contract.allowedScope.join(', ')}. Allowed writers: ${allowedWriters.size > 0 ? [...allowedWriters].join(', ') : '(none after policy intersection)'}.`
               : `[${task.id}] ✗ No healthy coding agent is currently available; task will not be sent to a known-unavailable provider.`,
           );
           graph.updateTaskStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
