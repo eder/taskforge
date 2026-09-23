@@ -29,6 +29,8 @@ import { CompletionGate, sanitizeTaskOutput } from './completion-gate.js';
 import {
   RecoveryIncident,
   RecoveryFailureClass,
+  classifyCompletionFailure,
+  classifyExecutionFailure,
   classifyVerificationFailure,
   decideTaskRecovery,
   formatRecoveryContext,
@@ -1071,10 +1073,10 @@ export class DeterministicScheduler {
       await this.recoverTask(task, {
         agentId,
         phase: 'execution',
-        failureClass:
-          govResult.completionReason === 'PROVIDER_QUOTA_EXCEEDED'
-            ? 'provider_quota'
-            : 'code_or_test',
+        failureClass: classifyExecutionFailure(
+          govResult.completionReason,
+          agentResult.output,
+        ),
         reason,
         evidence: agentResult.output,
         candidateCommit: agentResult.commitHash,
@@ -1173,8 +1175,12 @@ export class DeterministicScheduler {
       await this.recoverTask(task, {
         agentId,
         phase: 'completion',
+        failureClass: classifyCompletionFailure(
+          gateResult.failureReason,
+          [gateResult.evidence.explanation, agentResult.output].filter(Boolean).join('\n'),
+        ),
         reason: gateResult.failureReason ?? 'Completion gate rejected the attempt',
-        evidence: gateResult.evidence.explanation,
+        evidence: [gateResult.evidence.explanation, agentResult.output].filter(Boolean).join('\n'),
         candidateCommit: agentResult.commitHash,
         assignmentId,
       });
@@ -1283,7 +1289,10 @@ export class DeterministicScheduler {
         await this.recoverTask(task, {
           agentId,
           phase: 'verification',
-          failureClass: classifyVerificationFailure(verResult.failureReason),
+          failureClass: classifyVerificationFailure(
+            verResult.failureReason,
+            verificationEvidence(verResult.checks),
+          ),
           reason: verResult.failureReason ?? 'Automated verification failed',
           evidence: verificationEvidence(verResult.checks),
           candidateCommit: agentResult.commitHash,
