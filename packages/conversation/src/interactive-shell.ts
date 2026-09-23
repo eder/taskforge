@@ -42,7 +42,12 @@ import {
   RouterQualityGuard,
 } from '@taskforge/router';
 import { TaskGraph, Goal } from '@taskforge/core';
-import { RunOrchestrator, OrchestrationResult, sanitizeTaskOutput } from '@taskforge/scheduler';
+import {
+  RunOrchestrator,
+  OrchestrationResult,
+  sanitizeTaskOutput,
+  allowedWritersForTask,
+} from '@taskforge/scheduler';
 import {
   TaskForgeDatabase,
   DatabaseHealthReport,
@@ -1468,6 +1473,7 @@ export class InteractiveShell {
 
         const selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${primaryTask.id}`,
+          allowedAgentIds: allowedWritersForTask(primaryTask, this.config),
         });
 
         const strategyUpper = routing.strategy.toUpperCase();
@@ -1579,6 +1585,7 @@ export class InteractiveShell {
 
         const selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${primaryTask.id}`,
+          allowedAgentIds: allowedWritersForTask(primaryTask, this.config),
         });
 
         const strategyUpper = routing.strategy.toUpperCase();
