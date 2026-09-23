@@ -393,11 +393,15 @@ export class DeterministicScheduler {
       for (const task of candidates) {
         const agentId = this.resolveAgentId(task);
         if (!agentId) {
+          const allowedWriters = allowedWritersForTask(task, this.ctx.config);
+          const ownershipBlocked = allowedWriters !== undefined && allowedWriters.size > 0;
           this.ctx.onProgress?.(
-            `[${task.id}] ✗ No healthy coding agent is currently available; task will not be sent to a known-unavailable provider.`,
+            ownershipBlocked
+              ? `[${task.id}] ✗ Task is BLOCKED: no healthy agent is authorized for scope ${task.contract.allowedScope.join(', ')}. Allowed writers: ${[...allowedWriters].join(', ')}.`
+              : `[${task.id}] ✗ No healthy coding agent is currently available; task will not be sent to a known-unavailable provider.`,
           );
-          graph.updateTaskStatus(task.id, 'failed');
-          this.ctx.taskRepo.updateStatus(task.id, 'failed');
+          graph.updateTaskStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
+          this.ctx.taskRepo.updateStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
           continue;
         }
         if (this.concurrency.canSchedule(agentId)) {
@@ -1058,6 +1062,10 @@ export class DeterministicScheduler {
       await this.recoverTask(task, {
         agentId,
         phase: 'execution',
+        failureClass:
+          govResult.completionReason === 'PROVIDER_QUOTA_EXCEEDED'
+            ? 'provider_quota'
+            : 'code_or_test',
         reason,
         evidence: agentResult.output,
         candidateCommit: agentResult.commitHash,
@@ -1075,7 +1083,10 @@ export class DeterministicScheduler {
         worktreePath: wt.path,
         config,
         taskType: task.type,
-        explicitCommands: task.contract.verification?.commands ?? [],
+        explicitCommands:
+          task.contract.verification?.commands ??
+          verificationCommandsForTask(task, config) ??
+          [],
         expectation: task.contract.verification?.expectation ?? 'pass',
       });
     }
@@ -1234,6 +1245,7 @@ export class DeterministicScheduler {
               worktreePath: wt.path,
               config,
               taskType: task.type,
+              explicitCommands: verificationCommandsForTask(task, config),
             })
           : ({ passed: true, checks: [] } as VerificationResult));
 
@@ -1262,6 +1274,7 @@ export class DeterministicScheduler {
         await this.recoverTask(task, {
           agentId,
           phase: 'verification',
+          failureClass: classifyVerificationFailure(verResult.failureReason),
           reason: verResult.failureReason ?? 'Automated verification failed',
           evidence: verificationEvidence(verResult.checks),
           candidateCommit: agentResult.commitHash,
