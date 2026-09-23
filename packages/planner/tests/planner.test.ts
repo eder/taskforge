@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { HeuristicPlanner, isLightweightGoal } from '../src/planner.js';
+import {
+  HeuristicPlanner,
+  isLightweightGoal,
+  requiresArchitectureBoundaryDecision,
+} from '../src/planner.js';
 import { Goal } from '@taskforge/core';
 
 describe('HeuristicPlanner', () => {
@@ -60,6 +64,56 @@ describe('HeuristicPlanner', () => {
 
     expect(tasks.length).toBeGreaterThan(1);
     expect(tasks[0].title).not.toBe('Documentation and Content Update');
+  });
+
+  it('detects unresolved ownership boundaries instead of implementing a cross-layer state mechanism directly', async () => {
+    const description =
+      'Na tela inicial do app eu quero uma camada de cache para carregar instantaneamente, mas o cache deve ser reativo a evento: quando algo novo chegar ele deve ser invalidado e reconstruído com a informação nova.';
+
+    expect(requiresArchitectureBoundaryDecision(description)).toBe(true);
+
+    const planner = new HeuristicPlanner();
+    const goal: Goal = {
+      id: 'goal-reactive-cache',
+      description,
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    const tasks = graph.getAllTasks();
+
+    expect(tasks).toHaveLength(3);
+    expect(tasks[0].type).toBe('architecture');
+    expect(tasks[0].contract.completionMode).toBe('report');
+    expect(tasks[0].contract.forbiddenChanges).toContain('*');
+    expect(tasks[0].contract.acceptanceCriteria.join(' ')).toContain('source of truth');
+    expect(tasks[1].type).toBe('implementation');
+    expect(tasks[1].dependencies).toEqual(['TASK-01']);
+    expect(tasks[2].type).toBe('review');
+    expect(tasks[2].dependencies).toEqual(['TASK-02']);
+  });
+
+  it('does not escalate a localized cache implementation when ownership is already explicit', async () => {
+    const description =
+      'Implement an in-memory cache inside the backend UserService with a 30 second TTL for repeated profile reads.';
+
+    expect(requiresArchitectureBoundaryDecision(description)).toBe(false);
+
+    const planner = new HeuristicPlanner();
+    const goal: Goal = {
+      id: 'goal-local-cache',
+      description,
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    expect(graph.getAllTasks()[0].type).toBe('implementation');
   });
 
   it('still treats a documentation-only provider/config request as lightweight', () => {

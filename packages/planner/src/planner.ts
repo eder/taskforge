@@ -10,6 +10,42 @@ export function isPureExplanationGoal(description: string): boolean {
   return isLightweightReadOnlyRequest(description);
 }
 
+export function requiresArchitectureBoundaryDecision(description: string): boolean {
+  const text = description.toLowerCase();
+
+  // A single keyword such as "cache" or "backend" is not enough to force an
+  // architecture task. We only escalate when the request combines multiple
+  // concerns that make ownership/source-of-truth a real design decision.
+  const statefulMechanism =
+    /\b(cache|caching|state|session|queue|storage|store|persistence|persist|materialized\s+view|read\s+model|replica|snapshot|estado|sess[aã]o|fila|armazenamento|persist[eê]ncia)\b/i.test(text);
+  const consistencyLifecycle =
+    /\b(invalidat|reactiv|event(?:-driven)?|freshness|stale|sync|synchroni[sz]|consisten|source\s+of\s+truth|refresh|recompute|ttl|evento|reativ|sincroni[sz]|consist[eê]ncia|fonte\s+da\s+verdade|atualiza[cç][aã]o)\b/i.test(text);
+  const layerBoundary =
+    /\b(frontend|backend|client|server|app|mobile|desktop|browser|api|gateway|service|worker|database|db|cliente|servidor|aplicativo|camada|servi[cç]o|banco)\b/i.test(text);
+  const explicitDesignQuestion =
+    /\b(architecture|architect|design|boundary|ownership|owner|responsib|where\s+(?:it|this)\s+should|where\s+should|source\s+of\s+truth|arquitetura|desenho|fronteira|responsabil|onde\s+deveria|onde\s+deve|deveria\s+ficar|deve\s+ficar)\b/i.test(text);
+
+  // A user mentioning an app screen describes where the behavior is observed,
+  // not necessarily where the mechanism must live. Only treat ownership as
+  // already resolved when the request explicitly locates the mechanism itself.
+  const explicitMechanismOwnership =
+    /\b(?:implement|create|add|keep|store|place|put|implementar|implemente|criar|crie|adicionar|adicione|manter|armazenar|colocar)\b[^.\n]{0,80}\b(?:cache|state|session|queue|storage|store|persistence|read\s+model|snapshot|estado|sess[aã]o|fila|armazenamento|persist[eê]ncia)\b[^.\n]{0,60}\b(?:inside|within|in|on|no|na|dentro\s+do|dentro\s+da)\b[^.\n]{0,30}\b(?:backend|frontend|client|server|app|mobile|desktop|browser|api|gateway|service|worker|database|db|cliente|servidor|aplicativo|camada|servi[cç]o|banco)\b/i.test(text) ||
+    /\b(?:cache|state|session|queue|storage|store|persistence|read\s+model|snapshot|estado|sess[aã]o|fila|armazenamento|persist[eê]ncia)\b[^.\n]{0,40}\b(?:belongs\s+in|lives\s+in|owned\s+by|fica\s+no|fica\s+na|deve\s+ficar\s+no|deve\s+ficar\s+na)\b[^.\n]{0,30}\b(?:backend|frontend|client|server|app|api|gateway|service|database|db|cliente|servidor|aplicativo|camada|servi[cç]o|banco)\b/i.test(text);
+
+  if (explicitMechanismOwnership && !explicitDesignQuestion) {
+    return false;
+  }
+
+  const signalCount = [
+    statefulMechanism,
+    consistencyLifecycle,
+    layerBoundary,
+    explicitDesignQuestion,
+  ].filter(Boolean).length;
+
+  return signalCount >= 3;
+}
+
 export function isLightweightGoal(description: string): boolean {
   const desc = description.toLowerCase();
   const lightweightPatterns = [
@@ -62,6 +98,7 @@ export class HeuristicPlanner implements Planner {
 
     const isPureExplanation = isPureExplanationGoal(goal.description);
     const isLightweight = isLightweightGoal(goal.description);
+    const needsArchitectureDecision = requiresArchitectureBoundaryDecision(goal.description);
 
     const isInvestigationNeeded =
       isPureExplanation ||
@@ -131,6 +168,97 @@ export class HeuristicPlanner implements Planner {
         updatedAt: now,
       };
       tasks.push(task1);
+    } else if (needsArchitectureDecision) {
+      // The request contains an unresolved ownership/source-of-truth decision
+      // across stateful mechanisms, consistency lifecycle and system layers.
+      // Resolve that boundary before allowing an implementation agent to choose
+      // a location by convenience.
+      const architectureTask: Task = {
+        id: 'TASK-01',
+        goalId: goal.id,
+        title: 'Resolve Architecture Boundary and Consistency Model',
+        description: `Inspect the existing data flow and decide the correct ownership boundary before implementation: ${goal.description}`,
+        type: 'architecture',
+        status: 'proposed',
+        dependencies: [],
+        contract: {
+          objective:
+            'Determine the authoritative owner, source of truth, layer boundary and consistency lifecycle before implementation',
+          allowedScope: [],
+          forbiddenChanges: ['*'],
+          acceptanceCriteria: [
+            'Current data flow and existing ownership are identified from the repository',
+            'Authoritative source of truth and owning layer are explicitly decided',
+            'Invalidation, refresh, synchronization or event lifecycle is defined',
+            'Identity, tenant, privacy and security boundaries are considered where applicable',
+            'Implementation constraints and affected components are stated for the next task',
+          ],
+          dependencies: [],
+        },
+        acceptanceCriteria: [
+          'Architecture boundary is explicit before implementation begins',
+        ],
+        reworkCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const implementationTask: Task = {
+        id: 'TASK-02',
+        goalId: goal.id,
+        title: 'Implement Against the Architecture Decision',
+        description: `Implement the requested behavior using the architecture decision from TASK-01: ${goal.description}`,
+        type: 'implementation',
+        status: 'proposed',
+        dependencies: ['TASK-01'],
+        contract: {
+          objective: goal.description,
+          allowedScope: ['*'],
+          forbiddenChanges: [],
+          acceptanceCriteria:
+            goal.acceptanceCriteria.length > 0
+              ? [...goal.acceptanceCriteria, 'Implementation follows the architecture decision from TASK-01']
+              : [
+                  'Implementation satisfies goal',
+                  'Implementation follows the architecture decision from TASK-01',
+                ],
+          dependencies: ['TASK-01'],
+        },
+        acceptanceCriteria: [
+          'Implementation satisfies goal and preserves the selected ownership boundary',
+        ],
+        reworkCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const reviewTask: Task = {
+        id: 'TASK-03',
+        goalId: goal.id,
+        title: 'Architecture and Correctness Review',
+        description:
+          'Verify the implementation respects the architecture decision, consistency lifecycle, privacy boundaries and original goal',
+        type: 'review',
+        status: 'proposed',
+        dependencies: ['TASK-02'],
+        contract: {
+          objective:
+            'Independently review architecture compliance, correctness, consistency and security/privacy boundaries',
+          allowedScope: [],
+          forbiddenChanges: ['*'],
+          acceptanceCriteria: [
+            'Implementation matches the architecture decision',
+            'Zero critical or major review findings',
+          ],
+          dependencies: ['TASK-02'],
+        },
+        acceptanceCriteria: ['Approved by reviewer with no blocking findings'],
+        reworkCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      tasks.push(architectureTask, implementationTask, reviewTask);
     } else if (isInvestigationNeeded) {
       const isExplanation = desc.includes('explain') || desc.includes('understand');
       // 1. Investigation task
