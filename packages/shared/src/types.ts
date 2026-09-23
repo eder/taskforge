@@ -357,6 +357,18 @@ export interface RepositoryProfile {
   buildCommands: string[];
   hasECC: boolean;
   summary: string;
+  /**
+   * Repository-authored Markdown instructions discovered from files such as
+   * AGENTS.md/CLAUDE.md/GEMINI.md and documents they explicitly reference.
+   * The planner and agents must treat these as authoritative project context.
+   */
+  projectInstructions?: Array<{
+    path: string;
+    content: string;
+    scope: string;
+    kind: 'agent' | 'provider' | 'referenced';
+  }>;
+  instructionWarnings?: string[];
 }
 
 export type TaskPreflightDecision =
