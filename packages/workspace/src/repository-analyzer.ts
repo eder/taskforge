@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { RepositoryProfile } from '@taskforge/shared';
 import { GitService } from './git-service.js';
+import { ProjectInstructionResolver } from './project-instructions.js';
 
 export class RepositoryAnalyzer {
   constructor(
@@ -104,6 +105,8 @@ export class RepositoryAnalyzer {
 
     const summary = `Repository at ${this.repoRoot}: ${Array.from(languages).join(', ') || 'unknown language'}${packageManager ? ` using ${packageManager}` : ''}${hasECC ? ' (ECC detected)' : ''}`;
 
+    const instructions = new ProjectInstructionResolver(this.repoRoot).resolve(['*']);
+
     return {
       languages: Array.from(languages),
       frameworks: Array.from(frameworks),
@@ -114,6 +117,8 @@ export class RepositoryAnalyzer {
       buildCommands,
       hasECC,
       summary,
+      projectInstructions: instructions.documents,
+      instructionWarnings: instructions.warnings,
     };
   }
 }
