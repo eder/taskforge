@@ -3,11 +3,12 @@ import {
   Constraint,
   PlannerProvenance,
   isLightweightReadOnlyRequest,
+  isAdvisoryReadOnlyRequest,
 } from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
 
 export function isPureExplanationGoal(description: string): boolean {
-  return isLightweightReadOnlyRequest(description);
+  return isLightweightReadOnlyRequest(description) || isAdvisoryReadOnlyRequest(description);
 }
 
 export function requiresArchitectureBoundaryDecision(description: string): boolean {
