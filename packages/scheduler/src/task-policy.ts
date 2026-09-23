@@ -1,4 +1,5 @@
-import { Task, TaskForgeConfig } from '@taskforge/shared';
+import { TaskForgeConfig } from '@taskforge/shared';
+import { Task } from '@taskforge/core';
 
 function normalizeScope(scope: string): string {
   return scope.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
