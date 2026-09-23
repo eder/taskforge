@@ -598,7 +598,10 @@ export class DeterministicScheduler {
             worktreePath: verifyPath,
             config,
             taskType: task.type,
-            explicitCommands: task.contract.verification?.commands ?? [],
+            explicitCommands:
+              task.contract.verification?.commands ??
+              verificationCommandsForTask(task, config) ??
+              [],
             expectation: task.contract.verification?.expectation ?? 'pass',
           });
         }
@@ -697,14 +700,20 @@ export class DeterministicScheduler {
                 worktreePath: verifyPath,
                 config,
                 taskType: task.type,
+                explicitCommands: verificationCommandsForTask(task, config),
               })
             : ({ passed: true, checks: [] } as VerificationResult));
 
 
         if (!verResult.passed) {
-          const rework = taskRepo.incrementRework(task.id);
+          const failureClass = classifyVerificationFailure(verResult.failureReason);
+          const rework = recoveryConsumesRework(failureClass)
+            ? taskRepo.incrementRework(task.id)
+            : task.reworkCount;
           this.ctx.onProgress?.(
-            `[${task.id}] Collaborative verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
+            failureClass === 'verification_configuration'
+              ? `[${task.id}] Collaborative task BLOCKED: verification is not configured for this scope.`
+              : `[${task.id}] Collaborative verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
           );
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
