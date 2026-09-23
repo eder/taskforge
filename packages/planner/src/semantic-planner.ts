@@ -598,6 +598,11 @@ Every task must declare explicit completion semantics:
 - review: read-only review findings; allowedScope must be [] and forbiddenChanges must be ["*"].
 Never invent writable paths for report/review/verification tasks.
 
+Repository-authored project instructions are authoritative. Use them to derive task scope,
+forbidden changes, required documentation, verification commands, and agent/work-area constraints.
+Do not weaken or silently override repository instructions. If an instruction requires reading another
+project document, preserve that requirement in the task objective/acceptance criteria.
+
 Output strictly according to the json_schema.`,
       },
       {
@@ -613,7 +618,17 @@ Output strictly according to the json_schema.`,
                 languages: profile.languages,
                 frameworks: profile.frameworks,
                 testCommands: profile.testCommands,
+                lintCommands: profile.lintCommands,
+                typecheckCommands: profile.typecheckCommands,
+                buildCommands: profile.buildCommands,
                 hasECC: profile.hasECC,
+                projectInstructions: profile.projectInstructions?.map((doc) => ({
+                  path: doc.path,
+                  scope: doc.scope,
+                  kind: doc.kind,
+                  content: doc.content,
+                })),
+                instructionWarnings: profile.instructionWarnings,
               }
             : undefined,
         }),

@@ -172,6 +172,16 @@ export class VerificationRunner {
       }
     }
 
+    // A writable code task must never be reported as verified when TaskForge
+    // discovered no executable evidence. This is especially important for
+    // polyglot repositories where verification lives below the repository root.
+    if (requiresCodeVerification && results.length === 0) {
+      overallPassed = false;
+      failureReason =
+        'No verification checks were executed for a code-changing task. ' +
+        'Provide task verification commands or repository verification configuration.';
+    }
+
     const finalResult: VerificationResult = {
       passed: overallPassed,
       checks: results,
