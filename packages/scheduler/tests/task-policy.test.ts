@@ -45,6 +45,16 @@ describe('task policy', () => {
     expect(allowedWritersForTask(task(['*']), config)).toBeUndefined();
   });
 
+  it('returns an empty writer set when multiple task scopes have conflicting ownership', () => {
+    const config = getDefaultConfig();
+    config.ownership.rules = [
+      { scope: 'ios/**', writers: ['codex'] },
+      { scope: 'server/**', writers: ['claude'] },
+    ];
+
+    expect([...allowedWritersForTask(task(['ios/**', 'server/**']), config)!]).toEqual([]);
+  });
+
   it('returns scoped verification commands for matching task scope', () => {
     const config = getDefaultConfig();
     config.verification.commands = ['git diff --check'];
