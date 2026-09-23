@@ -1490,6 +1490,13 @@ export class InteractiveShell {
 
         this.conversationState = 'AWAITING_PLAN_APPROVAL';
 
+        // Read-only analysis is reversible and cannot produce delivery. Do not
+        // force the user through a write-oriented approval ceremony for a
+        // question that TaskForge already classified as non-mutating.
+        if (executionIntent.intent === 'READ_ONLY_ANALYSIS') {
+          return this.handleInput('/approve', abortSignal);
+        }
+
         return [
           `${colors.brand}✦ Plan Proposal${colors.reset}`,
           `  ${colors.dim}Planner:${colors.reset}  ${plannerSource}`,
@@ -1656,8 +1663,14 @@ export class InteractiveShell {
         }
 
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
+        const currentExecutionIntent = detectExecutionIntent(
+          this.lastGoalDescription ?? this.activeGoal?.description ?? '',
+        );
+        const isReadOnlyAutoRun = currentExecutionIntent.intent === 'READ_ONLY_ANALYSIS';
 
-        const approvedMsg = `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} ${colors.dim}Starting execution...${colors.reset}\n`;
+        const approvedMsg = isReadOnlyAutoRun
+          ? `\n  ${colors.brand}✦ ${colors.bold}TaskForge Analysis${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Read-only analysis.${colors.reset} ${colors.dim}Starting automatically — repository mutation and delivery are disabled.${colors.reset}\n`
+          : `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} ${colors.dim}Starting execution...${colors.reset}\n`;
         this.viewport.writeUpper(approvedMsg);
         this.viewport.drawFooter('⚡ Executing plan...');
 
@@ -1729,8 +1742,10 @@ export class InteractiveShell {
             });
 
           return [
-            `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}`,
-            `  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Execution running in background (Run: ${runId}).`,
+            `\n  ${colors.brand}✦ ${colors.bold}${isReadOnlyAutoRun ? 'TaskForge Analysis' : 'TaskForge Execution'}${colors.reset}`,
+            isReadOnlyAutoRun
+              ? `  ${colors.green}✔${colors.reset} Read-only analysis running in background (Run: ${runId}).`
+              : `  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Execution running in background (Run: ${runId}).`,
             `  ${colors.dim}REPL is active — submit new tasks to free agents, type /tasks, or /stream <task>.${colors.reset}\n`,
           ].join('\n');
         }
