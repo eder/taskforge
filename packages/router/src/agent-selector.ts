@@ -34,6 +34,8 @@ export interface AgentSelectionContext {
    * Rendezvous hashing makes the outcome independent of registry insertion order.
    */
   selectionKey?: string;
+  /** Deterministic repository policy: only these agents may be selected. */
+  allowedAgentIds?: Set<string>;
 }
 
 export interface ReplacementSelectionOptions extends AgentSelectionContext {
@@ -121,13 +123,15 @@ export class AgentSelector {
     let chosen: AgentAdapter | undefined;
     let selectionReason: string | undefined;
     let fitScore: number | undefined;
+    const policyAllows = (agentId: string): boolean =>
+      context.allowedAgentIds === undefined || context.allowedAgentIds.has(agentId);
 
     // Rank capability-compatible candidates by current-task fit. An explicit
     // router preference is considered only among equally best-fit candidates;
     // it cannot force a materially worse harness for the assignment.
     {
       const capable: AgentAdapter[] = [];
-      for (const candidate of availableAdapters.filter((a) => !exclude.has(a.id))) {
+      for (const candidate of availableAdapters.filter((a) => !exclude.has(a.id) && policyAllows(a.id))) {
         const isReady = await candidate.detect();
         if (!isReady || !quotaTracker.isAvailable(candidate.id)) continue;
 
@@ -150,7 +154,7 @@ export class AgentSelector {
     // 3. Fallback to any healthy, non-excluded agent, still using fair ranking.
     if (!chosen) {
       const healthy: AgentAdapter[] = [];
-      for (const candidate of availableAdapters.filter((a) => !exclude.has(a.id))) {
+      for (const candidate of availableAdapters.filter((a) => !exclude.has(a.id) && policyAllows(a.id))) {
         if ((await candidate.detect()) && quotaTracker.isAvailable(candidate.id)) {
           healthy.push(candidate);
         }
@@ -168,7 +172,7 @@ export class AgentSelector {
     if (!chosen) {
       const reusable: AgentAdapter[] = [];
       for (const candidate of availableAdapters) {
-        if (degradedExclude.has(candidate.id)) continue;
+        if (degradedExclude.has(candidate.id) || !policyAllows(candidate.id)) continue;
         if ((await candidate.detect()) && quotaTracker.isAvailable(candidate.id)) {
           reusable.push(candidate);
         }
