@@ -1,9 +1,17 @@
 export type RecoveryPhase = 'execution' | 'completion' | 'verification' | 'collaboration';
 
+export type RecoveryFailureClass =
+  | 'code_or_test'
+  | 'provider_quota'
+  | 'verification_configuration'
+  | 'environment'
+  | 'policy';
+
 export interface RecoveryIncident {
   attempt: number;
   agentId: string;
   phase: RecoveryPhase;
+  failureClass: RecoveryFailureClass;
   reason: string;
   evidence?: string;
   candidateCommit?: string;
@@ -27,8 +35,22 @@ export interface RecoveryDecision {
 export function decideTaskRecovery(
   reworkCount: number,
   maxReworkCycles: number,
+  failureClass: RecoveryFailureClass = 'code_or_test',
 ): RecoveryDecision {
   const retriesRemaining = Math.max(0, maxReworkCycles - reworkCount);
+
+  if (
+    failureClass === 'verification_configuration' ||
+    failureClass === 'environment' ||
+    failureClass === 'policy'
+  ) {
+    return { action: 'block', attempt: reworkCount, retriesRemaining };
+  }
+
+  if (failureClass === 'provider_quota') {
+    return { action: 'reassign', attempt: reworkCount, retriesRemaining };
+  }
+
   if (reworkCount > maxReworkCycles) {
     return { action: 'block', attempt: reworkCount, retriesRemaining: 0 };
   }
@@ -36,6 +58,26 @@ export function decideTaskRecovery(
     return { action: 'retry_same_agent', attempt: reworkCount, retriesRemaining };
   }
   return { action: 'reassign', attempt: reworkCount, retriesRemaining };
+}
+
+export function recoveryConsumesRework(failureClass: RecoveryFailureClass): boolean {
+  return failureClass === 'code_or_test';
+}
+
+export function classifyVerificationFailure(reason?: string): RecoveryFailureClass {
+  const text = (reason ?? '').toLowerCase();
+  if (text.includes('no verification checks were executed')) {
+    return 'verification_configuration';
+  }
+  if (
+    text.includes('command not found') ||
+    text.includes('no such file or directory') ||
+    text.includes('toolchain') ||
+    text.includes('developer directory')
+  ) {
+    return 'environment';
+  }
+  return 'code_or_test';
 }
 
 function compact(value?: string, max = 1200): string | undefined {
@@ -51,7 +93,7 @@ export function formatRecoveryContext(incidents: RecoveryIncident[]): string {
   const recent = incidents.slice(-3);
   const lines = recent.flatMap((incident) => {
     const header =
-      `Attempt ${incident.attempt} failed during ${incident.phase} with agent ${incident.agentId}: ${incident.reason}`;
+      `Attempt ${incident.attempt} failed during ${incident.phase} [${incident.failureClass}] with agent ${incident.agentId}: ${incident.reason}`;
     const evidence = compact(incident.evidence);
     const commit = incident.candidateCommit
       ? `Candidate state to repair: commit ${incident.candidateCommit}`
