@@ -251,29 +251,29 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/health` | Inspect Router, agents, provider quota, and local database health |
 | `/plan` | Inspect the current proposed or active plan |
 | `/runs` | List past execution runs and delivery status |
-| `/inspect [run-id]` | Inspect run → task → assignment history |
-| `/tasks [task-id]` | Show task and assignment status |
+| `/inspect` | Inspect run → task → assignment history; accepts an optional run id |
+| `/tasks` | Show task and assignment status; accepts an optional task id |
 | `/status` | Open the full TUI dashboard |
 | `/agents` | Show detected agent harnesses and availability |
-| `/stream [task-id]` | Enter live output for the active task or assignment |
-| `/focus <n>` | Focus one active agent |
+| `/stream` | Enter live output; accepts an optional task id |
+| `/focus` | Focus one active agent by index, for example `/focus 2` |
 | `/back` | Leave agent Focus Mode |
-| `/raw [n]` | Show persisted raw provider output |
+| `/raw` | Show persisted raw provider output; accepts an optional agent index |
 | `/pending` | Show interactions waiting for human approval |
-| `/approve [request-id] [scope]` | Approve the current plan or a pending interaction |
-| `/deny [request-id]` | Deny a pending interaction |
-| `/reject [feedback]` | Reject the current plan with feedback |
-| `/constraint <text>` | Add a constraint to the current plan |
-| `/reassign <task> [agent]` | Reassign work to another healthy agent |
-| `/cancel [n]` | Cancel the active run or one active assignment |
+| `/approve` | Approve the current plan or a pending interaction |
+| `/deny` | Deny a pending interaction |
+| `/reject` | Reject the current plan with optional feedback |
+| `/constraint` | Add a constraint to the current plan |
+| `/reassign` | Reassign work to another healthy agent |
+| `/cancel` | Cancel the active run or one active assignment |
 | `/pause` | Pause orchestrator execution |
 | `/resume` | Resume paused execution |
 | `/cost` | Show token usage and cost telemetry |
 | `/stats` | Show execution and orchestration efficiency metrics |
-| `/diff [run-id]` | Inspect changes from a completed run |
-| `/apply [run-id]` | Apply a completed run to its target branch |
-| `/pr [run-id]` | Create a pull request for a completed run |
-| `/discard [run-id]` | Keep the integration branch without applying delivery |
+| `/diff` | Inspect changes from a completed run; accepts an optional run id |
+| `/apply` | Apply a completed run to its target branch |
+| `/pr` | Create a pull request for a completed run |
+| `/discard` | Keep the integration branch without applying delivery |
 | `/clean` | Clean temporary worktrees and branches |
 | `/exit` | Exit the interactive session |
 
