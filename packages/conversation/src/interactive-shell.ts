@@ -160,9 +160,10 @@ function routerSourceLabel(
     return 'Deterministic routing (model call not required)';
   }
 
-  const fallbackReason = (routing as RoutingDecision & { fallbackReason?: string }).fallbackReason;
+  const fallbackReason = routing.fallbackReason;
+  const fallbackDetail = routing.fallbackDetail;
   return fallbackReason
-    ? `Static fallback (Reason: ${fallbackReason})`
+    ? `Static fallback (Reason: ${fallbackReason}${fallbackDetail ? `, ${fallbackDetail}` : ''})`
     : 'Static / deterministic';
 }
 
