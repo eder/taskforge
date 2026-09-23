@@ -40,7 +40,7 @@ export function allowedWritersForTask(
   let allowed: Set<string> | undefined;
 
   for (const taskScope of scopes) {
-    const matches = config.ownership.rules
+    const matches = (config.ownership?.rules ?? [])
       .filter((rule) => ruleMatchesScope(rule.scope, taskScope))
       .sort((a, b) => specificity(b.scope) - specificity(a.scope));
 
@@ -66,11 +66,11 @@ export function verificationCommandsForTask(
   task: Task,
   config: TaskForgeConfig,
 ): string[] | undefined {
-  const commands = new Set(config.verification.commands);
+  const commands = new Set(config.verification.commands ?? []);
   const scopes = task.contract.allowedScope ?? [];
 
   for (const taskScope of scopes) {
-    const matches = config.verification.scopedCommands
+    const matches = (config.verification.scopedCommands ?? [])
       .filter((rule) => ruleMatchesScope(rule.scope, taskScope))
       .sort((a, b) => specificity(b.scope) - specificity(a.scope));
 
