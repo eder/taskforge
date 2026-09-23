@@ -1443,12 +1443,24 @@ export class InteractiveShell {
 
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
+        const plannerMetaBeforeRouting = this.currentGraph.metadata?.planner as
+          | PlannerProvenance
+          | undefined;
+        const deterministicReadOnlyFastPath =
+          executionIntent.intent === 'READ_ONLY_ANALYSIS' &&
+          plannerMetaBeforeRouting?.source === 'deterministic_decomposition' &&
+          plannerMetaBeforeRouting.fallbackReason === 'lightweight_read_only_fast_path';
 
         const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
-        const routingProposal = await this.router.route({
-          task: primaryTask,
-          availableAgents: availableAgentIds,
-        });
+        const routingProposal = deterministicReadOnlyFastPath
+          ? await new StaticRoutingProvider().route({
+              task: primaryTask,
+              availableAgents: availableAgentIds,
+            })
+          : await this.router.route({
+              task: primaryTask,
+              availableAgents: availableAgentIds,
+            });
         const routing = RouterQualityGuard.evaluate(routingProposal, {
           task: primaryTask,
           availableAgents: availableAgentIds,
@@ -1483,9 +1495,7 @@ export class InteractiveShell {
           | PlannerProvenance
           | undefined;
         const graphMetadata = this.currentGraph.metadata as Record<string, unknown> | undefined;
-        const lightweightFastPath =
-          plannerMeta?.source === 'deterministic_decomposition' &&
-          plannerMeta.fallbackReason === 'lightweight_read_only_fast_path';
+        const lightweightFastPath = deterministicReadOnlyFastPath;
         const plannerSource = plannerSourceLabel(plannerMeta, graphMetadata);
         const routerSource = routerSourceLabel(
           routing,
