@@ -136,7 +136,7 @@ export class ProjectInstructionResolver {
 
   private scopeDirectory(scope: string): string | undefined {
     if (!scope || scope === '*') return undefined;
-    const clean = scope.replace(/\\/g, '/').replace(/[*?\[\]{}].*$/, '').replace(/\/$/, '');
+    const clean = scope.replace(/\\/g, '/').replace(/[*?[\]{}].*$/, '').replace(/\/$/, '');
     if (!clean) return undefined;
     return path.extname(clean) ? path.dirname(clean) : clean;
   }

@@ -172,10 +172,17 @@ export class VerificationRunner {
       }
     }
 
-    // A writable code task must never be reported as verified when TaskForge
-    // discovered no executable evidence. This is especially important for
-    // polyglot repositories where verification lives below the repository root.
-    if (requiresCodeVerification && results.length === 0) {
+    // Fail closed only when verification was actually requested. An explicit
+    // configuration with tests/lint/typecheck all disabled is an intentional
+    // opt-out (used by deterministic/fake execution and valid user configs),
+    // not evidence-discovery failure. An explicit command request, including
+    // an empty command list, still requires executable evidence.
+    const verificationRequested =
+      hasExplicitCommandRequest ||
+      config.verification.tests ||
+      config.verification.lint ||
+      config.verification.typecheck;
+    if (requiresCodeVerification && verificationRequested && results.length === 0) {
       overallPassed = false;
       failureReason =
         'No verification checks were executed for a code-changing task. ' +

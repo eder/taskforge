@@ -41,6 +41,8 @@ export type EventType =
   | 'PLAN_INVARIANT_ENFORCED'
   | 'ROUTING_INVALID_FOR_TASK'
   | 'MUTATION_BLOCKED'
+  | 'TASK_RECOVERY_SCHEDULED'
+  | 'TASK_RECOVERY_BLOCKED'
   | 'OPERATOR_MESSAGE_SENT';
 
 export interface TaskForgeEvent {
