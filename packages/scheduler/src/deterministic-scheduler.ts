@@ -26,6 +26,12 @@ import { InteractionGateway } from '@taskforge/execution';
 import { ConcurrencyManager } from './concurrency-manager.js';
 import { executeGovernedAssignment } from './governed-assignment.js';
 import { CompletionGate, sanitizeTaskOutput } from './completion-gate.js';
+import {
+  RecoveryIncident,
+  decideTaskRecovery,
+  formatRecoveryContext,
+  verificationEvidence,
+} from './task-recovery.js';
 
 export interface SchedulerContext {
   runId: string;
@@ -121,6 +127,8 @@ export class DeterministicScheduler {
   private taskOutputs: Record<string, string> = {};
   private hasIntegratedCommits = false;
   private failedAgentsByTask = new Map<string, Set<string>>();
+  private recoveryIncidentsByTask = new Map<string, RecoveryIncident[]>();
+  private recoveryBaseCommitByTask = new Map<string, string>();
 
   constructor(private ctx: SchedulerContext) {
     this.concurrency = new ConcurrencyManager(ctx.config);
@@ -156,7 +164,7 @@ export class DeterministicScheduler {
 
   private objectiveWithDependencyEvidence(task: Task): string {
     const baseObjective = task.contract.objective || task.description;
-    const evidence = task.dependencies
+    const dependencyEvidence = task.dependencies
       .map((dependencyId) => {
         const output = this.taskOutputs[dependencyId];
         if (!output || output.trim().length === 0) return undefined;
@@ -165,20 +173,37 @@ export class DeterministicScheduler {
         return `[${dependencyId} — ${label}]\n${output.trim()}`;
       })
       .filter((entry): entry is string => Boolean(entry));
+    const recoveryContext = formatRecoveryContext(
+      this.recoveryIncidentsByTask.get(task.id) ?? [],
+    );
 
-    if (evidence.length === 0) return baseObjective;
+    if (dependencyEvidence.length === 0 && !recoveryContext) return baseObjective;
 
-    return [
-      baseObjective,
-      '',
-      'Authoritative evidence from completed prerequisite tasks:',
-      ...evidence,
-      '',
-      'Treat the prerequisite decisions above as implementation/review constraints. Do not silently choose a conflicting architecture or ownership boundary.',
-    ].join('\n');
+    const parts = [baseObjective];
+    if (dependencyEvidence.length > 0) {
+      parts.push(
+        '',
+        'Authoritative evidence from completed prerequisite tasks:',
+        ...dependencyEvidence,
+        '',
+        'Treat the prerequisite decisions above as implementation/review constraints. Do not silently choose a conflicting architecture or ownership boundary.',
+      );
+    }
+    if (recoveryContext) {
+      parts.push('', recoveryContext);
+    }
+    return parts.join('\n');
   }
 
   private async resolveTaskBaseCommit(task: Task): Promise<string> {
+    const recoveryBase = this.recoveryBaseCommitByTask.get(task.id);
+    if (recoveryBase) {
+      this.ctx.onProgress?.(
+        `[${task.id}] ↻ Continuing recovery from candidate commit ${recoveryBase.slice(0, 7)}`,
+      );
+      return recoveryBase;
+    }
+
     if (task.dependencies.length === 0) {
       return this.ctx.baseCommit;
     }
@@ -196,6 +221,91 @@ export class DeterministicScheduler {
       );
     }
     return cumulativeHead;
+  }
+
+  private async recoverTask(
+    task: Task,
+    params: {
+      agentId: string;
+      phase: RecoveryIncident['phase'];
+      reason: string;
+      evidence?: string;
+      candidateCommit?: string;
+      assignmentId?: string;
+    },
+  ): Promise<'retry_same_agent' | 'reassign' | 'block'> {
+    const rework = this.ctx.taskRepo.incrementRework(task.id);
+    const incident: RecoveryIncident = {
+      attempt: rework,
+      agentId: params.agentId,
+      phase: params.phase,
+      reason: params.reason,
+      evidence: params.evidence,
+      candidateCommit: params.candidateCommit,
+    };
+    const history = this.recoveryIncidentsByTask.get(task.id) ?? [];
+    history.push(incident);
+    this.recoveryIncidentsByTask.set(task.id, history);
+
+    if (params.candidateCommit && params.candidateCommit !== this.ctx.baseCommit) {
+      this.recoveryBaseCommitByTask.set(task.id, params.candidateCommit);
+    }
+
+    const decision = decideTaskRecovery(rework, this.ctx.config.verification.maxReworkCycles);
+
+    this.ctx.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId: this.ctx.runId,
+      taskId: task.id,
+      type: decision.action === 'block' ? 'TASK_RECOVERY_BLOCKED' : 'TASK_RECOVERY_SCHEDULED',
+      payload: {
+        taskId: task.id,
+        assignmentId: params.assignmentId,
+        agentId: params.agentId,
+        phase: params.phase,
+        reason: params.reason,
+        evidence: params.evidence,
+        candidateCommit: params.candidateCommit,
+        attempt: rework,
+        action: decision.action,
+        retriesRemaining: decision.retriesRemaining,
+      },
+      timestamp: new Date(),
+    });
+
+    this.ctx.graph.updateTaskStatus(task.id, 'failed');
+    this.ctx.taskRepo.updateStatus(task.id, 'failed');
+
+    if (decision.action === 'block') {
+      this.ctx.graph.updateTaskStatus(task.id, 'blocked');
+      this.ctx.taskRepo.updateStatus(task.id, 'blocked');
+      this.ctx.onProgress?.(
+        `[${task.id}] ✗ Recovery exhausted after ${rework} failed attempt(s). Task is BLOCKED; delivery remains disabled until the task is resolved.`,
+      );
+      return 'block';
+    }
+
+    if (decision.action === 'reassign') {
+      if (!this.failedAgentsByTask.has(task.id)) {
+        this.failedAgentsByTask.set(task.id, new Set());
+      }
+      this.failedAgentsByTask.get(task.id)!.add(params.agentId);
+      this.ctx.graph.updateTaskStatus(task.id, 'reassigned');
+      this.ctx.taskRepo.updateStatus(task.id, 'reassigned');
+      this.ctx.onProgress?.(
+        `[${task.id}] ↻ Recovery ${rework}/${this.ctx.config.verification.maxReworkCycles}: reassigning with failure evidence.`,
+      );
+    } else {
+      this.ctx.graph.updateTaskStatus(task.id, 'retrying');
+      this.ctx.taskRepo.updateStatus(task.id, 'retrying');
+      this.ctx.onProgress?.(
+        `[${task.id}] ↻ Recovery ${rework}/${this.ctx.config.verification.maxReworkCycles}: returning concrete failure evidence to the same agent.`,
+      );
+    }
+
+    this.ctx.graph.updateTaskStatus(task.id, 'ready');
+    this.ctx.taskRepo.updateStatus(task.id, 'ready');
+    return decision.action;
   }
 
   async run(): Promise<SchedulerResult> {
@@ -887,8 +997,6 @@ export class DeterministicScheduler {
       Boolean(govResult.normalizedOutcome?.deniedActions?.length);
 
     if (!agentResult.success && !isActionDenied) {
-      const rework = taskRepo.incrementRework(task.id);
-
       const errorSnippet = agentResult.output
         ? agentResult.output
             .split('\n')
@@ -901,29 +1009,22 @@ export class DeterministicScheduler {
                 l.toLowerCase().includes('failed'),
             ) || agentResult.message
         : agentResult.message;
+      const reason =
+        agentResult.message || errorSnippet || govResult.completionReason || 'Agent execution failed';
 
       this.ctx.onProgress?.(
-        `[${task.id}] Agent ${agent.name} failed (${agentResult.message}${errorSnippet && errorSnippet !== agentResult.message ? `: ${errorSnippet}` : ''})`,
+        `[${task.id}] Agent ${agent.name} failed (${reason}${errorSnippet && errorSnippet !== reason ? `: ${errorSnippet}` : ''})`,
       );
 
-      if (!this.failedAgentsByTask.has(task.id)) {
-        this.failedAgentsByTask.set(task.id, new Set());
-      }
-      this.failedAgentsByTask.get(task.id)!.add(agentId);
-
-      if (rework <= config.verification.maxReworkCycles) {
-        graph.updateTaskStatus(task.id, 'failed');
-        taskRepo.updateStatus(task.id, 'failed');
-        graph.updateTaskStatus(task.id, 'retrying');
-        taskRepo.updateStatus(task.id, 'retrying');
-        graph.updateTaskStatus(task.id, 'ready');
-        taskRepo.updateStatus(task.id, 'ready');
-      } else {
-        graph.updateTaskStatus(task.id, 'failed');
-        taskRepo.updateStatus(task.id, 'failed');
-        graph.updateTaskStatus(task.id, 'blocked');
-        taskRepo.updateStatus(task.id, 'blocked');
-      }
+      await this.recoverTask(task, {
+        agentId,
+        phase: 'execution',
+        reason,
+        evidence: agentResult.output,
+        candidateCommit: agentResult.commitHash,
+        assignmentId,
+      });
+      await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
       return;
     }
 
@@ -994,11 +1095,6 @@ export class DeterministicScheduler {
         gateResult.evidence.explanation || gateResult.failureReason || 'Completion gate rejected';
       this.ctx.onProgress?.(`[${task.id}] ✗ Completion gate rejected: ${failMsg}`);
 
-      if (!this.failedAgentsByTask.has(task.id)) {
-        this.failedAgentsByTask.set(task.id, new Set());
-      }
-      this.failedAgentsByTask.get(task.id)!.add(agentId);
-
       if (gateResult.failureReason === 'REQUIRED_ACTION_DENIED') {
         graph.updateTaskStatus(task.id, 'failed');
         taskRepo.updateStatus(task.id, 'failed');
@@ -1015,21 +1111,15 @@ export class DeterministicScheduler {
         return;
       }
 
-      const rework = taskRepo.incrementRework(task.id);
-      if (rework <= config.verification.maxReworkCycles) {
-        graph.updateTaskStatus(task.id, 'failed');
-        taskRepo.updateStatus(task.id, 'failed');
-        graph.updateTaskStatus(task.id, 'retrying');
-        taskRepo.updateStatus(task.id, 'retrying');
-        graph.updateTaskStatus(task.id, 'ready');
-        taskRepo.updateStatus(task.id, 'ready');
-      } else {
-        graph.updateTaskStatus(task.id, 'failed');
-        taskRepo.updateStatus(task.id, 'failed');
-        graph.updateTaskStatus(task.id, 'blocked');
-        taskRepo.updateStatus(task.id, 'blocked');
-        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
-      }
+      await this.recoverTask(task, {
+        agentId,
+        phase: 'completion',
+        reason: gateResult.failureReason ?? 'Completion gate rejected the attempt',
+        evidence: gateResult.evidence.explanation,
+        candidateCommit: agentResult.commitHash,
+        assignmentId,
+      });
+      await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
       return;
     }
 
@@ -1127,24 +1217,18 @@ export class DeterministicScheduler {
           },
           timestamp: new Date(),
         });
-        const rework = taskRepo.incrementRework(task.id);
         this.ctx.onProgress?.(
-          `[${task.id}] Verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
+          `[${task.id}] Verification failed: ${verResult.failureReason}`,
         );
-        if (rework <= config.verification.maxReworkCycles) {
-          graph.updateTaskStatus(task.id, 'failed');
-          taskRepo.updateStatus(task.id, 'failed');
-          graph.updateTaskStatus(task.id, 'retrying');
-          taskRepo.updateStatus(task.id, 'retrying');
-          graph.updateTaskStatus(task.id, 'ready');
-          taskRepo.updateStatus(task.id, 'ready');
-        } else {
-          graph.updateTaskStatus(task.id, 'failed');
-          taskRepo.updateStatus(task.id, 'failed');
-          graph.updateTaskStatus(task.id, 'blocked');
-          taskRepo.updateStatus(task.id, 'blocked');
-          await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
-        }
+        await this.recoverTask(task, {
+          agentId,
+          phase: 'verification',
+          reason: verResult.failureReason ?? 'Automated verification failed',
+          evidence: verificationEvidence(verResult.checks),
+          candidateCommit: agentResult.commitHash,
+          assignmentId,
+        });
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
         return;
       }
 
@@ -1177,6 +1261,8 @@ export class DeterministicScheduler {
 
       graph.updateTaskStatus(task.id, 'integrated');
       taskRepo.updateStatus(task.id, 'integrated');
+      this.recoveryIncidentsByTask.delete(task.id);
+      this.recoveryBaseCommitByTask.delete(task.id);
     } finally {
       this.ctx.activityTracker?.completeAssignment(assignmentId);
     }
