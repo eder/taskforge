@@ -16,12 +16,22 @@ describe('task recovery policy', () => {
     expect(decideTaskRecovery(1, 0).action).toBe('block');
   });
 
+  it('blocks control-plane verification configuration failures without retrying an agent', () => {
+    expect(decideTaskRecovery(0, 2, 'verification_configuration').action).toBe('block');
+  });
+
+  it('reassigns provider quota failures without requiring a code rework attempt', () => {
+    expect(decideTaskRecovery(0, 2, 'provider_quota').action).toBe('reassign');
+  });
+
+
   it('injects concrete prior failure evidence into the next attempt', () => {
     const text = formatRecoveryContext([
       {
         attempt: 1,
         agentId: 'codex',
         phase: 'verification',
+        failureClass: 'code_or_test',
         reason: 'xcodebuild failed',
         evidence: 'Cannot convert value of type Commitment',
         candidateCommit: 'abc123',
