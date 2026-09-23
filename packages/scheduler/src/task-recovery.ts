@@ -64,17 +64,47 @@ export function recoveryConsumesRework(failureClass: RecoveryFailureClass): bool
   return failureClass === 'code_or_test';
 }
 
-export function classifyVerificationFailure(reason?: string): RecoveryFailureClass {
-  const text = (reason ?? '').toLowerCase();
+function looksLikeEnvironmentFailure(text: string): boolean {
+  const value = text.toLowerCase();
+  return (
+    value.includes('command not found') ||
+    value.includes('no such file or directory') ||
+    value.includes('toolchain') ||
+    value.includes('developer directory') ||
+    value.includes('swift-plugin-server') ||
+    value.includes('swiftuimacros') ||
+    value.includes('external macro implementation') ||
+    value.includes('index.lock') ||
+    value.includes('operation not permitted') ||
+    value.includes('permission denied') ||
+    value.includes('read-only file system')
+  );
+}
+
+export function classifyExecutionFailure(
+  completionReason?: string,
+  evidence?: string,
+): RecoveryFailureClass {
+  if (completionReason === 'PROVIDER_QUOTA_EXCEEDED') return 'provider_quota';
+  const text = `${completionReason ?? ''}\n${evidence ?? ''}`;
+  return looksLikeEnvironmentFailure(text) ? 'environment' : 'code_or_test';
+}
+
+export function classifyCompletionFailure(
+  failureReason?: string,
+  evidence?: string,
+): RecoveryFailureClass {
+  if (failureReason === 'REQUIRED_ACTION_DENIED') return 'policy';
+  const text = `${failureReason ?? ''}\n${evidence ?? ''}`;
+  return looksLikeEnvironmentFailure(text) ? 'environment' : 'code_or_test';
+}
+
+export function classifyVerificationFailure(reason?: string, evidence?: string): RecoveryFailureClass {
+  const text = `${reason ?? ''}\n${evidence ?? ''}`.toLowerCase();
   if (text.includes('no verification checks were executed')) {
     return 'verification_configuration';
   }
-  if (
-    text.includes('command not found') ||
-    text.includes('no such file or directory') ||
-    text.includes('toolchain') ||
-    text.includes('developer directory')
-  ) {
+  if (looksLikeEnvironmentFailure(text)) {
     return 'environment';
   }
   return 'code_or_test';
