@@ -657,6 +657,32 @@ describe('Router and AgentSelector', () => {
     expect(selected[0].agent.id).toBe('claude');
   });
 
+  it('never selects an agent outside the deterministic ownership allow-list', async () => {
+    const registry = new AgentRegistry(false);
+    registry.register(new FakeAgent('claude', 'Claude Code'));
+    registry.register(new FakeAgent('codex', 'Codex CLI'));
+    registry.register(new FakeAgent('agy', 'Google Antigravity'));
+
+    const selector = new AgentSelector(registry);
+    const selected = await selector.selectAgents(
+      [
+        {
+          role: 'implementer',
+          requiredCapabilities: ['canRead', 'canWrite'],
+          objective: 'Implement the iOS change',
+          preferredAgent: 'claude',
+        },
+      ],
+      {
+        selectionKey: '/workspace/zaira:TASK-01',
+        allowedAgentIds: new Set(['codex']),
+      },
+    );
+
+    expect(selected).toHaveLength(1);
+    expect(selected[0].agent.id).toBe('codex');
+  });
+
   it('OpenAIRoutingProvider gracefully falls back to static provider without API key', async () => {
     const provider = new OpenAIRoutingProvider(undefined);
     const decision = await provider.route({
