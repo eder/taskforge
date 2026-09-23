@@ -37,6 +37,26 @@ describe('HeuristicPlanner', () => {
     expect(tasks[0].contract.allowedScope).toContain('*');
   });
 
+  it('plans advisory cache questions as one read-only investigation', async () => {
+    const planner = new HeuristicPlanner();
+    const goal: Goal = {
+      id: 'goal-advisory-cache',
+      description: 'veja se faz sentido eu adicionar cache nessa aplicação',
+      repository: '/fake/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    };
+
+    const graph = await planner.plan(goal);
+    const tasks = graph.getAllTasks();
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].type).toBe('investigation');
+    expect(tasks[0].contract.allowedScope).toEqual([]);
+    expect(tasks[0].contract.forbiddenChanges).toEqual(['*']);
+  });
+
   it('does not classify a cross-cutting engineering goal as lightweight just because it mentions docs', async () => {
     const description = [
       'Create a pluggable LLM provider architecture for TaskForge.',

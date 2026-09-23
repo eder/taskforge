@@ -1,5 +1,9 @@
 import { Goal, Task, TaskGraph } from '@taskforge/core';
-import { ExecutionIntentDecision, isLightweightReadOnlyRequest } from '@taskforge/shared';
+import {
+  ExecutionIntentDecision,
+  isLightweightReadOnlyRequest,
+  isAdvisoryReadOnlyRequest,
+} from '@taskforge/shared';
 
 export interface PlanIntentNormalization {
   taskId: string;
@@ -35,7 +39,7 @@ export function enforceLightweightReadOnlyPlanInvariant(
   const lightweight =
     intent.intent === 'READ_ONLY_ANALYSIS' &&
     !intent.mutationAllowed &&
-    isLightweightReadOnlyRequest(goal.description);
+    (isLightweightReadOnlyRequest(goal.description) || isAdvisoryReadOnlyRequest(goal.description));
 
   if (!lightweight) {
     return { graph, changed: false, originalTaskCount: tasks.length };
@@ -60,15 +64,17 @@ export function enforceLightweightReadOnlyPlanInvariant(
   const canonicalTask: Task = {
     id: firstTask?.id ?? 'TASK-01',
     goalId: goal.id,
-    title: 'Explain Project and Architecture',
-    description: `Read the current repository and answer the user's overview question: ${goal.description}`,
+    title: isAdvisoryReadOnlyRequest(goal.description)
+      ? 'Analyze Engineering Decision'
+      : 'Explain Project and Architecture',
+    description: `Read the current repository and answer the user's read-only question: ${goal.description}`,
     type: 'investigation',
     // This guard runs after negotiation in product flows. Preserve the current
     // lifecycle state rather than rewinding an accepted task back to proposed.
     status: firstTask?.status ?? 'accepted',
     dependencies: [],
     contract: {
-      objective: `Explain the current repository using repository evidence only: ${goal.description}`,
+      objective: `Analyze the current repository using repository evidence only and answer directly: ${goal.description}`,
       allowedScope: [],
       forbiddenChanges: ['*'],
       acceptanceCriteria: [

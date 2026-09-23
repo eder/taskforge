@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyCompletionFailure,
+  classifyExecutionFailure,
+  classifyVerificationFailure,
   decideTaskRecovery,
   formatRecoveryContext,
   verificationEvidence,
@@ -16,12 +19,22 @@ describe('task recovery policy', () => {
     expect(decideTaskRecovery(1, 0).action).toBe('block');
   });
 
+  it('blocks control-plane verification configuration failures without retrying an agent', () => {
+    expect(decideTaskRecovery(0, 2, 'verification_configuration').action).toBe('block');
+  });
+
+  it('reassigns provider quota failures without requiring a code rework attempt', () => {
+    expect(decideTaskRecovery(0, 2, 'provider_quota').action).toBe('reassign');
+  });
+
+
   it('injects concrete prior failure evidence into the next attempt', () => {
     const text = formatRecoveryContext([
       {
         attempt: 1,
         agentId: 'codex',
         phase: 'verification',
+        failureClass: 'code_or_test',
         reason: 'xcodebuild failed',
         evidence: 'Cannot convert value of type Commitment',
         candidateCommit: 'abc123',
@@ -32,6 +45,38 @@ describe('task recovery policy', () => {
     expect(text).toContain('xcodebuild failed');
     expect(text).toContain('Cannot convert value');
     expect(text).toContain('abc123');
+  });
+
+  it('classifies provider quota separately from implementation failure', () => {
+    expect(classifyExecutionFailure('PROVIDER_QUOTA_EXCEEDED', 'usage limit')).toBe(
+      'provider_quota',
+    );
+  });
+
+  it('classifies missing verification as control-plane configuration failure', () => {
+    expect(
+      classifyVerificationFailure(
+        'No verification checks were executed for a code-changing task.',
+      ),
+    ).toBe('verification_configuration');
+  });
+
+  it('classifies Xcode macro/tooling failures as environment failures', () => {
+    expect(
+      classifyVerificationFailure(
+        'xcodebuild failed',
+        'SwiftUIMacros.StateMacro could not load swift-plugin-server',
+      ),
+    ).toBe('environment');
+  });
+
+  it('classifies worktree index.lock permission failures as environment failures', () => {
+    expect(
+      classifyCompletionFailure(
+        'NO_CHANGES_PRODUCED',
+        'fatal: Unable to create .git/worktrees/task/index.lock: Operation not permitted',
+      ),
+    ).toBe('environment');
   });
 
   it('formats failing verification commands and output', () => {

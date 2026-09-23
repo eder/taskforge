@@ -17,6 +17,14 @@ execution:
   databasePath: .taskforge/taskforge.db
   runsDir: .taskforge/runs
 
+# Optional deterministic write ownership. More-specific scopes win.
+# ownership:
+#   rules:
+#     - scope: ios/**
+#       writers: [codex]
+#     - scope: server/**
+#       writers: [claude, agy]
+
 # 3. Collaboration & Communication Bus Limits
 collaboration:
   maxAgentsPerTask: 3
@@ -65,3 +73,12 @@ verification:
   typecheck: true
   review: true
   maxReworkCycles: 2
+  # Global deterministic checks, used before repository auto-discovery.
+  commands: []
+  # Optional scope-specific checks. Most-specific matching scope wins.
+  scopedCommands: []
+  # Example:
+  # scopedCommands:
+  #   - scope: ios/**
+  #     commands:
+  #       - xcodebuild -project ios/App.xcodeproj -scheme App -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build

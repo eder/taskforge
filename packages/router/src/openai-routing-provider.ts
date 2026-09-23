@@ -225,6 +225,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
   private async makeFallback(
     input: RoutingInput,
     reason: RouterFallbackReason,
+    detail?: string,
   ): Promise<RoutingDecision> {
     const base = await this.fallbackProvider.route(input);
     const decision: RoutingDecision = {
@@ -233,7 +234,8 @@ export class OpenAIRoutingProvider implements RoutingProvider {
       provider: 'openai',
       model: this.model,
       fallbackReason: reason,
-      reason: `[Fallback from OpenAI/${this.model} (${reason})]: ${base.reason}`,
+      fallbackDetail: detail,
+      reason: `[Fallback from OpenAI/${this.model} (${reason}${detail ? `: ${detail}` : ''})]: ${base.reason}`,
     };
     return RouterQualityGuard.evaluate(decision, input);
   }
@@ -303,7 +305,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
           reason,
           until: Date.now() + this.failureCooldownMs,
         };
-        return this.makeFallback(input, reason);
+        return this.makeFallback(input, reason, `HTTP ${response.status}`);
       }
 
       const json = (await response.json()) as {

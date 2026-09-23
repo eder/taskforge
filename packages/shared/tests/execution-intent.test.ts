@@ -107,6 +107,31 @@ describe('detectExecutionIntent', () => {
     expect(decision.intent).toBe('READ_ONLY_ANALYSIS');
   });
 
+  it('treats advisory implementation questions as read-only analysis', () => {
+    for (const request of [
+      'veja se faz sentido eu adicionar cache nessa aplicação',
+      'Faz sentido adicionar cache aqui?',
+      'Devo adicionar Redis nessa aplicação?',
+      'Vale a pena implementar uma fila para esse fluxo?',
+      'Should I add caching to this application?',
+      'Does it make sense to implement a queue here?',
+      'Would you recommend moving this logic to the backend?',
+    ]) {
+      const decision = detectExecutionIntent(request);
+      expect(decision.intent, request).toBe('READ_ONLY_ANALYSIS');
+      expect(decision.mutationAllowed, request).toBe(false);
+      expect(decision.deliveryAllowed, request).toBe(false);
+    }
+  });
+
+  it('keeps an explicit follow-up implementation directive writable', () => {
+    const decision = detectExecutionIntent(
+      'Veja se faz sentido adicionar cache e, se sim, implemente.',
+    );
+    expect(decision.intent).toBe('IMPLEMENTATION');
+    expect(decision.mutationAllowed).toBe(true);
+  });
+
   it('treats an explicit "update the README" request as implementation', () => {
     const decision = detectExecutionIntent('Update the README to document the new health endpoint.');
     expect(decision.intent).toBe('IMPLEMENTATION');

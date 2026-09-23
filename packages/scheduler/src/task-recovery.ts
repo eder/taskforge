@@ -1,9 +1,17 @@
 export type RecoveryPhase = 'execution' | 'completion' | 'verification' | 'collaboration';
 
+export type RecoveryFailureClass =
+  | 'code_or_test'
+  | 'provider_quota'
+  | 'verification_configuration'
+  | 'environment'
+  | 'policy';
+
 export interface RecoveryIncident {
   attempt: number;
   agentId: string;
   phase: RecoveryPhase;
+  failureClass: RecoveryFailureClass;
   reason: string;
   evidence?: string;
   candidateCommit?: string;
@@ -27,8 +35,22 @@ export interface RecoveryDecision {
 export function decideTaskRecovery(
   reworkCount: number,
   maxReworkCycles: number,
+  failureClass: RecoveryFailureClass = 'code_or_test',
 ): RecoveryDecision {
   const retriesRemaining = Math.max(0, maxReworkCycles - reworkCount);
+
+  if (
+    failureClass === 'verification_configuration' ||
+    failureClass === 'environment' ||
+    failureClass === 'policy'
+  ) {
+    return { action: 'block', attempt: reworkCount, retriesRemaining };
+  }
+
+  if (failureClass === 'provider_quota') {
+    return { action: 'reassign', attempt: reworkCount, retriesRemaining };
+  }
+
   if (reworkCount > maxReworkCycles) {
     return { action: 'block', attempt: reworkCount, retriesRemaining: 0 };
   }
@@ -36,6 +58,56 @@ export function decideTaskRecovery(
     return { action: 'retry_same_agent', attempt: reworkCount, retriesRemaining };
   }
   return { action: 'reassign', attempt: reworkCount, retriesRemaining };
+}
+
+export function recoveryConsumesRework(failureClass: RecoveryFailureClass): boolean {
+  return failureClass === 'code_or_test';
+}
+
+function looksLikeEnvironmentFailure(text: string): boolean {
+  const value = text.toLowerCase();
+  return (
+    value.includes('command not found') ||
+    value.includes('no such file or directory') ||
+    value.includes('toolchain') ||
+    value.includes('developer directory') ||
+    value.includes('swift-plugin-server') ||
+    value.includes('swiftuimacros') ||
+    value.includes('external macro implementation') ||
+    value.includes('index.lock') ||
+    value.includes('operation not permitted') ||
+    value.includes('permission denied') ||
+    value.includes('read-only file system')
+  );
+}
+
+export function classifyExecutionFailure(
+  completionReason?: string,
+  evidence?: string,
+): RecoveryFailureClass {
+  if (completionReason === 'PROVIDER_QUOTA_EXCEEDED') return 'provider_quota';
+  const text = `${completionReason ?? ''}\n${evidence ?? ''}`;
+  return looksLikeEnvironmentFailure(text) ? 'environment' : 'code_or_test';
+}
+
+export function classifyCompletionFailure(
+  failureReason?: string,
+  evidence?: string,
+): RecoveryFailureClass {
+  if (failureReason === 'REQUIRED_ACTION_DENIED') return 'policy';
+  const text = `${failureReason ?? ''}\n${evidence ?? ''}`;
+  return looksLikeEnvironmentFailure(text) ? 'environment' : 'code_or_test';
+}
+
+export function classifyVerificationFailure(reason?: string, evidence?: string): RecoveryFailureClass {
+  const text = `${reason ?? ''}\n${evidence ?? ''}`.toLowerCase();
+  if (text.includes('no verification checks were executed')) {
+    return 'verification_configuration';
+  }
+  if (looksLikeEnvironmentFailure(text)) {
+    return 'environment';
+  }
+  return 'code_or_test';
 }
 
 function compact(value?: string, max = 1200): string | undefined {
@@ -51,7 +123,7 @@ export function formatRecoveryContext(incidents: RecoveryIncident[]): string {
   const recent = incidents.slice(-3);
   const lines = recent.flatMap((incident) => {
     const header =
-      `Attempt ${incident.attempt} failed during ${incident.phase} with agent ${incident.agentId}: ${incident.reason}`;
+      `Attempt ${incident.attempt} failed during ${incident.phase} [${incident.failureClass}] with agent ${incident.agentId}: ${incident.reason}`;
     const evidence = compact(incident.evidence);
     const commit = incident.candidateCommit
       ? `Candidate state to repair: commit ${incident.candidateCommit}`

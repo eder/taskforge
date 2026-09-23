@@ -42,7 +42,12 @@ import {
   RouterQualityGuard,
 } from '@taskforge/router';
 import { TaskGraph, Goal } from '@taskforge/core';
-import { RunOrchestrator, OrchestrationResult, sanitizeTaskOutput } from '@taskforge/scheduler';
+import {
+  RunOrchestrator,
+  OrchestrationResult,
+  sanitizeTaskOutput,
+  allowedWritersForTask,
+} from '@taskforge/scheduler';
 import {
   TaskForgeDatabase,
   DatabaseHealthReport,
@@ -160,9 +165,10 @@ function routerSourceLabel(
     return 'Deterministic routing (model call not required)';
   }
 
-  const fallbackReason = (routing as RoutingDecision & { fallbackReason?: string }).fallbackReason;
+  const fallbackReason = routing.fallbackReason;
+  const fallbackDetail = routing.fallbackDetail;
   return fallbackReason
-    ? `Static fallback (Reason: ${fallbackReason})`
+    ? `Static fallback (Reason: ${fallbackReason}${fallbackDetail ? `, ${fallbackDetail}` : ''})`
     : 'Static / deterministic';
 }
 
@@ -727,7 +733,10 @@ export class InteractiveShell {
     const outputs = Object.entries(result.taskOutputs ?? {})
       .filter(([, text]) => text && text.trim().length > 0)
       .map(([taskId, text]) => {
-        const header = `Explanation & Analysis [${taskId}]`;
+        const header =
+          result.status === 'completed'
+            ? `Explanation & Analysis [${taskId}]`
+            : `Last Attempt Output — NOT VERIFIED / NOT DELIVERED [${taskId}]`;
         const sanitized = sanitizeDisplayedRepositoryPaths(
           sanitizeTaskOutput(text.trim()),
           this.repoRoot,
@@ -738,7 +747,11 @@ export class InteractiveShell {
       })
       .join('\n\n');
 
-    const outputPrefix = outputs ? `${outputs}\n` : '';
+    const outputPrefix = outputs
+      ? result.status === 'completed'
+        ? `${outputs}\n`
+        : `  ${colors.yellow}▲ Agent output below is evidence from a failed run. TaskForge did not verify or deliver it.${colors.reset}\n\n${outputs}\n`
+      : '';
 
     const isSuccess = result.status === 'completed';
     const isCancelled = result.status === 'cancelled';
@@ -1435,12 +1448,24 @@ export class InteractiveShell {
 
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
+        const plannerMetaBeforeRouting = this.currentGraph.metadata?.planner as
+          | PlannerProvenance
+          | undefined;
+        const deterministicReadOnlyFastPath =
+          executionIntent.intent === 'READ_ONLY_ANALYSIS' &&
+          plannerMetaBeforeRouting?.source === 'deterministic_decomposition' &&
+          plannerMetaBeforeRouting.fallbackReason === 'lightweight_read_only_fast_path';
 
         const availableAgentIds = await this.agentSelector.listAvailableAgentIds();
-        const routingProposal = await this.router.route({
-          task: primaryTask,
-          availableAgents: availableAgentIds,
-        });
+        const routingProposal = deterministicReadOnlyFastPath
+          ? await new StaticRoutingProvider().route({
+              task: primaryTask,
+              availableAgents: availableAgentIds,
+            })
+          : await this.router.route({
+              task: primaryTask,
+              availableAgents: availableAgentIds,
+            });
         const routing = RouterQualityGuard.evaluate(routingProposal, {
           task: primaryTask,
           availableAgents: availableAgentIds,
@@ -1448,6 +1473,7 @@ export class InteractiveShell {
 
         const selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${primaryTask.id}`,
+          allowedAgentIds: allowedWritersForTask(primaryTask, this.config),
         });
 
         const strategyUpper = routing.strategy.toUpperCase();
@@ -1475,9 +1501,7 @@ export class InteractiveShell {
           | PlannerProvenance
           | undefined;
         const graphMetadata = this.currentGraph.metadata as Record<string, unknown> | undefined;
-        const lightweightFastPath =
-          plannerMeta?.source === 'deterministic_decomposition' &&
-          plannerMeta.fallbackReason === 'lightweight_read_only_fast_path';
+        const lightweightFastPath = deterministicReadOnlyFastPath;
         const plannerSource = plannerSourceLabel(plannerMeta, graphMetadata);
         const routerSource = routerSourceLabel(
           routing,
@@ -1489,6 +1513,13 @@ export class InteractiveShell {
           : '';
 
         this.conversationState = 'AWAITING_PLAN_APPROVAL';
+
+        // Read-only analysis is reversible and cannot produce delivery. Do not
+        // force the user through a write-oriented approval ceremony for a
+        // question that TaskForge already classified as non-mutating.
+        if (executionIntent.intent === 'READ_ONLY_ANALYSIS' && selected.length > 0) {
+          return this.handleInput('/approve', abortSignal);
+        }
 
         return [
           `${colors.brand}✦ Plan Proposal${colors.reset}`,
@@ -1554,6 +1585,7 @@ export class InteractiveShell {
 
         const selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${primaryTask.id}`,
+          allowedAgentIds: allowedWritersForTask(primaryTask, this.config),
         });
 
         const strategyUpper = routing.strategy.toUpperCase();
@@ -1656,8 +1688,14 @@ export class InteractiveShell {
         }
 
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
+        const currentExecutionIntent = detectExecutionIntent(
+          this.lastGoalDescription ?? this.activeGoal?.description ?? '',
+        );
+        const isReadOnlyAutoRun = currentExecutionIntent.intent === 'READ_ONLY_ANALYSIS';
 
-        const approvedMsg = `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} ${colors.dim}Starting execution...${colors.reset}\n`;
+        const approvedMsg = isReadOnlyAutoRun
+          ? `\n  ${colors.brand}✦ ${colors.bold}TaskForge Analysis${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Read-only analysis.${colors.reset} ${colors.dim}Starting automatically — repository mutation and delivery are disabled.${colors.reset}\n`
+          : `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}\n  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} ${colors.dim}Starting execution...${colors.reset}\n`;
         this.viewport.writeUpper(approvedMsg);
         this.viewport.drawFooter('⚡ Executing plan...');
 
@@ -1729,8 +1767,10 @@ export class InteractiveShell {
             });
 
           return [
-            `\n  ${colors.brand}✦ ${colors.bold}TaskForge Execution${colors.reset}`,
-            `  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Execution running in background (Run: ${runId}).`,
+            `\n  ${colors.brand}✦ ${colors.bold}${isReadOnlyAutoRun ? 'TaskForge Analysis' : 'TaskForge Execution'}${colors.reset}`,
+            isReadOnlyAutoRun
+              ? `  ${colors.green}✔${colors.reset} Read-only analysis running in background (Run: ${runId}).`
+              : `  ${colors.green}✔${colors.reset} ${colors.bold}Plan approved.${colors.reset} Execution running in background (Run: ${runId}).`,
             `  ${colors.dim}REPL is active — submit new tasks to free agents, type /tasks, or /stream <task>.${colors.reset}\n`,
           ].join('\n');
         }

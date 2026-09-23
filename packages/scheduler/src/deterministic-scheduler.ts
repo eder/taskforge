@@ -28,10 +28,16 @@ import { executeGovernedAssignment } from './governed-assignment.js';
 import { CompletionGate, sanitizeTaskOutput } from './completion-gate.js';
 import {
   RecoveryIncident,
+  RecoveryFailureClass,
+  classifyCompletionFailure,
+  classifyExecutionFailure,
+  classifyVerificationFailure,
   decideTaskRecovery,
   formatRecoveryContext,
+  recoveryConsumesRework,
   verificationEvidence,
 } from './task-recovery.js';
+import { allowedWritersForTask, verificationCommandsForTask } from './task-policy.js';
 
 export interface SchedulerContext {
   runId: string;
@@ -139,10 +145,13 @@ export class DeterministicScheduler {
   private resolveAgentId(task: Task): string | undefined {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
     const quotaTracker = AgentQuotaTracker.getInstance();
+    const allowedWriters = allowedWritersForTask(task, this.ctx.config);
+    const isAllowed = (agentId: string): boolean =>
+      allowedWriters === undefined || allowedWriters.has(agentId);
 
     if (this.ctx.preferredAgentMapping && this.ctx.preferredAgentMapping[task.id]) {
       const preferred = this.ctx.preferredAgentMapping[task.id];
-      if (!failed.has(preferred) && quotaTracker.isAvailable(preferred)) {
+      if (!failed.has(preferred) && quotaTracker.isAvailable(preferred) && isAllowed(preferred)) {
         return preferred;
       }
     }
@@ -151,13 +160,25 @@ export class DeterministicScheduler {
       configuredAgent &&
       this.ctx.agentRegistry.get(configuredAgent) &&
       !failed.has(configuredAgent) &&
-      quotaTracker.isAvailable(configuredAgent)
+      quotaTracker.isAvailable(configuredAgent) &&
+      isAllowed(configuredAgent)
     ) {
       return configuredAgent;
     }
     const available = this.ctx.agentRegistry
       .list()
-      .filter((agent) => !failed.has(agent.id) && quotaTracker.isAvailable(agent.id));
+      .filter(
+        (agent) =>
+          !failed.has(agent.id) &&
+          quotaTracker.isAvailable(agent.id) &&
+          isAllowed(agent.id),
+      );
+
+    if (available.length === 0 && allowedWriters && allowedWriters.size > 0) {
+      this.ctx.onProgress?.(
+        `[${task.id}] ✗ No healthy agent is authorized to write scope ${task.contract.allowedScope.join(', ')}. Allowed writers: ${[...allowedWriters].join(', ')}.`,
+      );
+    }
 
     return available[0]?.id;
   }
@@ -228,17 +249,22 @@ export class DeterministicScheduler {
     params: {
       agentId: string;
       phase: RecoveryIncident['phase'];
+      failureClass?: RecoveryFailureClass;
       reason: string;
       evidence?: string;
       candidateCommit?: string;
       assignmentId?: string;
     },
   ): Promise<'retry_same_agent' | 'reassign' | 'block'> {
-    const rework = this.ctx.taskRepo.incrementRework(task.id);
+    const failureClass = params.failureClass ?? 'code_or_test';
+    const rework = recoveryConsumesRework(failureClass)
+      ? this.ctx.taskRepo.incrementRework(task.id)
+      : task.reworkCount;
     const incident: RecoveryIncident = {
       attempt: rework,
       agentId: params.agentId,
       phase: params.phase,
+      failureClass,
       reason: params.reason,
       evidence: params.evidence,
       candidateCommit: params.candidateCommit,
@@ -251,7 +277,11 @@ export class DeterministicScheduler {
       this.recoveryBaseCommitByTask.set(task.id, params.candidateCommit);
     }
 
-    const decision = decideTaskRecovery(rework, this.ctx.config.verification.maxReworkCycles);
+    const decision = decideTaskRecovery(
+      rework,
+      this.ctx.config.verification.maxReworkCycles,
+      failureClass,
+    );
 
     this.ctx.eventRepo.append({
       id: `evt-${randomUUID()}`,
@@ -263,6 +293,7 @@ export class DeterministicScheduler {
         assignmentId: params.assignmentId,
         agentId: params.agentId,
         phase: params.phase,
+        failureClass,
         reason: params.reason,
         evidence: params.evidence,
         candidateCommit: params.candidateCommit,
@@ -279,8 +310,16 @@ export class DeterministicScheduler {
     if (decision.action === 'block') {
       this.ctx.graph.updateTaskStatus(task.id, 'blocked');
       this.ctx.taskRepo.updateStatus(task.id, 'blocked');
+      const blockReason =
+        failureClass === 'verification_configuration'
+          ? 'verification is not configured for this task scope'
+          : failureClass === 'environment'
+            ? 'the execution environment cannot satisfy the required verification'
+            : failureClass === 'policy'
+              ? 'a deterministic policy prevents safe continuation'
+              : 'the recovery budget was exhausted';
       this.ctx.onProgress?.(
-        `[${task.id}] ✗ Recovery exhausted after ${rework} failed attempt(s). Task is BLOCKED; delivery remains disabled until the task is resolved.`,
+        `[${task.id}] ✗ Task is BLOCKED because ${blockReason}. Delivery remains disabled.`,
       );
       return 'block';
     }
@@ -293,7 +332,9 @@ export class DeterministicScheduler {
       this.ctx.graph.updateTaskStatus(task.id, 'reassigned');
       this.ctx.taskRepo.updateStatus(task.id, 'reassigned');
       this.ctx.onProgress?.(
-        `[${task.id}] ↻ Recovery ${rework}/${this.ctx.config.verification.maxReworkCycles}: reassigning with failure evidence.`,
+        failureClass === 'provider_quota'
+          ? `[${task.id}] ↻ Provider unavailable/quota-limited: reassigning without consuming implementation rework budget.`
+          : `[${task.id}] ↻ Recovery ${rework}/${this.ctx.config.verification.maxReworkCycles}: reassigning with failure evidence.`,
       );
     } else {
       this.ctx.graph.updateTaskStatus(task.id, 'retrying');
@@ -354,11 +395,15 @@ export class DeterministicScheduler {
       for (const task of candidates) {
         const agentId = this.resolveAgentId(task);
         if (!agentId) {
+          const allowedWriters = allowedWritersForTask(task, this.ctx.config);
+          const ownershipBlocked = allowedWriters !== undefined;
           this.ctx.onProgress?.(
-            `[${task.id}] ✗ No healthy coding agent is currently available; task will not be sent to a known-unavailable provider.`,
+            ownershipBlocked
+              ? `[${task.id}] ✗ Task is BLOCKED: no healthy agent is authorized for scope ${task.contract.allowedScope.join(', ')}. Allowed writers: ${allowedWriters.size > 0 ? [...allowedWriters].join(', ') : '(none after policy intersection)'}.`
+              : `[${task.id}] ✗ No healthy coding agent is currently available; task will not be sent to a known-unavailable provider.`,
           );
-          graph.updateTaskStatus(task.id, 'failed');
-          this.ctx.taskRepo.updateStatus(task.id, 'failed');
+          graph.updateTaskStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
+          this.ctx.taskRepo.updateStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
           continue;
         }
         if (this.concurrency.canSchedule(agentId)) {
@@ -555,7 +600,10 @@ export class DeterministicScheduler {
             worktreePath: verifyPath,
             config,
             taskType: task.type,
-            explicitCommands: task.contract.verification?.commands ?? [],
+            explicitCommands:
+              task.contract.verification?.commands ??
+              verificationCommandsForTask(task, config) ??
+              [],
             expectation: task.contract.verification?.expectation ?? 'pass',
           });
         }
@@ -654,14 +702,20 @@ export class DeterministicScheduler {
                 worktreePath: verifyPath,
                 config,
                 taskType: task.type,
+                explicitCommands: verificationCommandsForTask(task, config),
               })
             : ({ passed: true, checks: [] } as VerificationResult));
 
 
         if (!verResult.passed) {
-          const rework = taskRepo.incrementRework(task.id);
+          const failureClass = classifyVerificationFailure(verResult.failureReason);
+          const rework = recoveryConsumesRework(failureClass)
+            ? taskRepo.incrementRework(task.id)
+            : task.reworkCount;
           this.ctx.onProgress?.(
-            `[${task.id}] Collaborative verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
+            failureClass === 'verification_configuration'
+              ? `[${task.id}] Collaborative task BLOCKED: verification is not configured for this scope.`
+              : `[${task.id}] Collaborative verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
           );
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
@@ -1019,6 +1073,10 @@ export class DeterministicScheduler {
       await this.recoverTask(task, {
         agentId,
         phase: 'execution',
+        failureClass: classifyExecutionFailure(
+          govResult.completionReason,
+          agentResult.output,
+        ),
         reason,
         evidence: agentResult.output,
         candidateCommit: agentResult.commitHash,
@@ -1036,7 +1094,10 @@ export class DeterministicScheduler {
         worktreePath: wt.path,
         config,
         taskType: task.type,
-        explicitCommands: task.contract.verification?.commands ?? [],
+        explicitCommands:
+          task.contract.verification?.commands ??
+          verificationCommandsForTask(task, config) ??
+          [],
         expectation: task.contract.verification?.expectation ?? 'pass',
       });
     }
@@ -1114,8 +1175,12 @@ export class DeterministicScheduler {
       await this.recoverTask(task, {
         agentId,
         phase: 'completion',
+        failureClass: classifyCompletionFailure(
+          gateResult.failureReason,
+          [gateResult.evidence.explanation, agentResult.output].filter(Boolean).join('\n'),
+        ),
         reason: gateResult.failureReason ?? 'Completion gate rejected the attempt',
-        evidence: gateResult.evidence.explanation,
+        evidence: [gateResult.evidence.explanation, agentResult.output].filter(Boolean).join('\n'),
         candidateCommit: agentResult.commitHash,
         assignmentId,
       });
@@ -1195,6 +1260,7 @@ export class DeterministicScheduler {
               worktreePath: wt.path,
               config,
               taskType: task.type,
+              explicitCommands: verificationCommandsForTask(task, config),
             })
           : ({ passed: true, checks: [] } as VerificationResult));
 
@@ -1223,6 +1289,10 @@ export class DeterministicScheduler {
         await this.recoverTask(task, {
           agentId,
           phase: 'verification',
+          failureClass: classifyVerificationFailure(
+            verResult.failureReason,
+            verificationEvidence(verResult.checks),
+          ),
           reason: verResult.failureReason ?? 'Automated verification failed',
           evidence: verificationEvidence(verResult.checks),
           candidateCommit: agentResult.commitHash,
