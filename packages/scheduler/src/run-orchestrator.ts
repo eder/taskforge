@@ -60,6 +60,7 @@ import {
   SchedulerContext,
 } from './deterministic-scheduler.js';
 import { executeExecutionTeam } from './execution-team.js';
+import { allowedWritersForTask } from './task-policy.js';
 import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
 import {
   ExecutionUsageEstimator,
@@ -500,6 +501,7 @@ export class RunOrchestrator {
 
         let selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${task.id}`,
+          allowedAgentIds: allowedWritersForTask(task, this.config),
         });
 
         // In fakeFallback mode, if roles were requested, ensure fake agent fills them
