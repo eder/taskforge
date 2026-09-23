@@ -111,9 +111,13 @@ export class ProjectInstructionResolver {
       while ((match = pattern.exec(content)) !== null) {
         const raw = match[1].split('#')[0];
         if (/^[a-z]+:\/\//i.test(raw)) continue;
+        const fromRepoRoot =
+          !raw.startsWith('.') && raw.includes('/') && fs.existsSync(path.join(this.repoRoot, raw));
         const resolved = raw.startsWith('/')
           ? raw.slice(1)
-          : path.normalize(path.join(baseDir === '.' ? '' : baseDir, raw));
+          : fromRepoRoot
+            ? raw
+            : path.normalize(path.join(baseDir === '.' ? '' : baseDir, raw));
         const safe = this.safeRelativePath(resolved);
         if (safe) refs.add(safe);
       }
