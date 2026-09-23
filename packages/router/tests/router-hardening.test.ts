@@ -54,6 +54,29 @@ describe('Router Fallback Observability and Quality Guard', () => {
     }
   });
 
+  it('records the HTTP status when routing falls back after a provider error', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+    } as Response);
+
+    try {
+      const provider = new OpenAIRoutingProvider('fake-api-key', 'gpt-5.6-luna');
+      const decision = await provider.route({
+        task: sampleTask,
+        availableAgents: ['claude', 'codex'],
+      });
+
+      expect(decision.source).toBe('fallback');
+      expect(decision.fallbackReason).toBe('http_error');
+      expect(decision.fallbackDetail).toBe('HTTP 401');
+      expect(decision.reason).toContain('HTTP 401');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it('records provider_unavailable when API key is missing', async () => {
     const provider = new OpenAIRoutingProvider('', 'gpt-5.6-luna');
     const decision = await provider.route({
