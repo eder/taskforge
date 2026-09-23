@@ -43,6 +43,19 @@ export class ProjectInstructionResolver {
 
     for (const file of PRIMARY_FILES) add(file, file === 'AGENTS.md' ? 'agent' : 'provider');
 
+    // Planning often begins before a precise allowedScope exists. Discover
+    // nested instruction entry points up front so directory ownership and
+    // path-specific rules can influence decomposition instead of only being
+    // noticed after an assignment has already been routed.
+    if (allowedScope.includes('*')) {
+      for (const entry of fs.readdirSync(this.repoRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+        for (const file of PRIMARY_FILES) {
+          add(path.join(entry.name, file), file === 'AGENTS.md' ? 'agent' : 'provider');
+        }
+      }
+    }
+
     for (const scope of allowedScope) {
       const directory = this.scopeDirectory(scope);
       if (!directory) continue;
