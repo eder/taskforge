@@ -132,7 +132,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       contract: {
         taskId: 'TASK-PAIR-1',
         objective: 'Implement secure auth',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['Auth module exported', 'Tests pass'],
       },
@@ -332,7 +332,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       contract: {
         taskId: 'TASK-PARALLEL-1',
         objective: 'Fix flaky test',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['Test passes reliably'],
       },
@@ -458,7 +458,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       contract: {
         taskId: 'TASK-REVIEW-N',
         objective: 'Ship the high-risk change',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['Implemented', 'Reviewed by three independent reviewers'],
       },
@@ -571,7 +571,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       contract: {
         taskId: 'TASK-COMPETITIVE-1',
         objective: 'Solve the tricky problem',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['A working solution exists'],
       },
@@ -678,7 +678,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       contract: {
         taskId: 'TASK-PARALLEL-FAIL',
         objective: 'Fix flaky test',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['Test passes reliably'],
       },
@@ -808,7 +808,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       contract: {
         taskId: 'TASK-PARALLEL-RECOVER',
         objective: 'Fix flaky test',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['Test passes reliably'],
       },
@@ -959,7 +959,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       contract: {
         taskId: 'TASK-PARALLEL-EXHAUSTED',
         objective: 'Fix flaky test',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['Test passes reliably'],
       },
@@ -1099,7 +1099,7 @@ describe('RunOrchestrator ExecutionTeam & Collaborative Staffing', () => {
       contract: {
         taskId: 'TASK-QUORUM-RECOVER',
         objective: 'Fix flaky test',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['Test passes reliably'],
       },

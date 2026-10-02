@@ -1,5 +1,14 @@
 import { AgentAdapter } from './adapter-interface.js';
-import { ClaudeCodeAdapter, CodexAdapter, AntigravityAdapter } from './real-adapters.js';
+import {
+  ClaudeCodeAdapter,
+  CodexAdapter,
+  AntigravityAdapter,
+  CursorAdapter,
+  AiderAdapter,
+  OpenCodeAdapter,
+  GooseAdapter,
+  CliAdapterOptions,
+} from './real-adapters.js';
 import { AgentQuotaTracker, AgentQuotaStatus } from './quota-tracker.js';
 
 export interface AgentDetectionReport {
@@ -32,38 +41,51 @@ export class AgentDetector {
   }
 }
 
+type AgentConfigs = Record<
+  string,
+  {
+    enabled?: boolean;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    passEnv?: string[];
+  }
+>;
+
+interface HarnessDefinition {
+  id: string;
+  create: (options: CliAdapterOptions) => AgentAdapter;
+  /** Registered even without an `agents.<id>` config entry. */
+  builtIn: boolean;
+}
+
+const HARNESSES: HarnessDefinition[] = [
+  { id: 'claude', create: (o) => new ClaudeCodeAdapter(o), builtIn: true },
+  { id: 'codex', create: (o) => new CodexAdapter(o), builtIn: true },
+  { id: 'agy', create: (o) => new AntigravityAdapter(o), builtIn: true },
+  { id: 'cursor', create: (o) => new CursorAdapter(o), builtIn: false },
+  { id: 'aider', create: (o) => new AiderAdapter(o), builtIn: false },
+  { id: 'opencode', create: (o) => new OpenCodeAdapter(o), builtIn: false },
+  { id: 'goose', create: (o) => new GooseAdapter(o), builtIn: false },
+];
+
 export class AgentRegistry {
   private adapters: Map<string, AgentAdapter> = new Map();
 
-  constructor(
-    registerDefaults: boolean = true,
-    agentConfigs?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>,
-  ) {
-    if (registerDefaults) {
-      // Register default known harnesses
-      const claudeOpts: import('./real-adapters.js').CliAdapterOptions = {};
-      if (agentConfigs?.claude?.command) claudeOpts.binaryPath = agentConfigs.claude.command;
-      if (agentConfigs?.claude?.args && agentConfigs.claude.args.length > 0) {
-        claudeOpts.defaultArgs = agentConfigs.claude.args;
-      }
-      if (agentConfigs?.claude?.env) claudeOpts.env = agentConfigs.claude.env;
-      this.register(new ClaudeCodeAdapter(claudeOpts));
+  constructor(registerDefaults: boolean = true, agentConfigs?: AgentConfigs) {
+    if (!registerDefaults) return;
 
-      const codexOpts: import('./real-adapters.js').CliAdapterOptions = {};
-      if (agentConfigs?.codex?.command) codexOpts.binaryPath = agentConfigs.codex.command;
-      if (agentConfigs?.codex?.args && agentConfigs.codex.args.length > 0) {
-        codexOpts.defaultArgs = agentConfigs.codex.args;
-      }
-      if (agentConfigs?.codex?.env) codexOpts.env = agentConfigs.codex.env;
-      this.register(new CodexAdapter(codexOpts));
+    for (const harness of HARNESSES) {
+      const agentConfig = agentConfigs?.[harness.id];
+      if (agentConfig?.enabled === false) continue;
+      if (!harness.builtIn && !agentConfig) continue; // extended harnesses are opt-in
 
-      const agyOpts: import('./real-adapters.js').CliAdapterOptions = {};
-      if (agentConfigs?.agy?.command) agyOpts.binaryPath = agentConfigs.agy.command;
-      if (agentConfigs?.agy?.args && agentConfigs.agy.args.length > 0) {
-        agyOpts.defaultArgs = agentConfigs.agy.args;
-      }
-      if (agentConfigs?.agy?.env) agyOpts.env = agentConfigs.agy.env;
-      this.register(new AntigravityAdapter(agyOpts));
+      const options: CliAdapterOptions = {};
+      if (agentConfig?.command) options.binaryPath = agentConfig.command;
+      if (agentConfig?.args && agentConfig.args.length > 0) options.defaultArgs = agentConfig.args;
+      if (agentConfig?.env) options.env = agentConfig.env;
+      if (agentConfig?.passEnv) options.passEnv = agentConfig.passEnv;
+      this.register(harness.create(options));
     }
   }
 

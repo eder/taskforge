@@ -46,12 +46,33 @@ export class TaskForgeDatabase {
     this.db = new DatabaseSync(dbPath);
 
     this.initPragmas();
-    this.initSchema();
+    this.retryWhileBusy(() => this.initSchema());
+  }
+
+  /**
+   * SQLite does not always invoke the busy handler when switching journal
+   * mode or creating the schema while another process does the same on a
+   * fresh database, so lock errors are retried explicitly (synchronously).
+   */
+  private retryWhileBusy<T>(operation: () => T, attempts = 100, delayMs = 100): T {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return operation();
+      } catch (error) {
+        const message = (error as Error).message ?? '';
+        const busy = /database is locked|SQLITE_BUSY|database table is locked/i.test(message);
+        if (!busy || attempt >= attempts) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      }
+    }
   }
 
   private initPragmas(): void {
-    this.db.exec('PRAGMA journal_mode = WAL;');
-    this.db.exec('PRAGMA busy_timeout = 5000;');
+    // busy_timeout must come first: switching to WAL (and creating the schema)
+    // takes a lock, so two TaskForge processes starting at once on a fresh
+    // database would otherwise fail immediately with "database is locked".
+    this.db.exec('PRAGMA busy_timeout = 15000;');
+    this.retryWhileBusy(() => this.db.exec('PRAGMA journal_mode = WAL;'));
     this.db.exec('PRAGMA foreign_keys = ON;');
   }
 

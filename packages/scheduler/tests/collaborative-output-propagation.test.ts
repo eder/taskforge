@@ -107,7 +107,7 @@ describe('collaborative/parallel execution propagates output into taskOutputs', 
       contract: {
         taskId: 'TASK-PAIR-OUTPUT',
         objective: 'Implement the feature',
-        allowedScope: ['src/**'],
+        allowedScope: ['**'],
         forbiddenChanges: [],
         acceptanceCriteria: ['Feature implemented and reviewed'],
       },

@@ -6,8 +6,23 @@ import {
   VerificationExpectation,
   TaskForgeConfig,
 } from '@taskforge/shared';
-import { ProcessRunner } from '@taskforge/execution';
+import { ProcessRunner, DEFAULT_ENV_POLICY, EnvironmentPolicy } from '@taskforge/execution';
 import { EventRepository, VerificationRepository } from '@taskforge/persistence';
+
+/**
+ * Project test suites need the developer's normal environment (DATABASE_URL,
+ * JAVA_HOME, GOPATH, ...), so verification inherits it. Secret-looking names
+ * (*TOKEN*, *SECRET*, *PASSWORD*, *API_KEY*) and TaskForge's own router key
+ * are withheld unless listed in `verification.passEnv`.
+ */
+export function verificationEnvPolicy(passEnv: string[] = []): EnvironmentPolicy {
+  return {
+    inherit: true,
+    // The router key can never be requested, even explicitly.
+    allow: passEnv.filter((name) => name !== 'TASKFORGE_OPENAI_API_KEY'),
+    denyPatterns: [...(DEFAULT_ENV_POLICY.denyPatterns ?? []), 'TASKFORGE_OPENAI_API_KEY'],
+  };
+}
 
 export interface RunVerificationOptions {
   taskId: string;
@@ -145,12 +160,16 @@ export class VerificationRunner {
     for (const check of checksToRun) {
       if (!check.enabled) continue;
 
-      const [cmd, ...args] = check.command.split(' ');
+      // Commands come from trusted configuration or the repository's own
+      // scripts and may use shell syntax (quotes, `&&`, `VAR=1 cmd`), so they
+      // run through the shell instead of being split on spaces.
+      const shell = process.platform === 'win32' ? { cmd: 'cmd', flag: '/c' } : { cmd: 'sh', flag: '-c' };
       const runResult = await ProcessRunner.run({
-        command: cmd,
-        args,
+        command: shell.cmd,
+        args: [shell.flag, check.command],
         cwd: worktreePath,
-        timeoutMs: 60000,
+        timeoutMs: (config.verification.commandTimeoutSeconds ?? 600) * 1000,
+        envPolicy: verificationEnvPolicy(config.verification.passEnv),
       });
 
       const checkRecord: VerificationCheck = {

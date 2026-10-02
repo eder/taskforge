@@ -257,7 +257,9 @@ export interface AgentResult {
 }
 
 export function generateRunId(): string {
-  return `run-${Date.now()}`;
+  // Millisecond timestamp keeps ids sortable; the suffix prevents two runs
+  // started in the same millisecond (e.g. parallel terminals) from colliding.
+  return `run-${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
 }
 
 export interface ActiveAgentState {

@@ -7,3 +7,5 @@ export * from './completion-gate.js';
 export * from './task-recovery.js';
 
 export * from './task-policy.js';
+export * from './dual-review.js';
+export * from './task-id-allocation.js';

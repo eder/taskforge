@@ -175,7 +175,10 @@ describe('Phases 20-22: Advanced UX (TUI), GitHub Workflow & Remote Workers', ()
       expect(summary).toContain('Implement OAuth login');
       expect(summary).toContain('TASK-01');
       expect(summary).toContain('Quality & Verification Evidence');
-      expect(summary).toContain('Automated Tests:** PASS');
+      // No verification was recorded in this scenario: the summary must say so
+      // instead of claiming tests/lint/typecheck passed.
+      expect(summary).not.toContain('Automated Tests:** PASS');
+      expect(summary).toContain('No automated verification results were recorded');
       expect(summary).toContain('Telemetry & Resource Utilization');
       expect(summary).toContain('Tokens processed');
     });

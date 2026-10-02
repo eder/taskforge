@@ -5,7 +5,7 @@ function normalizeScope(scope: string): string {
   return scope.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
 }
 
-function ruleMatchesScope(ruleScope: string, taskScope: string): boolean {
+export function ruleMatchesScope(ruleScope: string, taskScope: string): boolean {
   const rule = normalizeScope(ruleScope);
   const scope = normalizeScope(taskScope);
 
@@ -82,4 +82,54 @@ export function verificationCommandsForTask(
   }
 
   return commands.size > 0 ? [...commands] : undefined;
+}
+
+function isWildcardScope(scope: string): boolean {
+  const normalized = normalizeScope(scope);
+  return normalized === '' || normalized === '*' || normalized === '**' || normalized === '.';
+}
+
+function globToRegExp(glob: string): RegExp {
+  let out = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        out += '.*';
+        i++;
+        if (glob[i + 1] === '/') i++; // "**/" also matches zero directories
+      } else {
+        out += '[^/]*';
+      }
+    } else if (c === '?') {
+      out += '[^/]';
+    } else {
+      out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** Whether a repository-relative file path falls inside any of the allowed scopes. */
+export function scopeAllowsPath(scopes: string[], filePath: string): boolean {
+  const file = normalizeScope(filePath);
+  return scopes.some((raw) => {
+    if (isWildcardScope(raw)) return true;
+    const scope = normalizeScope(raw);
+    if (scope.endsWith('/**')) {
+      const prefix = scope.slice(0, -3);
+      return file === prefix || file.startsWith(`${prefix}/`);
+    }
+    if (/[*?]/.test(scope)) return globToRegExp(scope).test(file);
+    return file === scope || file.startsWith(`${scope}/`);
+  });
+}
+
+/**
+ * Files changed by a task that fall outside its declared writable scope.
+ * An empty or repository-wide scope constrains nothing.
+ */
+export function filesOutsideScope(scopes: string[] | undefined, changedFiles: string[]): string[] {
+  if (!scopes || scopes.length === 0 || scopes.some(isWildcardScope)) return [];
+  return changedFiles.filter((file) => !scopeAllowsPath(scopes, file));
 }

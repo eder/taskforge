@@ -37,7 +37,26 @@ import {
   recoveryConsumesRework,
   verificationEvidence,
 } from './task-recovery.js';
-import { allowedWritersForTask, verificationCommandsForTask } from './task-policy.js';
+import {
+  allowedWritersForTask,
+  filesOutsideScope,
+  verificationCommandsForTask,
+} from './task-policy.js';
+import {
+  assessTaskSensitivity,
+  buildDualReviewObjective,
+  parseReviewVerdict,
+  selectIndependentReviewer,
+  taskProducesChanges,
+} from './dual-review.js';
+
+/** State carried over from a previous, interrupted execution of the same run. */
+export interface SchedulerResumeState {
+  /** Sanitized outputs of tasks completed before the interruption. */
+  taskOutputs: Record<string, string>;
+  /** Whether the run branch already holds integrated task commits. */
+  hasIntegratedCommits: boolean;
+}
 
 export interface SchedulerContext {
   runId: string;
@@ -53,6 +72,8 @@ export interface SchedulerContext {
   verificationRunner: VerificationRunner;
   integrationService: IntegrationService;
   runRepo: RunRepository;
+  /** Present when continuing an interrupted run via `RunOrchestrator.resume()`. */
+  resumeState?: SchedulerResumeState;
   taskRepo: TaskRepository;
   assignmentRepo: AssignmentRepository;
   executionRepo: ExecutionRepository;
@@ -140,6 +161,16 @@ export class DeterministicScheduler {
     this.concurrency = new ConcurrencyManager(ctx.config);
     this.ctx.concurrency = this.concurrency;
     this.completionGate = new CompletionGate(ctx.gitService);
+    if (ctx.resumeState) {
+      this.taskOutputs = { ...ctx.resumeState.taskOutputs };
+      this.hasIntegratedCommits = ctx.resumeState.hasIntegratedCommits;
+    }
+  }
+
+  /** Keeps the output in memory and checkpoints it so a resumed run can still feed dependents. */
+  private recordTaskOutput(taskId: string, output: string): void {
+    this.taskOutputs[taskId] = sanitizeTaskOutput(output);
+    this.ctx.runRepo.mergeMetadata(this.ctx.runId, { taskOutputs: this.taskOutputs });
   }
 
   private resolveAgentId(task: Task): string | undefined {
@@ -225,6 +256,11 @@ export class DeterministicScheduler {
       return recoveryBase;
     }
 
+    return this.resolveCumulativeBase(task);
+  }
+
+  /** The run state a task started from, ignoring any recovery candidate. */
+  private async resolveCumulativeBase(task: Task): Promise<string> {
     if (task.dependencies.length === 0) {
       return this.ctx.baseCommit;
     }
@@ -349,8 +385,232 @@ export class DeterministicScheduler {
     return decision.action;
   }
 
+  /**
+   * A recovery retry builds on the previous candidate commit, so its commit
+   * only holds the delta against that candidate. Cherry-picking it alone onto
+   * the run branch would conflict (or drop the earlier work). Represent the
+   * attempt chain as one commit holding the task's full delta against the
+   * state the task originally started from. Returns undefined when that
+   * cumulative delta is empty (nothing to integrate).
+   */
+  private async commitForIntegration(
+    task: Task,
+    commitHash: string,
+    worktreePath: string,
+  ): Promise<string | undefined> {
+    if (!this.recoveryBaseCommitByTask.has(task.id)) return commitHash;
+    const git = this.ctx.gitService;
+    const base = await this.resolveCumulativeBase(task);
+    const tree = await git.getTreeHash(commitHash, worktreePath);
+    if (tree === (await git.getTreeHash(base, worktreePath))) return undefined;
+    return git.commitTree(tree, base, `${task.title} (${task.id})`, worktreePath);
+  }
+
+  /**
+   * Deterministic write-boundary check: every file the task changed (relative
+   * to the state it started from, ignoring recovery candidates) must fall
+   * inside its declared allowedScope. Returns the offending files.
+   */
+  private async findScopeViolations(
+    task: Task,
+    commitHash: string | undefined,
+    worktreePath: string,
+  ): Promise<string[]> {
+    if (this.ctx.config.verification.enforceScope === false) return [];
+    const scopes = task.contract.allowedScope;
+    if (!commitHash || !taskProducesChanges(task) || !scopes || scopes.length === 0) return [];
+    const base = await this.resolveCumulativeBase(task);
+    const out = await new GitService(worktreePath)
+      .exec(['diff', '--name-only', base, commitHash], worktreePath)
+      .catch(() => '');
+    const violations = filesOutsideScope(
+      scopes,
+      out.split('\n').map((line) => line.trim()).filter(Boolean),
+    );
+    if (violations.length > 0) {
+      this.ctx.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId: this.ctx.runId,
+        taskId: task.id,
+        type: 'SCOPE_VIOLATION',
+        payload: { taskId: task.id, allowedScope: scopes, violations, commitHash },
+        timestamp: new Date(),
+      });
+    }
+    return violations;
+  }
+
+  /**
+   * Mandatory independent review for sensitive tasks (opt-in via
+   * `verification.dualReview`). Runs after automated verification and before
+   * the change is marked verified/integrated. The reviewer is always a
+   * different agent than any that worked on the task, runs read-only in a
+   * detached worktree at the candidate commit, and must emit an explicit
+   * verdict line; anything else fails closed.
+   */
+  private async runDualReviewGate(
+    task: Task,
+    params: { implementerAgentIds: string[]; candidateCommit?: string; taskBaseCommit: string },
+  ): Promise<
+    | { decision: 'not_required' | 'approved' }
+    | { decision: 'rejected'; reviewerId: string; findings: string }
+    | { decision: 'unavailable'; reason: string; block: boolean }
+  > {
+    const { config, runId, eventRepo, assignmentRepo, worktreeManager } = this.ctx;
+    const assessment = assessTaskSensitivity(task, config);
+    const { candidateCommit, taskBaseCommit } = params;
+    if (
+      !assessment.sensitive ||
+      !taskProducesChanges(task) ||
+      !candidateCommit ||
+      candidateCommit === taskBaseCommit
+    ) {
+      return { decision: 'not_required' };
+    }
+
+    const block = config.verification.dualReview.onNoIndependentReviewer === 'block';
+    eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId,
+      taskId: task.id,
+      type: 'DUAL_REVIEW_REQUIRED',
+      payload: { taskId: task.id, reasons: assessment.reasons, candidateCommit },
+      timestamp: new Date(),
+    });
+    this.ctx.onProgress?.(
+      `[${task.id}] Sensitive task (${assessment.reasons[0]}); independent review required`,
+    );
+
+    // Anyone who worked on this task (any role) is not independent.
+    const excluded = new Set(params.implementerAgentIds);
+    for (const record of assignmentRepo.listByTask(task.id)) {
+      if (!record.id.includes('-review-')) excluded.add(record.agentId);
+    }
+
+    const reviewObjective = buildDualReviewObjective({
+      task,
+      implementerAgentIds: [...excluded],
+      candidateCommit,
+      baseCommit: taskBaseCommit,
+      reasons: assessment.reasons,
+    });
+    const reviewer = await selectIndependentReviewer(
+      this.ctx.agentRegistry.list(),
+      excluded,
+      reviewObjective,
+    );
+    if (!reviewer) {
+      const reason = `no healthy agent other than [${[...excluded].join(', ')}] is available to review`;
+      eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: task.id,
+        type: 'DUAL_REVIEW_UNAVAILABLE',
+        payload: { taskId: task.id, reason, policy: block ? 'block' : 'skip' },
+        timestamp: new Date(),
+      });
+      return { decision: 'unavailable', reason, block };
+    }
+
+    const reviewAssignment: AgentAssignment = {
+      id: `asgn-${task.id}-review-${randomUUID().slice(0, 8)}`,
+      taskId: task.id,
+      agentId: reviewer.id,
+      role: 'reviewer',
+      objective: reviewObjective,
+      status: 'running',
+    };
+    assignmentRepo.create(reviewAssignment, runId);
+    this.ctx.onProgress?.(`[${task.id}] Independent review by ${reviewer.name}...`);
+
+    // Read-only by contract: the reviewer may inspect but never mutate.
+    const reviewTask: Task = {
+      ...task,
+      contract: {
+        ...task.contract,
+        completionMode: 'review',
+        forbiddenChanges: ['*'],
+        objective: reviewObjective,
+      },
+    };
+
+    try {
+      const result = await executeGovernedAssignment({
+        runId,
+        baseCommit: candidateCommit,
+        repoRoot: this.ctx.repoRoot,
+        originalUserRequest: this.ctx.originalUserRequest,
+        config,
+        task: reviewTask,
+        assignment: reviewAssignment,
+        agent: reviewer,
+        detached: true,
+        objectiveOverride: reviewObjective,
+        worktreeManager,
+        workspaceRepo: this.ctx.workspaceRepo,
+        assignmentRepo,
+        executionRepo: this.ctx.executionRepo,
+        eventRepo,
+        interactionGateway: this.ctx.interactionGateway,
+        activityTracker: this.ctx.activityTracker,
+        streamBus: this.ctx.streamBus,
+        // Deliberately outside the concurrency pool: the implementer's slot is
+        // still held, so waiting for another slot here could deadlock.
+        graph: this.ctx.graph,
+        communicationBus: this.ctx.communicationBus,
+        sessionRegistry: this.ctx.sessionRegistry,
+        abortSignal: this.ctx.abortSignal,
+      });
+
+      const review = parseReviewVerdict(result.output);
+      if (!result.success && review.verdict === 'missing') {
+        const reason = `reviewer ${reviewer.name} failed to produce a review (${result.message ?? 'no output'})`;
+        eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'DUAL_REVIEW_UNAVAILABLE',
+          payload: { taskId: task.id, reviewerId: reviewer.id, reason, policy: block ? 'block' : 'skip' },
+          timestamp: new Date(),
+        });
+        return { decision: 'unavailable', reason, block };
+      }
+
+      if (review.verdict === 'approved') {
+        eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId,
+          taskId: task.id,
+          type: 'DUAL_REVIEW_APPROVED',
+          payload: { taskId: task.id, reviewerId: reviewer.id, candidateCommit },
+          timestamp: new Date(),
+        });
+        this.ctx.onProgress?.(`[${task.id}] Independent review approved by ${reviewer.name} ✓`);
+        return { decision: 'approved' };
+      }
+
+      const findings =
+        review.verdict === 'missing'
+          ? `Reviewer ${reviewer.name} gave no REVIEW_VERDICT line; treated as rejected.\n${review.findings}`
+          : review.findings;
+      eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: task.id,
+        type: 'DUAL_REVIEW_REJECTED',
+        payload: { taskId: task.id, reviewerId: reviewer.id, candidateCommit, findings },
+        timestamp: new Date(),
+      });
+      this.ctx.onProgress?.(`[${task.id}] Independent review rejected by ${reviewer.name}`);
+      return { decision: 'rejected', reviewerId: reviewer.id, findings };
+    } finally {
+      await worktreeManager
+        .removeWorktree(task.id, reviewAssignment.id, true, true)
+        .catch(() => {});
+    }
+  }
+
   async run(): Promise<SchedulerResult> {
-    this.hasIntegratedCommits = false;
     const { runId, graph, eventRepo, runRepo, abortSignal, baseCommit } = this.ctx;
 
     eventRepo.append({
@@ -672,7 +932,7 @@ export class DeterministicScheduler {
 
         const collabOutput = (res as any).output as string | undefined;
         if (collabOutput && collabOutput.trim().length > 0) {
-          this.taskOutputs[task.id] = sanitizeTaskOutput(collabOutput);
+          this.recordTaskOutput(task.id, collabOutput);
         }
 
         // Verification. Report/review contracts are validated by CompletionGate
@@ -680,6 +940,23 @@ export class DeterministicScheduler {
         // they were explicitly forbidden to modify.
         graph.updateTaskStatus(task.id, 'verification');
         taskRepo.updateStatus(task.id, 'verification');
+
+        const collabScopeViolations = await this.findScopeViolations(
+          task,
+          res.commitHash,
+          verifyPath,
+        );
+        if (collabScopeViolations.length > 0) {
+          this.ctx.onProgress?.(
+            `[${task.id}] Collaborative task BLOCKED: changes outside the allowed scope (${task.contract.allowedScope.join(', ')}): ${collabScopeViolations.slice(0, 10).join(', ')}`,
+          );
+          graph.updateTaskStatus(task.id, 'failed');
+          taskRepo.updateStatus(task.id, 'failed');
+          graph.updateTaskStatus(task.id, 'blocked');
+          taskRepo.updateStatus(task.id, 'blocked');
+          return;
+        }
+
         const runAutomatedVerification = requiresAutomatedRepositoryVerification(task);
         if (runAutomatedVerification) {
           this.ctx.activityTracker?.updateStatus(
@@ -722,6 +999,33 @@ export class DeterministicScheduler {
           graph.updateTaskStatus(task.id, 'blocked');
           taskRepo.updateStatus(task.id, 'blocked');
           return;
+        }
+
+        // Independent review for sensitive tasks (opt-in dual-review gate).
+        const collabReview = await this.runDualReviewGate(task, {
+          implementerAgentIds: [],
+          candidateCommit: res.commitHash,
+          taskBaseCommit,
+        });
+        if (
+          collabReview.decision === 'rejected' ||
+          (collabReview.decision === 'unavailable' && collabReview.block)
+        ) {
+          this.ctx.onProgress?.(
+            collabReview.decision === 'rejected'
+              ? `[${task.id}] Collaborative task BLOCKED: independent review rejected the change.`
+              : `[${task.id}] Collaborative task BLOCKED: dual review is required but unavailable (${collabReview.reason}).`,
+          );
+          graph.updateTaskStatus(task.id, 'failed');
+          taskRepo.updateStatus(task.id, 'failed');
+          graph.updateTaskStatus(task.id, 'blocked');
+          taskRepo.updateStatus(task.id, 'blocked');
+          return;
+        }
+        if (collabReview.decision === 'unavailable') {
+          this.ctx.onProgress?.(
+            `[${task.id}] ⚠ Dual review skipped by policy (onNoIndependentReviewer: skip): ${collabReview.reason}`,
+          );
         }
 
         graph.updateTaskStatus(task.id, 'verified');
@@ -1207,7 +1511,7 @@ export class DeterministicScheduler {
     taskRepo.updateStatus(task.id, 'completed');
 
     if (agentResult.output && agentResult.output.trim().length > 0) {
-      this.taskOutputs[task.id] = sanitizeTaskOutput(agentResult.output);
+      this.recordTaskOutput(task.id, agentResult.output);
     }
 
     this.ctx.onProgress?.(
@@ -1238,6 +1542,30 @@ export class DeterministicScheduler {
       // task can mutate code or explicitly requests deterministic verification.
       graph.updateTaskStatus(task.id, 'verification');
       taskRepo.updateStatus(task.id, 'verification');
+
+      const scopeViolations = await this.findScopeViolations(
+        task,
+        agentResult.commitHash,
+        wt.path,
+      );
+      if (scopeViolations.length > 0) {
+        const shown = scopeViolations.slice(0, 10).join(', ');
+        this.ctx.onProgress?.(
+          `[${task.id}] ✗ Changes outside the allowed scope (${task.contract.allowedScope.join(', ')}): ${shown}`,
+        );
+        await this.recoverTask(task, {
+          agentId,
+          phase: 'verification',
+          failureClass: 'code_or_test',
+          reason: `Modified ${scopeViolations.length} file(s) outside the allowed scope`,
+          evidence: `Allowed scope: ${task.contract.allowedScope.join(', ')}\nFiles outside scope (revert these, keep changes inside the scope):\n${scopeViolations.map((f) => `- ${f}`).join('\n')}`,
+          candidateCommit: agentResult.commitHash,
+          assignmentId,
+        });
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+        return;
+      }
+
       const runAutomatedVerification = requiresAutomatedRepositoryVerification(task);
       if (runAutomatedVerification) {
         this.ctx.activityTracker?.updateStatus(
@@ -1302,6 +1630,43 @@ export class DeterministicScheduler {
         return;
       }
 
+      // 4b. Independent review for sensitive tasks (opt-in dual-review gate).
+      const review = await this.runDualReviewGate(task, {
+        implementerAgentIds: [agentId],
+        candidateCommit: agentResult.commitHash,
+        taskBaseCommit,
+      });
+      if (review.decision === 'rejected') {
+        await this.recoverTask(task, {
+          agentId,
+          phase: 'review',
+          failureClass: 'code_or_test',
+          reason: `Independent review by ${review.reviewerId} rejected the change`,
+          evidence: review.findings,
+          candidateCommit: agentResult.commitHash,
+          assignmentId,
+        });
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+        return;
+      }
+      if (review.decision === 'unavailable') {
+        if (review.block) {
+          await this.recoverTask(task, {
+            agentId,
+            phase: 'review',
+            failureClass: 'policy',
+            reason: `Dual review is required but unavailable: ${review.reason}`,
+            candidateCommit: agentResult.commitHash,
+            assignmentId,
+          });
+          await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+          return;
+        }
+        this.ctx.onProgress?.(
+          `[${task.id}] ⚠ Dual review skipped by policy (onNoIndependentReviewer: skip): ${review.reason}`,
+        );
+      }
+
       graph.updateTaskStatus(task.id, 'verified');
       taskRepo.updateStatus(task.id, 'verified');
       if (runAutomatedVerification) {
@@ -1316,13 +1681,20 @@ export class DeterministicScheduler {
         this.ctx.onProgress?.(
           `[${task.id}] Integrating commit ${agentResult.commitHash.slice(0, 7)}...`,
         );
-        await integrationService.integrateTaskCommit({
-          runId,
-          taskId: task.id,
-          commitHash: agentResult.commitHash,
-          baseCommit,
-        });
-        this.hasIntegratedCommits = true;
+        const commitToIntegrate = await this.commitForIntegration(
+          task,
+          agentResult.commitHash,
+          wt.path,
+        );
+        if (commitToIntegrate) {
+          await integrationService.integrateTaskCommit({
+            runId,
+            taskId: task.id,
+            commitHash: commitToIntegrate,
+            baseCommit,
+          });
+          this.hasIntegratedCommits = true;
+        }
         this.ctx.onProgress?.(`[${task.id}] Integrated successfully ✓`);
       }
 

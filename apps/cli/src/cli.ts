@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, getGlobalStateDatabasePath } from '@taskforge/shared';
+import { loadConfig, getGlobalStateDatabasePath, TASKFORGE_VERSION } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import {
   TaskForgeDatabase,
@@ -14,7 +14,12 @@ import {
   InteractionRepository,
   AgentAvailabilityRepository,
 } from '@taskforge/persistence';
-import { GitService, WorktreeManager, RepositoryAnalyzer } from '@taskforge/workspace';
+import {
+  GitService,
+  WorktreeManager,
+  RepositoryAnalyzer,
+  parseAgeSpec,
+} from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, FakeAgent, AgentQuotaTracker } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
 import { VerificationRunner } from '@taskforge/verification';
@@ -28,6 +33,38 @@ import { DeterministicScheduler, RunOrchestrator } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
 
+/**
+ * Headless commands must survive Ctrl-C gracefully: the first SIGINT/SIGTERM
+ * aborts the run (agents are stopped, the run is marked cancelled and can be
+ * continued with `tf resume`); a second one exits immediately. Without this,
+ * node dies at once and agent processes (which run in their own process
+ * groups) keep running, orphaned, while the run stays "running" forever.
+ */
+export function installGracefulAbort(label: string): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  let received = 0;
+  const handler = (name: NodeJS.Signals) => {
+    received++;
+    if (received > 1) {
+      console.error(`\nReceived ${name} again: exiting immediately.`);
+      process.exit(130);
+    }
+    console.error(`\nReceived ${name}: stopping ${label} (press Ctrl-C again to force exit)...`);
+    controller.abort();
+  };
+  const onInt = () => handler('SIGINT');
+  const onTerm = () => handler('SIGTERM');
+  process.on('SIGINT', onInt);
+  process.on('SIGTERM', onTerm);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      process.removeListener('SIGINT', onInt);
+      process.removeListener('SIGTERM', onTerm);
+    },
+  };
+}
+
 export function createCli(): Command {
   const program = new Command();
 
@@ -35,7 +72,7 @@ export function createCli(): Command {
     .name('tf')
     .alias('taskforge')
     .description('TaskForge: Conversational control plane for self-organizing coding-agent teams')
-    .version('0.1.0')
+    .version(TASKFORGE_VERSION)
     .action(async () => {
       const shell = new InteractiveShell();
       await shell.start();
@@ -48,7 +85,7 @@ export function createCli(): Command {
     .description('Clean up all orphaned TaskForge worktrees and temporary assignment branches')
     .action(async () => {
       const repoRoot = process.cwd();
-      const wtManager = new WorktreeManager(repoRoot);
+      const wtManager = new WorktreeManager(repoRoot, loadConfig().execution.worktreesDir);
       const count = await wtManager.cleanOrphanedWorktreesAndBranches();
       console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge Workspace Cleanup${colors.reset}`);
       console.log(
@@ -160,7 +197,7 @@ export function createCli(): Command {
       AgentQuotaTracker.getInstance().configureStore(
         new AgentAvailabilityRepository(availabilityDb),
       );
-      const registry = new AgentRegistry();
+      const registry = new AgentRegistry(true, loadConfig().agents);
       const reports = await AgentDetector.detect(registry.list());
       console.log(`\n  ${colors.bold}Agent Harness Detection:${colors.reset}`);
       for (const rep of reports) {
@@ -189,24 +226,46 @@ export function createCli(): Command {
     .command('cleanup')
     .description('Explicit cleanup of worktrees and transient TaskForge artifacts')
     .option('--force', 'Force removal of worktrees', false)
-    .action(async (options: { force?: boolean }) => {
+    .option('--prune', 'Only remove stale TaskForge worktrees and temporary branches by age', false)
+    .option('--older-than <age>', 'Age threshold for --prune (e.g. 12h, 7d, 2w)', '7d')
+    .option('--dry-run', 'With --prune: list what would be removed without removing it', false)
+    .action(
+      async (options: {
+        force?: boolean;
+        prune?: boolean;
+        olderThan?: string;
+        dryRun?: boolean;
+      }) => {
       const repoRoot = process.cwd();
       const config = loadConfig();
       const worktreeManager = new WorktreeManager(repoRoot, config.execution.worktreesDir);
+
+      if (options.prune) {
+        let olderThanMs: number;
+        try {
+          olderThanMs = parseAgeSpec(options.olderThan ?? '7d');
+        } catch (err) {
+          console.error(`Error: ${(err as Error).message}`);
+          process.exit(1);
+        }
+        const report = await worktreeManager.pruneStale({
+          olderThanMs,
+          dryRun: options.dryRun,
+        });
+        const verb = report.dryRun ? 'Would remove' : 'Removed';
+        for (const p of [...report.worktrees, ...report.directories]) console.log(`  ${p}`);
+        for (const b of report.branches) console.log(`  branch ${b}`);
+        console.log(
+          `${verb} ${report.worktrees.length} worktree(s), ${report.directories.length} leftover director${report.directories.length === 1 ? 'y' : 'ies'} and ${report.branches.length} temporary branch(es) older than ${options.olderThan ?? '7d'}.`,
+        );
+        return;
+      }
+
       await worktreeManager.prune();
 
-      const wtListRaw = await ProcessRunner.run({
-        command: 'git',
-        args: ['worktree', 'list', '--porcelain'],
-        cwd: repoRoot,
-      });
-
-      const paths = wtListRaw.stdout
-        .split('\n')
-        .filter((l: string) => l.startsWith('worktree '))
-        .map((l: string) => l.replace('worktree ', '').trim())
-        .filter((p: string) => p !== repoRoot);
-
+      // Only worktrees under the configured TaskForge worktrees dir are touched;
+      // linked worktrees you created yourself are left alone.
+      const paths = await worktreeManager.listManagedWorktrees();
       for (const p of paths) {
         await ProcessRunner.run({
           command: 'git',
@@ -217,7 +276,8 @@ export function createCli(): Command {
 
       await worktreeManager.prune();
       console.log(`Cleaned up ${paths.length} transient worktrees.`);
-    });
+    },
+    );
 
   // tf exec [goal]
   program
@@ -267,8 +327,9 @@ export function createCli(): Command {
 
         runRepo.create(runId, goal.id);
 
-        const taskId = `TASK-${Date.now().toString().slice(-4)}`;
-        const agentRegistry = new AgentRegistry();
+        // Task ids are global keys in the database: never reuse one from an earlier run.
+        const taskId = `TASK-${String(new TaskRepository(db).maxNumericTaskId() + 1).padStart(2, '0')}`;
+        const agentRegistry = new AgentRegistry(true, config.agents);
         const preferredAgentMapping: Record<string, string> = {};
         if (options?.fake) {
           config.verification.tests = false;
@@ -289,7 +350,11 @@ export function createCli(): Command {
           );
         }
 
-        const worktreeManager = new WorktreeManager(repoRoot, config.execution.worktreesDir);
+        const worktreeManager = new WorktreeManager(
+          repoRoot,
+          config.execution.worktreesDir,
+          config.execution.worktreeLinks,
+        );
         const verificationRunner = new VerificationRunner(verificationRepo, eventRepo);
         const integrationService = new IntegrationService(
           repoRoot,
@@ -334,7 +399,9 @@ export function createCli(): Command {
 
         const graph = new TaskGraph([defaultTask]);
 
+        const abort = installGracefulAbort('execution');
         const scheduler = new DeterministicScheduler({
+          abortSignal: abort.signal,
           runId,
           baseCommit: headCommit,
           repoRoot,
@@ -355,6 +422,7 @@ export function createCli(): Command {
         });
 
         const result = await scheduler.run();
+        abort.dispose();
         console.log(`\nRun finished with status: ${result.status}`);
         console.log(`Tasks completed: ${result.tasksCompleted}, failed: ${result.tasksFailed}`);
         if (result.integrationBranch) {
@@ -394,10 +462,17 @@ export function createCli(): Command {
       });
 
       console.log('TaskForge Pipeline starting...');
-      const result = await orchestrator.run(goalText ?? 'Default execution goal', {
-        fakeFallback: options?.fake ?? true,
-        onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
-      });
+      const abort = installGracefulAbort('the run');
+      let result;
+      try {
+        result = await orchestrator.run(goalText ?? 'Default execution goal', {
+          fakeFallback: options?.fake ?? true,
+          onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
+          abortSignal: abort.signal,
+        });
+      } finally {
+        abort.dispose();
+      }
 
       console.log(`\nRun completed with status: ${result.status}`);
       console.log(`Tasks: ${result.tasksCompleted} succeeded, ${result.tasksFailed} failed`);
@@ -405,6 +480,71 @@ export function createCli(): Command {
         console.log(`Integration branch created: ${result.integrationBranch}`);
       }
       console.log(`Duration: ${(result.durationMs / 1000).toFixed(2)}s`);
+      if (result.status === 'cancelled') {
+        console.log(`Run cancelled. Continue it with: tf resume ${result.runId}`);
+        process.exitCode = 130;
+      }
+    });
+
+  // tf resume [run-id]
+  program
+    .command('resume [run-id]')
+    .description(
+      'Resume an interrupted, cancelled or failed run: keeps integrated tasks and re-executes the rest',
+    )
+    .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
+    .option('--fake', 'Force deterministic fake agent fallback', false)
+    .action(async (runId?: string, options?: { concurrency?: string; fake?: boolean }) => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      if (options?.concurrency) {
+        config.execution.maxParallelTasks = parseInt(options.concurrency, 10);
+      }
+
+      const gitService = new GitService(repoRoot);
+      if (!(await gitService.isGitRepo())) {
+        console.error('Error: Must be run inside a Git repository.');
+        process.exit(1);
+      }
+
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const targetRunId =
+        runId ??
+        new RunRepository(db)
+          .listAll()
+          .find((r) => r.status === 'failed' || r.status === 'cancelled' || r.status === 'running')?.id;
+      if (!targetRunId) {
+        console.error('Error: No resumable run found. Specify a run-id: tf resume <run-id>');
+        db.close();
+        process.exit(1);
+      }
+
+      const orchestrator = new RunOrchestrator({ repoRoot, config, gitService, database: db });
+      const abort = installGracefulAbort('the run');
+      try {
+        const result = await orchestrator.resume(targetRunId, {
+          fakeFallback: options?.fake ?? false,
+          onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
+          abortSignal: abort.signal,
+        });
+        console.log(`\nRun ${result.runId} finished with status: ${result.status}`);
+        console.log(`Tasks: ${result.tasksCompleted} integrated, ${result.tasksFailed} failed`);
+        if (result.integrationBranch) {
+          console.log(`Integration branch: ${result.integrationBranch}`);
+        }
+        if (result.status === 'cancelled') {
+          console.log(`Run cancelled. Continue it again with: tf resume ${result.runId}`);
+          process.exitCode = 130;
+        } else if (result.status !== 'completed') {
+          process.exitCode = 1;
+        }
+      } catch (err) {
+        console.error(`\n✖ Could not resume ${targetRunId}: ${(err as Error).message}\n`);
+        process.exitCode = 1;
+      } finally {
+        abort.dispose();
+        db.close();
+      }
     });
 
   // tf status / tf dash
@@ -423,7 +563,7 @@ export function createCli(): Command {
         headCommit: 'unknown',
         isClean: true,
       }));
-      const registry = new AgentRegistry();
+      const registry = new AgentRegistry(true, loadConfig().agents);
       const availabilityDb = new TaskForgeDatabase(getGlobalStateDatabasePath());
       AgentQuotaTracker.getInstance().configureStore(
         new AgentAvailabilityRepository(availabilityDb),
@@ -456,7 +596,9 @@ export function createCli(): Command {
 
   // tf pr create [run-id]
   program
-    .command('pr create [run-id]')
+    .command('pr')
+    .description('Pull request commands')
+    .command('create [run-id]')
     .description('Create a pull request on GitHub with verified audit evidence summary')
     .option('-b, --base <branch>', 'Base target branch', 'main')
     .option('-d, --draft', 'Create PR as draft', false)
@@ -474,12 +616,18 @@ export function createCli(): Command {
       }
 
       const ghService = new GitHubWorkflowService(db, repoRoot);
+      const deliveryService = new DeliveryService(repoRoot, new GitService(repoRoot), runRepo);
       console.log(`Creating Pull Request for run ${targetRunId}...`);
+      const headBranch = await deliveryService.prepareDeliveryBranch(targetRunId);
       const result = await ghService.createPullRequest({
         runId: targetRunId,
         targetBranch: options?.base ?? 'main',
         draft: options?.draft ?? false,
+        headBranch,
       });
+      if (result.success && result.prUrl && deliveryService.getDelivery(targetRunId)) {
+        deliveryService.markPrCreated(targetRunId, result.prUrl);
+      }
 
       console.log(`\n${result.message}`);
       if (!result.success && !result.prUrl) {

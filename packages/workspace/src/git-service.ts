@@ -1,3 +1,5 @@
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { ProcessRunner } from '@taskforge/execution';
 import { RepositoryError } from '@taskforge/shared';
 
@@ -126,6 +128,32 @@ export class GitService {
       }
 
       return await this.exec(['rev-parse', 'HEAD'], cwd);
+    }
+  }
+
+  /**
+   * Keeps TaskForge's state directory (database, worktrees, logs) out of
+   * `git status` and out of `git add -A` by adding it to the repository's
+   * local `.git/info/exclude`. Never edits the project's tracked `.gitignore`.
+   * No-op when the path is already ignored. Best effort: never throws.
+   */
+  async ensureLocalExclude(pattern: string = '.taskforge/'): Promise<void> {
+    try {
+      const excludePathProbe = pattern.replace(/^\//, '').replace(/\/$/, '');
+      const probe = pattern.endsWith('/') ? `${excludePathProbe}/probe` : excludePathProbe;
+      const ignored = await this.exec(['check-ignore', '-q', probe]).then(
+        () => true,
+        () => false,
+      );
+      if (ignored && pattern.endsWith('/')) return;
+      const excludePath = await this.exec(['rev-parse', '--git-path', 'info/exclude']);
+      const file = path.resolve(this.repoRoot, excludePath);
+      const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+      if (existing.split('\n').some((line) => line.trim() === pattern)) return;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.appendFileSync(file, `${existing && !existing.endsWith('\n') ? '\n' : ''}${pattern}\n`);
+    } catch {
+      // purely cosmetic safety net
     }
   }
 

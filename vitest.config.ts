@@ -30,5 +30,22 @@ export default defineConfig({
     include: ['**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/.taskforge/**', '**/dist/**'],
     testTimeout: 30000,
+    setupFiles: ['./tests/setup/hermetic.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts'],
+      exclude: ['**/dist/**', '**/*.d.ts', '**/index.ts'],
+      reporter: ['text-summary', 'json-summary', 'lcov'],
+      reportsDirectory: './coverage',
+      reportOnFailure: true,
+      // Regression floor, set a few points below the measured baseline
+      // (~79% statements/lines, ~76% branches, ~86% functions). Raise over time.
+      thresholds: {
+        statements: 75,
+        lines: 75,
+        branches: 70,
+        functions: 80,
+      },
+    },
   },
 });

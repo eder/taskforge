@@ -5,3 +5,5 @@ export * from './strategies/trunk-strategy.js';
 export * from './strategies/github-flow-strategy.js';
 export * from './strategies/gitflow-strategy.js';
 export * from './strategies/current-branch-strategy.js';
+export * from './branch-slug.js';
+export * from './target-branch.js';

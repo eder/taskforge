@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { DeliveryError } from '@taskforge/shared';
 import { GitService } from '@taskforge/workspace';
+import { slugifyGoal } from '@taskforge/git-workflow';
 import { EventRepository, RunRepository } from '@taskforge/persistence';
 
 export type DeliveryStatus = 'pending' | 'ready_to_apply' | 'applied' | 'pr_created' | 'discarded';
@@ -13,6 +14,8 @@ export interface DeliveryMetadata {
   appliedAt?: string;
   appliedCommit?: string;
   prUrl?: string;
+  /** Human-readable branch the PR is opened from (see prepareDeliveryBranch). */
+  deliveryBranch?: string;
 }
 
 export interface ApplyPreflightResult {
@@ -90,6 +93,12 @@ export class DeliveryService {
 
   async preflight(runId: string): Promise<ApplyPreflightResult> {
     const delivery = this.requireDelivery(runId);
+    if (!(await this.gitService.branchExists(delivery.targetBranch))) {
+      throw new DeliveryError(
+        `Target branch "${delivery.targetBranch}" does not exist in this repository. Create it, or set git.targetBranch / delivery.targetBranch in .taskforge/config.yaml.`,
+        { runId, targetBranch: delivery.targetBranch },
+      );
+    }
     // Exclude TaskForge's own state directory: its database, worktrees and run
     // logs commonly live inside the repo and shouldn't count as "dirty" for
     // the purpose of an apply preflight.
@@ -246,6 +255,50 @@ export class DeliveryService {
       payload: {},
       timestamp: new Date(),
     });
+  }
+
+  /**
+   * Creates (or reuses) a human-readable delivery branch, `taskforge/<goal-slug>`,
+   * pointing at the run's integration branch. PRs open from this branch instead
+   * of the ephemeral `taskforge/run-<id>` one. Returns undefined when the run
+   * has no delivery information, so callers can fall back to the run branch.
+   */
+  async prepareDeliveryBranch(runId: string): Promise<string | undefined> {
+    const delivery = this.getDelivery(runId);
+    if (!delivery) return undefined;
+
+    const integrationHead = await this.gitService.resolveRef(delivery.branch, this.repoRoot);
+
+    if (delivery.deliveryBranch && (await this.gitService.branchExists(delivery.deliveryBranch))) {
+      const head = await this.gitService.resolveRef(delivery.deliveryBranch, this.repoRoot);
+      if (head === integrationHead) return delivery.deliveryBranch;
+    }
+
+    const metadata = this.runRepo.get(runId)?.metadataJson;
+    const goalDescription = metadata
+      ? (JSON.parse(metadata) as { goalDescription?: string }).goalDescription
+      : undefined;
+    const base = `taskforge/${slugifyGoal(goalDescription ?? '')}`;
+
+    let name = base;
+    for (let suffix = 2; await this.gitService.branchExists(name); suffix++) {
+      const existingHead = await this.gitService.resolveRef(name, this.repoRoot);
+      if (existingHead === integrationHead) break; // same content: reuse
+      name = `${base}-${suffix}`;
+    }
+    if (!(await this.gitService.branchExists(name))) {
+      await this.gitService.createBranch(name, delivery.branch);
+    }
+
+    this.runRepo.mergeMetadata(runId, { delivery: { ...delivery, deliveryBranch: name } });
+    this.eventRepo?.append({
+      id: `evt-${randomUUID()}`,
+      runId,
+      type: 'DELIVERY_BRANCH_CREATED',
+      payload: { deliveryBranch: name, sourceBranch: delivery.branch },
+      timestamp: new Date(),
+    });
+    return name;
   }
 
   markPrCreated(runId: string, prUrl: string): void {

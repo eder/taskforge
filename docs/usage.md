@@ -102,6 +102,8 @@ This distinction matters because writable tasks can create isolated worktrees, c
 
 ## 4. Review the plan before execution
 
+The proposal includes an **Estimated usage** line: an approximate token range for the whole run, shown before you approve so a large plan cannot spend provider quota unnoticed. It is deliberately wide and marked `confidence low` until TaskForge has calibration history from past runs.
+
 For writable work, TaskForge proposes a structured plan.
 
 A plan can contain:
@@ -376,6 +378,17 @@ Cancel one active assignment by index:
 
 TaskForge keeps persisted run state and audit information so you can inspect what happened afterward.
 
+### Resume an interrupted or failed run
+
+`/pause` and `/resume` only control a live session. If a run was cancelled, crashed, or ended `failed` or `BLOCKED`, continue it from the CLI:
+
+```bash
+tf resume              # most recent failed, cancelled or interrupted run
+tf resume run-<id>
+```
+
+Tasks already integrated into the run branch are kept and not re-executed. Every other task is reset and re-run with a fresh recovery budget, starting from the cumulative run branch. Planning and negotiation are not repeated. Completed runs cannot be resumed — deliver them with `/diff`, `/apply` or `/pr`.
+
 ## 10. Verification and completion
 
 TaskForge separates three ideas that are often incorrectly treated as equivalent:
@@ -397,6 +410,30 @@ Configured verification can include:
 - explicit task verification commands.
 
 A code-changing task with verification requested but no executable verification evidence fails closed rather than being silently marked verified.
+
+### Dual review for sensitive tasks (opt-in)
+
+For changes where one agent's judgement is not enough (authentication, payments, schema migrations), TaskForge can require an **independent agent** to approve the change before it is integrated:
+
+```yaml
+verification:
+  dualReview:
+    enabled: true
+    scopes: ['db/migrations/**', 'src/auth/**']   # always sensitive
+    # keywords: [...]                              # defaults include authentication, payment, schema migration, ...
+    onNoIndependentReviewer: block                 # or "skip"
+```
+
+How it works:
+
+- A task is sensitive if its writable scope matches `scopes`, its title/objective mentions a keyword, or it is explicitly flagged (`contract.metadata.sensitive`). This is decided by configuration, never by model output.
+- After automated verification passes, a **different** healthy agent (never one that worked on the task) reviews the candidate commit read-only in an isolated worktree.
+- The reviewer must end with `REVIEW_VERDICT: APPROVED` or `REVIEW_VERDICT: REJECTED`. A missing or conflicting verdict counts as a rejection.
+- A rejection feeds the reviewer's findings into the normal bounded recovery loop (same agent repairs, then reassignment, then BLOCKED). Nothing is integrated without approval.
+- If no independent reviewer is available, the task is BLOCKED (`block`, default) or the review is skipped with a visible warning (`skip`).
+- Events `DUAL_REVIEW_REQUIRED`, `DUAL_REVIEW_APPROVED`, `DUAL_REVIEW_REJECTED` and `DUAL_REVIEW_UNAVAILABLE` are recorded for audit (`/inspect`).
+
+Note: the reviewer runs outside the parallelism pool (it cannot wait for a slot held by the task it reviews), so a sensitive task can briefly use one extra agent process.
 
 Projects can explicitly disable selected repository verification categories in configuration when that is intentional.
 
@@ -427,6 +464,8 @@ Create a GitHub pull request:
 ```text
 /pr
 ```
+
+The PR is opened from a human-readable delivery branch derived from the goal (for example "Add commitment intelligence" becomes `taskforge/commitment-intelligence`), created at the run's final commit. If that name is already taken by different work, a numeric suffix is added. The ephemeral `taskforge/run-<id>` branch is kept as the internal integration branch.
 
 For a previous run:
 
@@ -493,6 +532,14 @@ Set the maximum concurrency:
 ```bash
 tf run "Fix the websocket reconnection leak" --concurrency 2
 ```
+
+### Resume a run
+
+```bash
+tf resume run-<id>
+```
+
+See [Pause, cancel, and resume](#9-pause-cancel-and-resume).
 
 ### Headless execution
 
@@ -561,6 +608,7 @@ execution:
   worktreesDir: .taskforge/worktrees
   databasePath: .taskforge/taskforge.db
   runsDir: .taskforge/runs
+  # autoPruneOlderThan: 7d   # opt-in cleanup of stale worktrees/branches at run start
 
 collaboration:
   maxAgentsPerTask: 3
@@ -586,6 +634,57 @@ verification:
   review: true
   maxReworkCycles: 2
 ```
+
+### Verification commands in a real project
+
+- Commands run through the shell (`sh -c`), so quotes, `&&`, pipes and `VAR=1 cmd` work. Each has a timeout of `verification.commandTimeoutSeconds` (default 600).
+- They inherit your environment (`DATABASE_URL`, `JAVA_HOME`, ...), except secret-looking names (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`) and TaskForge's router key. List any such variable your tests need in `verification.passEnv`.
+- Every task runs in a fresh git worktree, which has no installed dependencies. TaskForge symlinks `node_modules` (also `packages/*/node_modules` and `apps/*/node_modules`) from your checkout into each worktree (`execution.worktreeLinks`; set `[]` to disable). The links are excluded from git and are never committed. Other ecosystems (Python virtualenvs, Go/Rust caches, Pods) are not linked: point `verification.commands` at something that works from a clean checkout, or add the relevant directories to `execution.worktreeLinks`.
+- Auto-discovered verification only exists for projects with a `package.json`. For any other project set `verification.commands` (or `scopedCommands`); a code-changing task with no verification evidence is BLOCKED instead of being delivered unverified.
+- Caveat: because `node_modules` is shared, an agent that runs a package install inside its worktree changes your real `node_modules`. Keep `permissions.commands.package_install: ask_human`.
+
+### Agent environment and write boundaries
+
+Agents are started with a minimal environment. Each one receives only its own provider's credentials, never TaskForge's router key (`TASKFORGE_OPENAI_API_KEY`), and not `SSH_AUTH_SOCK`. To forward an extra variable to one agent, list it by name:
+
+```yaml
+agents:
+  codex:
+    passEnv: [HTTPS_PROXY]
+```
+
+Tasks that declare a narrow `allowedScope` are checked after the agent finishes: files changed outside that scope fail the task (the agent retries with the offending files as evidence, then the task blocks). This is on by default; disable it only if your planner scopes are too coarse:
+
+```yaml
+verification:
+  enforceScope: false
+```
+
+See [SECURITY.md](../SECURITY.md#security-model-and-known-limitations) for what TaskForge does and does not enforce, and [docs/pilot.md](pilot.md) for a checklist to validate it with real agents.
+
+### Additional agent CLIs (opt-in)
+
+Claude Code, Codex CLI and Google Antigravity are registered automatically. These harnesses are available but only registered when you list them under `agents` (they are skipped otherwise, even if installed):
+
+| id | CLI | Default invocation |
+| --- | --- | --- |
+| `cursor` | Cursor CLI (`cursor-agent`) | `--output-format stream-json --force -p <prompt>` |
+| `aider` | Aider | `--yes-always --no-pretty --no-stream --no-auto-commits --no-check-update --message <prompt>` |
+| `opencode` | OpenCode | `run <prompt>` |
+| `goose` | Goose | `run --no-session -t <prompt>` |
+
+```yaml
+agents:
+  cursor:
+    enabled: true
+    maxParallel: 1
+  aider:
+    enabled: true
+    command: /opt/homebrew/bin/aider   # optional
+    args: ['--yes-always', '--message'] # optional: replaces the default arguments
+```
+
+These adapters are **experimental**: the default arguments follow each tool's documented non-interactive mode but have not been verified against every release. They run non-interactively, so permission and question prompts are handled by the provider itself. Override `command`/`args` if your installed version differs, and run `tf doctor` to confirm detection. Setting `enabled: false` for any harness (including the built-in three) removes it from the registry.
 
 ### Optional OpenAI planner/router
 
@@ -712,6 +811,15 @@ or:
 ```bash
 tf clean
 ```
+
+To remove only stale artifacts left by crashed or interrupted sessions (worktrees, leftover directories and temporary `taskforge/TASK-*` / `taskforge/integration-*` branches), prune by age. Run integration branches and delivery branches are never removed:
+
+```bash
+tf cleanup --prune --older-than 7d --dry-run   # preview
+tf cleanup --prune --older-than 7d
+```
+
+To do this automatically at the start of every run, set `execution.autoPruneOlderThan: 7d` in `.taskforge/config.yaml`.
 
 ### You want the full command list
 

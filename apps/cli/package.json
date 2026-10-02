@@ -1,6 +1,8 @@
 {
   "name": "@taskforge/cli",
   "version": "0.1.0",
+  "description": "TaskForge command-line interface (tf): one terminal, multiple coding agents, one controlled workflow.",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "tf": "./dist/bin.js",
@@ -14,6 +16,9 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b",
     "clean": "rm -rf dist"
@@ -40,5 +45,20 @@
   },
   "devDependencies": {
     "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eder/taskforge.git",
+    "directory": "apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/eder/taskforge/issues"
+  },
+  "homepage": "https://github.com/eder/taskforge#readme",
+  "publishConfig": {
+    "access": "public"
   }
 }

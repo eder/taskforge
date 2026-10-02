@@ -122,6 +122,7 @@ TaskForge is designed to remove that coordination overhead while preserving expl
 | Human-in-the-loop | Centralizes questions, permissions, confirmation, and authentication boundaries |
 | Completion Gate | Separates “the process exited” from “the engineering task is complete” |
 | Verification | Runs configured tests, linting, typechecking, review, and explicit task verification commands |
+| Dual review (opt-in) | Requires an independent agent's explicit approval before sensitive changes (auth, payments, migrations) are integrated |
 | Progressive recovery | Reuses failure evidence and candidate state before escalating to another agent |
 | Explicit delivery | Keeps `/diff`, `/apply`, `/pr`, and `/discard` under human control |
 
@@ -293,6 +294,9 @@ tf exec "Add regression coverage for checkout retries" --yes --concurrency 2
 # Import a GitHub issue
 tf issue 123
 
+# Continue an interrupted, cancelled or failed run
+tf resume run-<id>
+
 # Inspect previous runs
 tf runs
 tf inspect run-<id>
@@ -442,12 +446,14 @@ CI targets Node.js 22 and Node.js 24.
 ## Documentation
 
 - [Usage guide](docs/usage.md)
+- [Pilot checklist (validate with real agents)](docs/pilot.md)
 - [Architecture phases 0–5](docs/architecture-phases-0-5.md)
 - [Architecture phases 6–13](docs/architecture-phases-6-13.md)
 - [Architecture phases 14–22](docs/architecture-phases-14-22.md)
 - [Git branch lifecycle and hardening](docs/git-branch-lifecycle-and-hardening.md)
 - [Interaction Gateway specification](docs/spec-v2-interaction-gateway.md)
 - [Product engineering spec v2](taskforge-complete-product-engineering-spec-v2.md)
+- [Changelog](CHANGELOG.md)
 
 ## Development
 
@@ -463,7 +469,7 @@ The full CI suite must remain green on Node.js 22 and Node.js 24.
 
 ## Contributing
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and the release process, and [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 For changes to the control plane, keep the core design boundary intact: model output may propose or interpret decisions, but authoritative execution state, permissions, Git behavior, verification, and repository integrity should remain deterministic.
 
