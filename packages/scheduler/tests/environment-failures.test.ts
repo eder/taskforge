@@ -79,3 +79,23 @@ describe('a retry that costs a lot is not a one-key action', () => {
     expect(recommendNextStep([failed], 'run-1', { spent: 9_000_000, budget: 0 })!.runnable).toBe(true);
   });
 });
+
+describe('diagnosis does not depend on the order events were written in', () => {
+  it('keeps the full check output even when a shorter event for the same task sorts newer', async () => {
+    const { TaskForgeDatabase, TaskRepository, EventRepository } = await import('@taskforge/persistence');
+    const { describeRunFailures } = await import('../src/run-failure-report.js');
+    const db = new TaskForgeDatabase(':memory:');
+    db.prepare("INSERT INTO runs (id, status, created_at) VALUES ('run-1', 'failed', ?)").run(new Date().toISOString());
+    db.prepare(
+      'INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
+    ).run('T1', 'run-1', 'Task', 'x', 'implementation', 'blocked', new Date().toISOString(), new Date().toISOString());
+    const events = new EventRepository(db);
+    const same = new Date(); // identical timestamps, as when two events are written back to back
+    events.append({ id: 'e1', runId: 'run-1', taskId: 'T1', type: 'TASK_RECOVERY_BLOCKED', payload: { failureClass: 'environment', reason: 'Check failed', evidence: REAL_OUTPUT }, timestamp: same });
+    events.append({ id: 'e2', runId: 'run-1', taskId: 'T1', type: 'TASK_FAILED', payload: { reason: 'Preflight: Check failed' }, timestamp: same });
+    const lines = describeRunFailures({ taskRepo: new TaskRepository(db), eventRepo: events }, 'run-1');
+    expect(lines[0].evidence).toContain('no LLM api_key configured');
+    expect(lines[0].evidence).toContain('5432');
+    db.close();
+  });
+});

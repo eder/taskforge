@@ -143,9 +143,12 @@ export function describeRunFailures(
         reason,
         keptBranch: typeof kept?.payload.branch === 'string' ? kept.payload.branch : undefined,
         failureClass: mine.map((e) => e.payload.failureClass).find((c) => typeof c === 'string') as string | undefined,
-        evidence: mine
-          .map((e) => [e.payload.reason, e.payload.evidence].filter((v) => typeof v === 'string').join('\n'))
-          .find((t) => t.trim().length > 0),
+        // Every recorded text for this task, not just the newest event's: events written
+        // in the same millisecond have no reliable order, and the full check output can
+        // sit on any of them. Diagnosis needs all of it.
+        evidence:
+          [...new Set(mine.flatMap((e) => [e.payload.reason, e.payload.evidence]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0))]
+            .join('\n') || undefined,
       });
     }
   }
