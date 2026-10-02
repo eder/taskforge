@@ -640,6 +640,7 @@ verification:
 - Commands run through the shell (`sh -c`), so quotes, `&&`, pipes and `VAR=1 cmd` work. Each has a timeout of `verification.commandTimeoutSeconds` (default 600).
 - They inherit your environment (`DATABASE_URL`, `JAVA_HOME`, ...), except secret-looking names (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`) and TaskForge's router key. List any such variable your tests need in `verification.passEnv`.
 - Every task runs in a fresh git worktree, which has no installed dependencies. TaskForge symlinks `node_modules` (also `packages/*/node_modules` and `apps/*/node_modules`) from your checkout into each worktree (`execution.worktreeLinks`; set `[]` to disable). The links are excluded from git and are never committed. Other ecosystems (Python virtualenvs, Go/Rust caches, Pods) are not linked: point `verification.commands` at something that works from a clean checkout, or add the relevant directories to `execution.worktreeLinks`.
+- Changes that only touch documentation files (`.md`, `.txt`, `.rst`, ...) do not need verification evidence; anything else still does.
 - Auto-discovered verification only exists for projects with a `package.json`. For any other project set `verification.commands` (or `scopedCommands`); a code-changing task with no verification evidence is BLOCKED instead of being delivered unverified.
 - Caveat: because `node_modules` is shared, an agent that runs a package install inside its worktree changes your real `node_modules`. Keep `permissions.commands.package_install: ask_human`.
 

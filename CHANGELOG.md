@@ -24,6 +24,7 @@ All workspace packages are released in lockstep under a single version.
 - Hermetic test setup (`tests/setup/hermetic.ts`): tests no longer depend on installed agent CLIs, exported API keys, or `~/.taskforge`.
 
 ### Fixed
+- A change that only touches documentation (`.md`, `.txt`, `.rst`, ... or LICENSE/README-style files) is no longer BLOCKED for lack of verification commands, per task and in the final integration check. Anything that touches code or config still fails closed, and explicitly configured verification commands still run and must pass.
 - **Antigravity (`agy`) output was always empty.** The adapter only recognised `{"type":"result"}`, but `agy` emits `{"event":"result","result":{"response":...}}`, so every Antigravity assignment returned no report (checked against a real captured run). The result event, its nested status, and the per-step `text_delta` fallback are now parsed.
 - `IntegrationService` cached the first run's integration branch for every later run on the same instance; it is now per run and re-validated against git. `tf resume` also removes a stale integration worktree when the run branch is gone.
 - `tf resume` discarded finished read-only report tasks when the run branch did not exist (report-only runs never create it) and re-ran them, wasting provider tokens. Runs now record which tasks integrated commits; only those are redone if the branch is gone. Older runs fall back to the task contract. The resume message lists the kept and pending tasks.

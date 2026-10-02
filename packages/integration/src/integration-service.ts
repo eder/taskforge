@@ -1,6 +1,6 @@
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { EventRepository } from '@taskforge/persistence';
-import { VerificationRunner } from '@taskforge/verification';
+import { VerificationRunner, isDocumentationOnlyChange } from '@taskforge/verification';
 import { IntegrationError, TaskForgeConfig } from '@taskforge/shared';
 import { integrationBranchName } from './branch-naming.js';
 
@@ -118,11 +118,23 @@ export class IntegrationService {
     try {
       let verified = true;
       if (this.verificationRunner && config.verification.tests) {
+        // A run that only changed documentation has no code to verify; many
+        // projects (no package.json) have nothing to discover, which would
+        // otherwise fail the whole run after every task already passed.
+        const changedFiles = (
+          await this.gitService
+            .exec(['diff', '--name-only', baseCommit, branchName], this.repoRoot)
+            .catch(() => '')
+        )
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
         const verResult = await this.verificationRunner.verify({
           taskId: `FINAL-${runId}`,
           runId,
           worktreePath: wt.path,
           config,
+          documentationOnlyChange: isDocumentationOnlyChange(changedFiles),
         });
         verified = verResult.passed;
         if (!verified) {
