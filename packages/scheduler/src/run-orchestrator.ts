@@ -448,6 +448,13 @@ export class RunOrchestrator {
 
     const integrationBranch = this.integrationService.getBranchName(runId);
     const branchExists = await this.gitService.branchExists(integrationBranch);
+    if (!branchExists) {
+      // The integration worktree of a deleted run branch still holds the old,
+      // already-applied commits; reusing it would make redone tasks conflict.
+      await this.worktreeManager
+        .removeWorktree(`integration-${runId}`, 'main-worker', true, true)
+        .catch(() => {});
+    }
 
     let baseCommit: string | undefined = metadata.baseCommit;
     if (!baseCommit && branchExists) {
@@ -460,11 +467,22 @@ export class RunOrchestrator {
     if (!baseCommit) throw new Error(`Run ${runId} has no recorded base commit; cannot resume.`);
     const baseBranch: string = metadata.baseBranch ?? 'main';
 
-    // Integrated work only survives if the run branch still holds it (e.g. /clean removes it).
-    const keepIntegrated = branchExists;
+    // A task whose commit lives on the run branch is only done while that branch
+    // exists (e.g. /clean removes it). Read-only report tasks produce no commit,
+    // never create the branch, and lose nothing: they are always kept. Runs from
+    // before commit tracking fall back to the task contract.
+    const commitTaskIds: string[] | undefined = metadata.commitTaskIds;
+    const mayHaveCommit = (id: string, contract: { forbiddenChanges?: string[]; completionMode?: string }) =>
+      commitTaskIds
+        ? commitTaskIds.includes(id)
+        : !(
+            contract.forbiddenChanges?.includes('*') ||
+            ['report', 'review', 'verification'].includes(contract.completionMode ?? '')
+          );
     const tasks: Task[] = records.map((record) => {
       const contract = JSON.parse(record.contractJson ?? '{}');
-      const keep = keepIntegrated && record.status === 'integrated';
+      const keep =
+        record.status === 'integrated' && (branchExists || !mayHaveCommit(record.id, contract));
       const dependencies =
         record.dependencies && record.dependencies.length > 0
           ? record.dependencies
@@ -507,7 +525,7 @@ export class RunOrchestrator {
       timestamp: new Date(),
     });
     options.onProgress?.(
-      `Resuming run ${runId}: ${integratedIds.length} task(s) already integrated, ${pending.length} to execute`,
+      `Resuming run ${runId}: ${integratedIds.length} task(s) already integrated${integratedIds.length ? ` (${integratedIds.join(', ')})` : ''}, ${pending.length} to execute (${pending.map((t) => t.id).join(', ')})`,
     );
     await this.worktreeManager.prune().catch(() => {});
 
@@ -524,6 +542,7 @@ export class RunOrchestrator {
       resumeState: {
         taskOutputs: (metadata.taskOutputs as Record<string, string> | undefined) ?? {},
         hasIntegratedCommits,
+        commitTaskIds,
       },
     });
   }

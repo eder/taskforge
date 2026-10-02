@@ -56,6 +56,8 @@ export interface SchedulerResumeState {
   taskOutputs: Record<string, string>;
   /** Whether the run branch already holds integrated task commits. */
   hasIntegratedCommits: boolean;
+  /** Ids of tasks whose commits were integrated into the run branch. */
+  commitTaskIds?: string[];
 }
 
 export interface SchedulerContext {
@@ -153,6 +155,8 @@ export class DeterministicScheduler {
   private completionGate: CompletionGate;
   private taskOutputs: Record<string, string> = {};
   private hasIntegratedCommits = false;
+  /** Tasks whose commits are on the run branch; read-only report tasks never appear here. */
+  private commitTaskIds = new Set<string>();
   private failedAgentsByTask = new Map<string, Set<string>>();
   private recoveryIncidentsByTask = new Map<string, RecoveryIncident[]>();
   private recoveryBaseCommitByTask = new Map<string, string>();
@@ -164,7 +168,19 @@ export class DeterministicScheduler {
     if (ctx.resumeState) {
       this.taskOutputs = { ...ctx.resumeState.taskOutputs };
       this.hasIntegratedCommits = ctx.resumeState.hasIntegratedCommits;
+      this.commitTaskIds = new Set(ctx.resumeState.commitTaskIds ?? []);
     }
+  }
+
+  /**
+   * Marks that a task's commit is now on the run branch. `tf resume` needs this
+   * to tell tasks whose work lives in git (must be redone if the branch is
+   * gone) from read-only report tasks (nothing to lose, never redo them).
+   */
+  private recordIntegratedCommit(taskId: string): void {
+    this.hasIntegratedCommits = true;
+    this.commitTaskIds.add(taskId);
+    this.ctx.runRepo.mergeMetadata(this.ctx.runId, { commitTaskIds: [...this.commitTaskIds] });
   }
 
   /** Keeps the output in memory and checkpoints it so a resumed run can still feed dependents. */
@@ -1043,7 +1059,7 @@ export class DeterministicScheduler {
             commitHash: res.commitHash,
             baseCommit,
           });
-          this.hasIntegratedCommits = true;
+          this.recordIntegratedCommit(task.id);
         }
 
         graph.updateTaskStatus(task.id, 'integrated');
@@ -1693,7 +1709,7 @@ export class DeterministicScheduler {
             commitHash: commitToIntegrate,
             baseCommit,
           });
-          this.hasIntegratedCommits = true;
+          this.recordIntegratedCommit(task.id);
         }
         this.ctx.onProgress?.(`[${task.id}] Integrated successfully ✓`);
       }
