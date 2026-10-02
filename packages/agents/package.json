@@ -1,6 +1,8 @@
 {
   "name": "@taskforge/agents",
   "version": "0.1.0",
+  "description": "TaskForge agents package.",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,6 +12,9 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b",
     "clean": "rm -rf dist"
@@ -21,5 +26,20 @@
   },
   "devDependencies": {
     "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eder/taskforge.git",
+    "directory": "packages/agents"
+  },
+  "bugs": {
+    "url": "https://github.com/eder/taskforge/issues"
+  },
+  "homepage": "https://github.com/eder/taskforge#readme",
+  "publishConfig": {
+    "access": "public"
   }
 }
