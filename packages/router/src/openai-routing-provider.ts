@@ -26,7 +26,9 @@ export const RoleRequestSchema = z.object({
   ]),
   requiredCapabilities: z.array(z.string()),
   objective: z.string(),
-  preferredAgent: z.string().optional(),
+  // OpenAI strict structured outputs cannot express optional properties, so the
+  // model must return the key; null means "no preference".
+  preferredAgent: z.string().nullish(),
 });
 
 export const RoutingDecisionSchema = z.object({
@@ -95,9 +97,9 @@ export const ROUTING_DECISION_JSON_SCHEMA = {
           },
           requiredCapabilities: { type: 'array', items: { type: 'string' } },
           objective: { type: 'string' },
-          preferredAgent: { type: 'string' },
+          preferredAgent: { type: ['string', 'null'] },
         },
-        required: ['role', 'requiredCapabilities', 'objective'],
+        required: ['role', 'requiredCapabilities', 'objective', 'preferredAgent'],
         additionalProperties: false,
       },
     },
@@ -125,6 +127,27 @@ export const ROUTING_DECISION_JSON_SCHEMA = {
   ],
   additionalProperties: false,
 };
+
+/**
+ * Short, secret-free description of a failed OpenAI call. Includes the
+ * provider's error message (e.g. which schema property was rejected) because
+ * a bare "HTTP 400" gives the user nothing to act on.
+ */
+export function describeHttpFailure(status: number, body: string): string {
+  let message = '';
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string } };
+    message = parsed.error?.message ?? '';
+  } catch {
+    message = body;
+  }
+  message = message
+    .replace(/sk-[A-Za-z0-9_-]{6,}/g, 'sk-***')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+  return message ? `HTTP ${status}: ${message}` : `HTTP ${status}`;
+}
 
 export class OpenAIRoutingProvider implements RoutingProvider {
   readonly id = 'openai';
@@ -305,7 +328,15 @@ export class OpenAIRoutingProvider implements RoutingProvider {
           reason,
           until: Date.now() + this.failureCooldownMs,
         };
-        return this.makeFallback(input, reason, `HTTP ${response.status}`);
+        // Diagnostic only: reading the body must never turn a clean fallback into an error.
+        const body = await Promise.resolve()
+          .then(() => response.text())
+          .catch(() => '');
+        return this.makeFallback(
+          input,
+          reason,
+          describeHttpFailure(response.status, body),
+        );
       }
 
       const json = (await response.json()) as {
@@ -328,8 +359,14 @@ export class OpenAIRoutingProvider implements RoutingProvider {
         return this.makeFallback(input, 'invalid_schema');
       }
 
+      const known = new Set(agentsForRouting);
       const decision: RoutingDecision = {
         ...parseResult.data,
+        // null / unavailable preferences are dropped; the selector decides.
+        roles: parseResult.data.roles.map(({ preferredAgent, ...role }) => ({
+          ...role,
+          ...(preferredAgent && known.has(preferredAgent) ? { preferredAgent } : {}),
+        })),
         source: 'openai',
         provider: 'openai',
         model: this.model,

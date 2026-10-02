@@ -83,7 +83,32 @@ function isDocumentationTask(task: Task): boolean {
   );
 }
 
+/**
+ * Agentic CLIs (Claude Code, Codex, Antigravity) read many files and take many
+ * turns, so the fresh (uncached) work of one assignment is several times the
+ * size of the task contract. Observed in real runs: a 3-role parallel team on
+ * a documentation task used ~310k fresh tokens against a ~24k estimate. The
+ * bands below are scaled to that reality; historical calibration refines them
+ * per task type once enough provider-reported usage exists.
+ */
+const AGENTIC_SCALE = 3;
+const LIGHTWEIGHT_SCALE = 1.5;
+
 function usageBandFor(task: Task): UsageBand {
+  const band = rawUsageBandFor(task);
+  const scale = band.complexity === 'lightweight' ? LIGHTWEIGHT_SCALE : AGENTIC_SCALE;
+  return {
+    ...band,
+    minContext: Math.round(band.minContext * scale),
+    expectedContext: Math.round(band.expectedContext * scale),
+    maxContext: Math.round(band.maxContext * scale),
+    minOutput: Math.round(band.minOutput * scale),
+    expectedOutput: Math.round(band.expectedOutput * scale),
+    maxOutput: Math.round(band.maxOutput * scale),
+  };
+}
+
+function rawUsageBandFor(task: Task): UsageBand {
   if (isDocumentationTask(task)) {
     return {
       minContext: 500,
@@ -283,6 +308,7 @@ export class ExecutionUsageEstimator {
           : 'low';
 
     const assumptions = [
+      'Estimates fresh (uncached) provider tokens; cached context re-reads are not counted, so provider-reported totals are typically higher.',
       'Original user request is included once per baseline assignment.',
       'Repository context is estimated from task type; exact files read by coding agents are unknown before execution.',
       'Retries, provider failover, emergent collaboration and provider-hidden reasoning/context are excluded.',
