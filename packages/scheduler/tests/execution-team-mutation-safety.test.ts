@@ -41,7 +41,7 @@ describe('execution-team: no implicit implementer promotion, investigation stays
     }
   });
 
-  it('rejects an implementation task routed via "parallel" strategy with no implementer role, instead of promoting selected[0]', async () => {
+  it('staffs an explicit implementer when a router returns a "parallel" team without one, instead of promoting selected[0] or failing mid-run', async () => {
     const db = new TaskForgeDatabase(':memory:');
     const eventRepo = new EventRepository(db);
     const registry = new AgentRegistry(false);
@@ -120,11 +120,20 @@ describe('execution-team: no implicit implementer promotion, investigation stays
 
     const result = await orchestrator.run('Fix the flaky retry logic', { preplannedGraph: graph });
 
-    // Must fail explicitly, never silently succeed via a promoted investigator.
-    expect(result.status).toBe('failed');
-
+    // The router violated the invariant (mutating task, no implementer). The
+    // quality guard repairs the staffing BEFORE anything runs: failing at
+    // execution time cost a real user ~700k tokens of investigation first.
     const events = eventRepo.listByTask('TASK-NO-IMPL');
-    expect(events.some((e) => e.type === 'ROUTING_INVALID_FOR_TASK')).toBe(true);
+    expect(events.some((e) => e.type === 'ROUTING_INVALID_FOR_TASK')).toBe(false);
+
+    const decided = events.find((e) => e.type === 'ROUTING_DECIDED');
+    const roles = (decided?.payload as { roles?: string[] } | undefined)?.roles ?? [];
+    expect(roles[0]).toBe('implementer');
+    expect(roles).toContain('reproduction_engineer');
+
+    // Nobody was silently promoted: the implementer is an explicit assignment.
+    const assignments = new AssignmentRepository(db).listByTask('TASK-NO-IMPL');
+    expect(assignments.some((a) => a.role === 'implementer')).toBe(true);
 
     db.close();
   });

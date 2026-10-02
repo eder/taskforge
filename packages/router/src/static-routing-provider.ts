@@ -1,5 +1,5 @@
 import { RoutingProvider, RoutingInput, RoutingDecision, RouterHealthReport } from './router-types.js';
-import { RouterQualityGuard } from './quality-guard.js';
+import { RouterQualityGuard, taskRequiresMutation } from './quality-guard.js';
 
 export class StaticRoutingProvider implements RoutingProvider {
   readonly id = 'static';
@@ -17,24 +17,22 @@ export class StaticRoutingProvider implements RoutingProvider {
     const desc =
       `${input.task.title} ${input.task.description} ${input.task.contract.objective}`.toLowerCase();
 
+    // Keywords are matched as whole words: bare substring checks classified
+    // "trace" as "race", "author" as "auth" and "debug" as "bug".
+    const has = (pattern: RegExp) => pattern.test(desc);
+
+    // An investigation team has no implementer, so it is only valid for tasks
+    // that do not change code. A task that must mutate the repository is never
+    // downgraded to an investigation because its text mentions a keyword.
+    const mutates = taskRequiresMutation(input.task);
     const isInvestigation =
-      input.task.type === 'investigation' ||
-      desc.includes('investiga') ||
-      desc.includes('bug') ||
-      desc.includes('reproduce') ||
-      desc.includes('flaky') ||
-      desc.includes('duplicat') ||
-      input.signals?.uncertainty === 'high';
+      !mutates &&
+      (input.task.type === 'investigation' ||
+        has(/\binvestiga|\bbugs?\b|\breproduc|\bflaky\b|\bduplicat/) ||
+        input.signals?.uncertainty === 'high');
 
     const isHighRisk =
-      desc.includes('security') ||
-      desc.includes('pagamento') ||
-      desc.includes('payment') ||
-      desc.includes('finance') ||
-      desc.includes('auth') ||
-      desc.includes('deadlock') ||
-      desc.includes('race') ||
-      desc.includes('concurrency') ||
+      has(/\bsecurity\b|\bpagamento|\bpayments?\b|\bfinance|\bauth\b|\bauthenticat|\bauthoriz|\bdeadlock|\brace\b|\bconcurrency\b/) ||
       input.signals?.risk === 'high';
 
     let decision: RoutingDecision;
