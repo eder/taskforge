@@ -16,6 +16,9 @@ execution:
   worktreesDir: .taskforge/worktrees
   databasePath: .taskforge/taskforge.db
   runsDir: .taskforge/runs
+  # Opt-in: at the start of each run, remove TaskForge worktrees and temporary
+  # branches left behind by crashed sessions that are older than this age.
+  # autoPruneOlderThan: 7d
 
 # Optional deterministic write ownership. More-specific scopes win.
 # ownership:
@@ -77,6 +80,11 @@ verification:
   commands: []
   # Optional scope-specific checks. Most-specific matching scope wins.
   scopedCommands: []
+  # Opt-in: sensitive tasks need an independent agent's approval before integration.
+  # dualReview:
+  #   enabled: true
+  #   scopes: ['db/migrations/**', 'src/auth/**']
+  #   onNoIndependentReviewer: block   # or skip
   # Example:
   # scopedCommands:
   #   - scope: ios/**
