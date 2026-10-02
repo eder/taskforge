@@ -1349,7 +1349,7 @@ export class InteractiveShell {
               if (unfinished && chosen === unfinished.runId) {
                 this.activeGoal = undefined;
                 this.lastGoalDescription = undefined;
-                return this.respondToUnfinishedRun(unfinished.runId, intent.goal);
+                return this.respondToUnfinishedRun(unfinished.runId, intent.goal, true);
               }
               found = candidates.find((c) => c.runId === chosen);
             }
@@ -1690,7 +1690,7 @@ export class InteractiveShell {
                 return;
               }
               this.viewport.writeUpper(
-                `\n  ${colors.red}✕ Run execution error:${colors.reset} ${err.message}\n`,
+                `\n${this.describeUnexpectedStop(runId, err)}\n`,
               );
               this.viewport.drawFooter('');
             });
@@ -1733,7 +1733,7 @@ export class InteractiveShell {
           return await this.formatRunSummary(result);
         } catch (err) {
           this.conversationState = 'IDLE';
-          return `${colors.red}✕ Error during plan execution: ${(err as Error).message}${colors.reset}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
+          return `${this.describeUnexpectedStop(runId, err)}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
         }
       }
 
@@ -1852,14 +1852,50 @@ export class InteractiveShell {
    * as an instruction; if the run is blocked by something TaskForge can repair,
    * offer that first (one Enter) and carry the instruction through.
    */
-  private async respondToUnfinishedRun(runId: string, message: string): Promise<string> {
+  private async respondToUnfinishedRun(
+    runId: string,
+    message: string,
+    /** The message did not come from inside the run: show what would happen and wait for Enter. */
+    confirm = false,
+  ): Promise<string> {
     const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
-    if (plan.fixes.length === 0) return this.continueRun(runId, message);
+    if (plan.fixes.length === 0 && !confirm) return this.continueRun(runId, message);
+    if (plan.fixes.length === 0) {
+      // The planner (not the person) decided this message is about a run that stopped.
+      // Continuing it spends tokens on work that was approved earlier: say so and wait.
+      const info = this.describeUnfinished(runId);
+      const tasks = this.taskRepo.listByRun(runId);
+      const left = tasks.filter((t) => t.status !== 'integrated').length;
+      const spent = this.telemetry.getRunTokenTotal(runId);
+      const cap = this.config.execution.tokenBudget;
+      this.focusedRun = { runId, action: { kind: 'continue' }, guidance: message };
+      return [
+        `${colors.brand}✦ ${colors.bold}This sounds like ${runId}, which stopped${colors.reset}${info?.goal ? ` ${colors.dim}(${info.goal})${colors.reset}` : ''}`,
+        `  I would continue that run and give it your words as the instruction. ${left} of ${tasks.length} task${tasks.length === 1 ? '' : 's'} ${left === 1 ? 'is' : 'are'} left` +
+          `${spent > 0 ? `; it has used ${spent.toLocaleString('en-US')} tokens${cap > 0 ? ` of its ${cap.toLocaleString('en-US')} cap` : ''}` : ''}.`,
+        `  ${colors.dim}↵ Enter: continue that run  ·  or /back, then /clear if you meant something new (a new task is planned and shown to you first)${colors.reset}`,
+      ].join('\n');
+    }
     this.focusedRun = { runId, action: { kind: 'fix' }, guidance: message };
     return [
       `${colors.brand}✦ ${colors.bold}${runId} stopped on the environment, not on your request${colors.reset}`,
       ...plan.descriptions.map((d) => `  ${colors.green}•${colors.reset} ${d}`),
       `  ${colors.dim}↵ Enter: do that, then continue with your instruction  ·  /back to leave${colors.reset}`,
+    ].join('\n');
+  }
+
+  /**
+   * Something inside TaskForge threw while a run was going. The person should not
+   * get a raw error and a dead run: say what is safe, and leave the run ready to
+   * try again with Enter.
+   */
+  private describeUnexpectedStop(runId: string, err: unknown): string {
+    const message = (err instanceof Error ? err.message : String(err)).split('\n')[0].replace(/\s+/g, ' ').slice(0, 220);
+    this.focusedRun = { runId, action: { kind: 'continue' } };
+    return [
+      `  ${colors.red}✖ Something went wrong inside TaskForge while running ${runId}:${colors.reset} ${message}`,
+      `  ${colors.dim}Work that was already integrated, and work the agents kept, is still there. Nothing was applied to your branch.${colors.reset}`,
+      `  ${colors.dim}↵ Enter: try again from where it stopped  ·  /inspect ${runId} shows the details  ·  /back to leave it${colors.reset}`,
     ].join('\n');
   }
 
@@ -1972,7 +2008,7 @@ export class InteractiveShell {
               this.activeExecutionController = undefined;
               this.conversationState = 'IDLE';
               if (controller.signal.aborted || err.message?.includes('database is not open')) return;
-              this.viewport.writeUpper(`\n  ${colors.red}✕ Resume error:${colors.reset} ${err.message}\n`);
+              this.viewport.writeUpper(`\n${this.describeUnexpectedStop(runId, err)}\n`);
               this.viewport.drawFooter('');
             });
           return `  ${colors.dim}Running in background (Run: ${runId}). The REPL stays active: /tasks, /stream <task>.${colors.reset}\n`;
@@ -1982,7 +2018,7 @@ export class InteractiveShell {
         } catch (err) {
           this.activeExecutionController = undefined;
           this.conversationState = 'IDLE';
-          return `${colors.red}✕ Resume error: ${(err as Error).message}${colors.reset}`;
+          return this.describeUnexpectedStop(runId, err);
         }
   }
 

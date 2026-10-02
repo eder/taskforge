@@ -64,18 +64,24 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
     });
   }
 
-  it('hands the user’s own words to the agents as an instruction and continues the failed run', async () => {
+  it('does not start the old run on the planner’s say-so: it shows what it would do and waits for Enter, then hands over the user’s words', async () => {
     seedFailedRun('run-1790000000000010', { failureClass: 'code_or_test', evidence: 'AssertionError: expected 1 to be 2' });
     shell = new InteractiveShell({ repoRoot: dir, database: db });
     stubOrchestrator(shell);
     (shell as any).planner.setEarlierRunSelector(async () => ({ earlierRunId: 'run-1790000000000010' }));
 
     const message = 'ajuste os pontos que o revisor levantou';
-    await shell.handleInput(message);
+    const reply = plain(await shell.handleInput(message));
 
-    expect(resumed).toEqual([{ runId: 'run-1790000000000010', guidance: message }]);
-    // It did not start a new plan for the message.
+    // Nothing ran yet, and the person is told what would.
+    expect(resumed).toEqual([]);
+    expect(reply).toContain('This sounds like run-1790000000000010');
+    expect(reply).toContain('1 of 1 task is left');
+    expect(reply).toContain('Enter: continue that run');
     expect((shell as any).currentGraph).toBeUndefined();
+
+    await shell.handleInput('');
+    expect(resumed).toEqual([{ runId: 'run-1790000000000010', guidance: message }]);
   });
 
   it('tells the planner which run is unfinished and why it stopped', async () => {

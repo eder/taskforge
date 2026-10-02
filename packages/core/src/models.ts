@@ -57,7 +57,8 @@ export class TaskStateMachine {
     waiting_auth: ['running', 'failed', 'blocked'],
     completed: ['verification', 'failed', 'blocked'],
     verification: ['verified', 'failed', 'blocked'],
-    verified: ['integrated', 'blocked'],
+    // A verified task can still fail to integrate (its result conflicts with the run branch).
+    verified: ['integrated', 'blocked', 'failed'],
     integrated: [],
     failed: ['retrying', 'reassigned', 'collaborative_escalation', 'blocked'],
     retrying: ['ready', 'blocked', 'failed'],
