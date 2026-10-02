@@ -133,4 +133,26 @@ describe('RunOrchestrator.checkResumable', () => {
     expect(await orchestrator.checkResumable(runId)).toBeUndefined();
     db.close();
   });
+
+  it('an abandoned run is not resumable, with a clear reason', async () => {
+    const { db, orchestrator, runId } = await failedRun();
+    new RunRepository(db).updateStatus(runId, 'abandoned');
+    const reason = await orchestrator.checkResumable(runId);
+    expect(reason).toContain('was abandoned');
+    await expect(orchestrator.resume(runId)).rejects.toThrow(/abandoned/);
+    db.close();
+  });
+
+  it('tells the user when the repository moved on since the run started', async () => {
+    const { db, orchestrator, runId } = await failedRun();
+    fs.writeFileSync(path.join(root, 'later.txt'), 'later\n');
+    await git.stageAndCommit('a later commit', root);
+    const progress: string[] = [];
+    await orchestrator.resume(runId, { onProgress: (m) => progress.push(m) });
+    const note = progress.find((m) => m.startsWith('Note: this run started from'));
+    expect(note).toContain('moved on by 1 commit');
+    expect(note).toContain(`tf abandon ${runId}`);
+    db.close();
+  });
 });
+

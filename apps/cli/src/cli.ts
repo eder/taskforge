@@ -148,7 +148,9 @@ export function createCli(): Command {
             ? colors.green
             : r.status === 'failed'
               ? colors.red
-              : colors.yellow;
+              : r.status === 'abandoned'
+                ? colors.dim
+                : colors.yellow;
         console.log(
           `  ● ${colors.bold}${r.id}${colors.reset} [${statusColor}${r.status.toUpperCase()}${colors.reset}] ${colors.dim}(${r.createdAt.slice(0, 19).replace('T', ' ')})${colors.reset}`,
         );
@@ -171,8 +173,10 @@ export function createCli(): Command {
           } else {
             console.log(`    ${colors.dim}Apply:${colors.reset}  ${colors.green}tf apply ${r.id}${colors.reset}`);
           }
+        } else if (r.status === 'abandoned') {
+          console.log(`    ${colors.dim}Abandoned: not offered by tf resume.${colors.reset}`);
         } else if (r.status === 'failed' || r.status === 'cancelled' || r.status === 'running') {
-          console.log(`    ${colors.dim}Nothing to apply. To continue it: tf resume ${r.id}${colors.reset}`);
+          console.log(`    ${colors.dim}Nothing to apply. To continue it: tf resume ${r.id} (or tf abandon ${r.id})${colors.reset}`);
         } else {
           console.log(`    ${colors.dim}Nothing to apply (no changes to deliver).${colors.reset}`);
         }
@@ -710,6 +714,42 @@ export function createCli(): Command {
         console.log(`Run cancelled. Continue it with: tf resume ${result.runId}`);
         process.exitCode = 130;
       }
+    });
+
+  // tf abandon <run-id>
+  program
+    .command('abandon <run-id>')
+    .description('Close a failed, cancelled or interrupted run you no longer want to resume')
+    .action((runId: string) => {
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+      const run = runRepo.get(runId);
+      if (!run) {
+        console.error(`\nRun ${runId} not found. Use \`tf runs\` to list runs.\n`);
+        db.close();
+        process.exitCode = 1;
+        return;
+      }
+      if (run.status === 'completed') {
+        console.error(`\nRun ${runId} is completed; there is nothing to abandon. Deliver it with tf apply / tf pr create.\n`);
+        db.close();
+        process.exitCode = 1;
+        return;
+      }
+      runRepo.updateStatus(runId, 'abandoned');
+      new EventRepository(db).append({
+        id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        runId,
+        type: 'RUN_ABANDONED',
+        payload: { previousStatus: run.status },
+        timestamp: new Date(),
+      });
+      console.log(`\n  ${colors.green}✔${colors.reset} Run ${runId} abandoned. It will no longer be offered by \`tf resume\`.`);
+      console.log(
+        `  ${colors.dim}Nothing was deleted: any work kept on taskforge/candidate/* branches is still there.${colors.reset}\n`,
+      );
+      db.close();
     });
 
   // tf resume [run-id]

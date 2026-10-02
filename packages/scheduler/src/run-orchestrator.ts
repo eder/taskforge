@@ -440,6 +440,9 @@ export class RunOrchestrator {
   private async prepareResume(runId: string) {
     const run = this.runRepo.get(runId);
     if (!run) throw new Error(`Run ${runId} not found.`);
+    if (run.status === 'abandoned') {
+      throw new Error(`Run ${runId} was abandoned and will not be resumed.`);
+    }
     if (run.status === 'completed') {
       throw new Error(`Run ${runId} already completed; use /diff, /apply or /pr to deliver it.`);
     }
@@ -599,6 +602,15 @@ export class RunOrchestrator {
     if (kept.length > 0) {
       options.onProgress?.(
         `Work from an earlier attempt is kept for ${kept.join(', ')}; it is reused instead of starting over (use "tf resume --fresh" to discard it).`,
+      );
+    }
+    const behind = await this.gitService
+      .execGit(['rev-list', '--count', `${baseCommit}..HEAD`])
+      .then((out) => parseInt(out.trim(), 10) || 0)
+      .catch(() => 0);
+    if (behind > 0) {
+      options.onProgress?.(
+        `Note: this run started from ${baseCommit.slice(0, 7)} and the repository has moved on by ${behind} commit(s) since. The resumed work is still based on ${baseCommit.slice(0, 7)}. If the work was already applied by hand, run "tf abandon ${runId}" instead of resuming.`,
       );
     }
     options.onProgress?.(

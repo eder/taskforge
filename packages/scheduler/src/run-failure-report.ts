@@ -1,4 +1,5 @@
 import { TaskRepository, EventRepository } from '@taskforge/persistence';
+import { describeCompletionFailure } from './task-recovery.js';
 
 export interface RunFailureLine {
   taskId: string;
@@ -44,7 +45,10 @@ function reasonFromEvent(event: ReasonEvent): string | undefined {
     case 'TASK_RECOVERY_BLOCKED':
     case 'TASK_RECOVERY_SCHEDULED': {
       const reasonText = typeof p.reason === 'string' ? p.reason : '';
-      const headline = firstLine(reasonText);
+      // Runs recorded before reasons were written in words stored the bare code.
+      const headline = /^[A-Z][A-Z_]+$/.test(reasonText.trim())
+        ? describeCompletionFailure(reasonText.trim())
+        : firstLine(reasonText);
       // A failed check carries "Command: ..." and "Last output:" lines; show the
       // headline plus the first line of output, not the whole block.
       const output = outputLine(reasonText) ?? outputLine(typeof p.evidence === 'string' ? p.evidence : '');
@@ -148,7 +152,7 @@ export function formatRunFailureLines(lines: RunFailureLine[], runId: string): s
   out.push(
     lines.some((l) => l.keptBranch)
       ? `Next: fix the cause, then "tf resume ${runId}" re-checks the kept work without calling agents (add --fresh to start over)   ·   tf inspect ${runId}`
-      : `Next: tf resume ${runId}   ·   tf inspect ${runId}`,
+      : `Next: tf resume ${runId}   ·   tf abandon ${runId} (if no longer needed)   ·   tf inspect ${runId}`,
   );
   return out;
 }

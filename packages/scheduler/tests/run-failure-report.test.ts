@@ -82,6 +82,19 @@ describe('a failed check is summarized, not dumped', () => {
   });
 });
 
+describe('completion codes are shown in words', () => {
+  it('explains NO_CHANGES_PRODUCED, including in runs recorded with the bare code', () => {
+    const { db, addTask, addEvent, deps } = setup();
+    addTask('T1', 'blocked');
+    addEvent('T1', 'TASK_RECOVERY_BLOCKED', { reason: 'NO_CHANGES_PRODUCED', evidence: "IMPLEMENTATION task 'T1' produced zero file modifications" });
+    const reason = describeRunFailures(deps, 'run-1')[0].reason!;
+    expect(reason).toContain('finished without changing any file');
+    expect(reason).toContain('may already exist');
+    expect(reason).not.toMatch(/^NO_CHANGES_PRODUCED$/);
+    db.close();
+  });
+});
+
 describe('kept work in the failure report', () => {
   it('names the branch holding the work and the no-agent resume path', () => {
     const { db, addTask, addEvent, deps } = setup();
@@ -101,6 +114,8 @@ describe('formatRunFailureLines', () => {
   it('is empty when there is nothing to explain, and always ends with the next step', () => {
     expect(formatRunFailureLines([], 'run-1')).toEqual([]);
     const text = formatRunFailureLines([{ taskId: 'T1', title: 'x', kind: 'failed', reason: 'boom' }], 'run-9');
-    expect(text[text.length - 1]).toBe('Next: tf resume run-9   ·   tf inspect run-9');
+    expect(text[text.length - 1]).toBe(
+      'Next: tf resume run-9   ·   tf abandon run-9 (if no longer needed)   ·   tf inspect run-9',
+    );
   });
 });

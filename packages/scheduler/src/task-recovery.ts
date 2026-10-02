@@ -120,6 +120,25 @@ export function classifyExecutionFailure(
   return looksLikeEnvironmentFailure(text) ? 'environment' : 'code_or_test';
 }
 
+const COMPLETION_MESSAGES: Record<string, string> = {
+  NO_CHANGES_PRODUCED:
+    "The agent finished without changing any file, but this task requires a change. The work may already exist (check the run's base commit and other branches) or the instructions may be unclear.",
+  REQUIRED_ACTION_DENIED: 'A permission the agent needed was denied by the permission policy.',
+  UNRESOLVED_INTERACTION: 'The agent was waiting for a question or approval that was never answered.',
+  HARNESS_FAILED: 'The agent CLI itself failed (crash, authentication or configuration problem).',
+  EMPTY_PROVIDER_RESULT: 'The agent returned an empty result.',
+  INVALID_PROVIDER_RESULT: 'The agent returned a result TaskForge could not read.',
+  VERIFICATION_FAILED: 'The change failed automated verification.',
+  ACCEPTANCE_NOT_MET: "The result did not meet the task's acceptance criteria.",
+  PROVIDER_QUOTA_EXCEEDED: 'The provider ran out of quota.',
+};
+
+/** Plain-language reason for a completion-gate code (the code itself means nothing to a user). */
+export function describeCompletionFailure(code?: string): string {
+  if (!code) return 'The completion gate rejected the attempt';
+  return COMPLETION_MESSAGES[code] ?? code;
+}
+
 export function classifyCompletionFailure(
   failureReason?: string,
   evidence?: string,

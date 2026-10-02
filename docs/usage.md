@@ -393,6 +393,8 @@ What `tf resume <run-id>` does with it depends on **why** the task was blocked:
 
 Use `tf resume --fresh <run-id>` to discard the kept work and start the task over.
 
+If you applied the change yourself (for example by cherry-picking the kept commit), do **not** resume the run: the agents would find nothing to change and the task would be blocked again. Close it with `tf abandon <run-id>`; it is then ignored by `tf resume` and shown as ABANDONED in `tf runs`. Nothing is deleted, and kept work stays on its `taskforge/candidate/*` branch.
+
 A typical case: `tf init` proposed a test command that does not suit the project, the first code task was blocked, you fix `.taskforge/config.yaml` (for example with `tf init --check --force`), then `tf resume` finishes the task without another agent call.
 
 ### Resume an interrupted or failed run
