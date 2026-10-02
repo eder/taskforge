@@ -527,11 +527,33 @@ or for a previous run:
 /diff run-<id>
 ```
 
+`/diff` starts with the files changed and ends with a plain-language account of the change:
+
+```text
+What it does: Add retry with backoff to the sync client
+How it was checked:
+  ✔ TASK-01  Add retry: test, lint passed
+  ⚠ TASK-02  Update docs: no automated checks ran (a documentation-only change, or no check commands are configured)
+Partly verified: read the diff of the tasks marked ⚠ before applying.
+```
+
+"Passed" is only reported as verified when checks actually ran. A run whose tasks passed with nothing executed is shown as **not verified**, so a green result is never mistaken for evidence.
+
 Apply the completed run to its target branch:
 
 ```text
 /apply
 ```
+
+If the changes were not fully verified, `/apply` shows the account above and stops; `/apply --yes` applies anyway. `tf apply` does the same: it prints the account, and on a terminal asks `Apply anyway?` (anything but `y` stops; `--yes` skips the question; without a terminal it warns and proceeds so automation keeps working). Fully verified runs apply without asking.
+
+Changed your mind? Undo the last applied run:
+
+```text
+/undo          # or: tf undo [run]
+```
+
+Undo adds a revert commit (`git revert -m 1` of the merge TaskForge made). Nothing is rewritten, so it is safe even after you pushed, and the change can be brought back by reverting that revert (the command prints it). It refuses when the working tree is dirty, and if later work conflicts with the revert it changes nothing and tells you the `git revert` to run by hand. `tf runs` shows undone runs as `↩ undone`.
 
 Create a GitHub pull request:
 

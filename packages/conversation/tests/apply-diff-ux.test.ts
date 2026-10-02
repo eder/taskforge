@@ -60,7 +60,7 @@ describe('/apply and /diff result UX', () => {
     await shell.handleInput('create application health endpoint');
     await shell.handleInput('yes --fake');
 
-    const applied = stripAnsi(await shell.handleInput('/apply'));
+    const applied = stripAnsi(await shell.handleInput('/apply --yes'));
     expect(applied).toContain('Applied successfully');
     expect(applied).toMatch(/[0-9a-f]{7} → [0-9a-f]{7}/);
     expect(applied).toContain('Commit');
