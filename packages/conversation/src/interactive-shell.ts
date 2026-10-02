@@ -54,6 +54,8 @@ import {
   OrchestrationResult,
   sanitizeTaskOutput,
   allowedWritersForTask,
+  describeRunFailures,
+  formatRunFailureLines,
 } from '@taskforge/scheduler';
 import {
   TaskForgeDatabase,
@@ -515,8 +517,16 @@ export class InteractiveShell {
   }
 
   private async formatRunSummary(result: OrchestrationResult): Promise<string> {
+    const failureLines =
+      result.status === 'failed'
+        ? formatRunFailureLines(
+            describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, result.runId),
+            result.runId,
+          )
+        : [];
     return formatRunSummary(
       {
+        failureLines,
         deliveryService: this.deliveryService,
         repoRoot: this.repoRoot,
         telemetry: this.telemetry,

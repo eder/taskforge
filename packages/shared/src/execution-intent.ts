@@ -52,10 +52,10 @@ const EXPLICIT_READ_ONLY_PATTERNS: RegExp[] = [
 // "pure explanation" -- kept independent (not imported from @taskforge/planner)
 // since @taskforge/shared must not depend on higher-level packages.
 const ACTION_VERB_PATTERN =
-  /\b(create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify|crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova)\b/i;
+  /\b(create|build|implement|add|make|fix|repair|patch|refactor|remove|delete|update|write|edit|modify|install|migrate|rename|replace|apply|deploy|commit|push|merge|crie|criar|implemente|adicione|corrija|corrigir|modifique|atualize|remova|fa[cç]a|ajuste|altere|mude|troque|instale|migre|escreva|aplique|configure|conserte|renomeie|refatore|apague|publique)\b/i;
 
 const EXPLANATION_PATTERN =
-  /\b(explain|analyze|analyse|evaluate|assess|review|opinion|what do you think|recommend|investigate|understand|summari[sz]e|summary|overview|describe|tell me about|avalie|analise|explique|opini[ãa]o|investigue|entenda|resuma|resumir|resumo|descreva|vis[aã]o geral)\b/i;
+  /\b(explain|analyze|analyse|evaluate|assess|review|opinion|what do you think|recommend|investigate|understand|summari[sz]e|summary|overview|describe|tell me about|avalie|analise|explique|opini[ãa]o|investigue|entenda|resuma|resumir|resumo|descreva|vis[aã]o geral|veja|olhe|confira|verifique|liste|mostre|levante|mapeie|inspecione|revise|look\s+at|show\s+me|list|check|inspect|find\s+out|what'?s\s+(?:left|missing|remaining|next)|what\s+(?:is|remains|is\s+left|is\s+missing)|o\s+que\s+(?:ainda\s+)?(?:falta|resta)|quais?\s+(?:s[aã]o\s+)?(?:as\s+)?(?:pend[êe]ncias|pr[óo]ximos\s+passos)|pend[êe]ncias|pr[óo]ximos\s+passos)\b/i;
 
 /**
  * Decision/advisory questions often contain implementation verbs inside a
