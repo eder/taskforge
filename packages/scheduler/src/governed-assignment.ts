@@ -29,6 +29,7 @@ export interface GovernedAssignmentContext {
   originalUserRequest?: string;
   /** Reference output of an earlier run the request refers to (see run-context.ts). */
   priorContext?: string;
+  userGuidance?: string;
   config: TaskForgeConfig;
   task: Task;
   /** Assignment must already be persisted via assignmentRepo.create before calling. */
@@ -218,6 +219,7 @@ export async function executeGovernedAssignment(
         assignment,
         originalUserRequest: ctx.originalUserRequest,
         priorContext: ctx.priorContext,
+        userGuidance: ctx.userGuidance,
         abortSignal,
       });
 
@@ -290,6 +292,7 @@ export async function executeGovernedAssignment(
       assignment,
       originalUserRequest: ctx.originalUserRequest,
       priorContext: ctx.priorContext,
+        userGuidance: ctx.userGuidance,
       abortSignal,
       logPath,
       timeoutMs: Math.max(1, ctx.config.execution.defaultTimeoutMinutes) * 60_000,

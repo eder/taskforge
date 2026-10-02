@@ -28,6 +28,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   { cmd: '/cancel', desc: 'Cancel the active run or one focused assignment' },
   { cmd: '/pause', desc: 'Pause orchestrator execution' },
   { cmd: '/unpause', desc: 'Continue a paused execution (/resume still works)' },
+  { cmd: '/fix', desc: 'Repair what blocked a run (a missing .env, a service that is down) and continue it; Enter accepts the suggestion' },
   { cmd: '/retry', desc: 'Continue a failed, cancelled or interrupted run (same as tf resume); Enter accepts the suggestion' },
   { cmd: '/clear', desc: 'Start fresh: earlier runs stop being used as context for new requests' },
   { cmd: '/cost', desc: 'Show token usage and financial cost report' },

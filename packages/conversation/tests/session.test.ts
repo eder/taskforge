@@ -156,16 +156,16 @@ describe('retry from the REPL', () => {
 
     new GoalRepository(db).create({ id: 'g2', description: 'x', repository: tmpDir });
     new RunRepository(db).create('run-1790000000000002', 'g2', {});
-    (shell as any).suggestedRetry = 'run-1790000000000002';
+    (shell as any).suggestedAction = '/retry run-1790000000000002';
     (shell as any).buildOrchestrator = () => ({ checkResumable: async () => 'stub: not resumable' });
     expect(await shell.handleInput('')).toBe('stub: not resumable');
   });
 
   it('typing something else drops the suggestion', async () => {
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-    (shell as any).suggestedRetry = 'run-1790000000000003';
+    (shell as any).suggestedAction = '/retry run-1790000000000003';
     await shell.handleInput('/tasks');
-    expect((shell as any).suggestedRetry).toBeUndefined();
+    expect((shell as any).suggestedAction).toBeUndefined();
   });
 
   it('parses /retry with and without a run reference', () => {

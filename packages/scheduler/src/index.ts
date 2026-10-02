@@ -13,3 +13,6 @@ export * from './run-failure-report.js';
 export * from './run-context.js';
 export * from './run-ref.js';
 export * from './run-confidence.js';
+export * from './environment-repair.js';
+export * from './run-repair.js';
+export * from './review-verdict.js';

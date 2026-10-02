@@ -9,3 +9,4 @@ export * from './agent-stream-bus.js';
 export * from './version.js';
 export * from './token-count.js';
 export * from './security-notice.js';
+export * from './project-config-patch.js';

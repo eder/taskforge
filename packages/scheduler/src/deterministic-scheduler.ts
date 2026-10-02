@@ -77,6 +77,8 @@ export interface SchedulerContext {
   originalUserRequest?: string;
   /** Reference output of an earlier run the request refers to (see run-context.ts). */
   priorContext?: string;
+  /** What the user asked for when continuing this run (see AgentContext.userGuidance). */
+  userGuidance?: string;
   config: TaskForgeConfig;
   graph: TaskGraph;
   agentRegistry: AgentRegistry;
@@ -715,6 +717,7 @@ export class DeterministicScheduler {
         repoRoot: this.ctx.repoRoot,
         originalUserRequest: this.ctx.originalUserRequest,
         priorContext: this.ctx.priorContext,
+        userGuidance: this.ctx.userGuidance,
         config,
         task: reviewTask,
         assignment: reviewAssignment,
@@ -785,6 +788,124 @@ export class DeterministicScheduler {
     }
   }
 
+  /**
+   * Runs the project's check commands once on the unchanged code before any agent
+   * is started. Agents are the expensive part of a run; if the checks cannot even
+   * start here (a missing .env, a database that is down), every task would end
+   * blocked after its tokens were spent. In that case the writable tasks are
+   * blocked up front with the recorded evidence, so `tf fix` / `tf resume` can
+   * repair the environment and run once. Checks that merely fail on the unchanged
+   * code are reported and the run continues. Skipped when resuming (the checks run
+   * on the kept work anyway) and when nothing explicit is configured to run.
+   */
+  private async preflightChecks(): Promise<SchedulerResult | undefined> {
+    const { config, graph, runId, eventRepo, taskRepo, runRepo, worktreeManager, verificationRunner } = this.ctx;
+    if (config.verification.preflight === false) return undefined;
+    // Resuming kept work: the checks run on that work anyway. A resume that starts
+    // the work over (nothing integrated, nothing kept) is a fresh start and is checked.
+    const resume = this.ctx.resumeState;
+    if (
+      resume &&
+      (resume.hasIntegratedCommits ||
+        Object.keys(resume.candidates ?? {}).length > 0 ||
+        Object.keys(resume.taskOutputs ?? {}).length > 0)
+    ) {
+      return undefined;
+    }
+
+    const writable = graph.getAllTasks().filter((t) => t.contract.completionMode === 'mutation');
+    if (writable.length === 0) return undefined;
+    const commands = [...new Set(writable.flatMap((t) => verificationCommandsForTask(t, config) ?? []))];
+    if (commands.length === 0) return undefined;
+
+    this.ctx.onProgress?.("Checking that the project's checks can run here before any agent works...");
+    const probe = writable[0];
+    let result: VerificationResult;
+    try {
+      const wt = await worktreeManager.createWorktree(probe.id, 'preflight', this.ctx.baseCommit, { detached: true });
+      try {
+        result = await verificationRunner.verify({
+          taskId: probe.id,
+          runId,
+          worktreePath: wt.path,
+          config,
+          taskType: probe.type,
+          explicitCommands: commands,
+          documentationOnlyChange: false,
+        });
+      } finally {
+        await worktreeManager.removeWorktree(probe.id, 'preflight', true, false).catch(() => undefined);
+      }
+    } catch (err) {
+      // A preflight that cannot be set up must never block the run by itself.
+      this.ctx.onProgress?.(`Preflight skipped: ${(err as Error).message}`);
+      return undefined;
+    }
+
+    if (result.passed) {
+      eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        type: 'PREFLIGHT_PASSED',
+        payload: { commands },
+        timestamp: new Date(),
+      });
+      this.ctx.onProgress?.('✔ The project\'s checks run in this environment.');
+      return undefined;
+    }
+
+    const failureClass = classifyVerificationFailure(result.failureReason);
+    if (failureClass === 'code_or_test') {
+      this.ctx.onProgress?.(
+        '⚠ Some of the project\'s checks already fail on the unchanged code, so they will not prove the agents\' work. Continuing.',
+      );
+      return undefined;
+    }
+
+    const reason = result.failureReason?.split('\n')[0] ?? 'The project\'s checks cannot run in this environment';
+    eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId,
+      type: 'PREFLIGHT_BLOCKED',
+      payload: { commands, failureClass, reason, evidence: result.failureReason },
+      timestamp: new Date(),
+    });
+    for (const task of writable) {
+      eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: task.id,
+        type: 'TASK_RECOVERY_BLOCKED',
+        payload: {
+          taskId: task.id,
+          phase: 'verification',
+          failureClass,
+          reason,
+          evidence: result.failureReason,
+          action: 'block',
+          attempt: 0,
+          retriesRemaining: 0,
+          preflight: true,
+        },
+        timestamp: new Date(),
+      });
+      this.noteTaskFailure(task, 'verification', `Preflight: ${reason}`);
+      graph.updateTaskStatus(task.id, 'blocked');
+      taskRepo.updateStatus(task.id, 'blocked');
+    }
+    this.ctx.onProgress?.(
+      '✗ The project\'s checks cannot run in this environment. Stopped before any agent started, so no tokens were spent.',
+    );
+    runRepo.updateStatus(runId, 'failed');
+    return {
+      runId,
+      status: 'failed',
+      tasksCompleted: 0,
+      tasksFailed: writable.length,
+      error: `The project's checks cannot run in this environment (${reason}). Nothing was spent on agents.`,
+    };
+  }
+
   async run(): Promise<SchedulerResult> {
     const { runId, graph, eventRepo, runRepo, abortSignal, baseCommit } = this.ctx;
 
@@ -795,6 +916,9 @@ export class DeterministicScheduler {
       payload: { message: 'Deterministic scheduler initiated' },
       timestamp: new Date(),
     });
+
+    const blockedByPreflight = await this.preflightChecks();
+    if (blockedByPreflight) return blockedByPreflight;
 
     // Main scheduling loop
     const runningPromises = new Map<string, Promise<void>>();
@@ -1404,6 +1528,7 @@ export class DeterministicScheduler {
         repoRoot: this.ctx.repoRoot,
         originalUserRequest: this.ctx.originalUserRequest,
         priorContext: this.ctx.priorContext,
+        userGuidance: this.ctx.userGuidance,
         config,
         task,
         assignment,
@@ -1587,6 +1712,7 @@ export class DeterministicScheduler {
           repoRoot: this.ctx.repoRoot,
           originalUserRequest: this.ctx.originalUserRequest,
           priorContext: this.ctx.priorContext,
+        userGuidance: this.ctx.userGuidance,
           config,
           task,
           assignment: newAsgn,

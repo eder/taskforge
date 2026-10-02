@@ -124,6 +124,8 @@ export interface RunOptions {
    * only make the run more restrictive.
    */
   executionIntent?: ExecutionIntentDecision;
+  /** What the user asked for when continuing an unfinished run; agents follow it. */
+  guidance?: string;
   /** Token cap for this run; overrides `execution.tokenBudget` (on resume it is the new total cap). */
   tokenBudget?: number;
 }
@@ -923,6 +925,7 @@ export class RunOrchestrator {
       repoRoot: this.repoRoot,
       originalUserRequest: goalDescription,
       priorContext: options.priorContext?.text,
+      userGuidance: options.guidance,
       config: this.config,
       graph,
       agentRegistry: this.agentRegistry,
