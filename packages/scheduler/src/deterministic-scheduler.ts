@@ -24,9 +24,11 @@ import { NegotiationManager } from '@taskforge/negotiation';
 import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
 import { InteractionGateway } from '@taskforge/execution';
 import { ConcurrencyManager } from './concurrency-manager.js';
-import { executeGovernedAssignment } from './governed-assignment.js';
+import { executeGovernedAssignment, GovernedAssignmentResult } from './governed-assignment.js';
 import { CompletionGate, sanitizeTaskOutput } from './completion-gate.js';
 import {
+  PreservedCandidate,
+  candidateNeedsNoAgent,
   RecoveryIncident,
   RecoveryFailureClass,
   classifyCompletionFailure,
@@ -58,6 +60,8 @@ export interface SchedulerResumeState {
   hasIntegratedCommits: boolean;
   /** Ids of tasks whose commits were integrated into the run branch. */
   commitTaskIds?: string[];
+  /** Work kept from tasks that were blocked, keyed by task id (see PreservedCandidate). */
+  candidates?: Record<string, PreservedCandidate>;
 }
 
 export interface SchedulerContext {
@@ -157,6 +161,9 @@ export class DeterministicScheduler {
   private hasIntegratedCommits = false;
   /** Tasks whose commits are on the run branch; read-only report tasks never appear here. */
   private commitTaskIds = new Set<string>();
+  /** Blocked work kept on a branch; see preserveCandidate / reuseCandidate. */
+  private candidates = new Map<string, PreservedCandidate>();
+  private pendingPreserves: Promise<void>[] = [];
   private failedAgentsByTask = new Map<string, Set<string>>();
   private recoveryIncidentsByTask = new Map<string, RecoveryIncident[]>();
   private recoveryBaseCommitByTask = new Map<string, string>();
@@ -169,7 +176,96 @@ export class DeterministicScheduler {
       this.taskOutputs = { ...ctx.resumeState.taskOutputs };
       this.hasIntegratedCommits = ctx.resumeState.hasIntegratedCommits;
       this.commitTaskIds = new Set(ctx.resumeState.commitTaskIds ?? []);
+      for (const [taskId, candidate] of Object.entries(ctx.resumeState.candidates ?? {})) {
+        this.candidates.set(taskId, candidate);
+        // Blockers about the work itself: the agent continues from the kept
+        // commit with what went wrong, instead of starting over.
+        if (!candidateNeedsNoAgent(candidate)) {
+          this.recoveryBaseCommitByTask.set(taskId, candidate.commit);
+          this.recoveryIncidentsByTask.set(taskId, [
+            {
+              attempt: 1,
+              agentId: candidate.agentId ?? 'unknown',
+              phase: candidate.phase as RecoveryIncident['phase'],
+              failureClass: candidate.failureClass,
+              reason: candidate.reason,
+              evidence: candidate.evidence,
+              candidateCommit: candidate.commit,
+            },
+          ]);
+        }
+      }
     }
+  }
+
+  /**
+   * Keeps work that did not make it to the run branch on a named branch, so a
+   * blocked task never strands what the agents produced, and records it in the
+   * run metadata so `tf resume` can reuse it.
+   */
+  private preserveCandidate(
+    task: Task,
+    candidate: Omit<PreservedCandidate, 'branch' | 'commit'> & { commit?: string },
+  ): void {
+    const commit = candidate.commit;
+    if (!commit || commit === this.ctx.baseCommit) return;
+    const branch = `taskforge/candidate/${this.ctx.runId.replace(/^run-/, '')}/${task.id}`;
+    const kept: PreservedCandidate = { ...candidate, commit, branch, reason: candidate.reason.slice(0, 600), evidence: candidate.evidence?.slice(0, 1500) };
+    this.candidates.set(task.id, kept);
+    const work = this.ctx.gitService
+      .execGit(['branch', '-f', branch, commit])
+      .then(() => {
+        this.ctx.runRepo.mergeMetadata(this.ctx.runId, {
+          candidates: Object.fromEntries(this.candidates),
+        });
+        this.ctx.eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId: this.ctx.runId,
+          taskId: task.id,
+          type: 'TASK_CANDIDATE_PRESERVED',
+          payload: { taskId: task.id, branch, commit, phase: kept.phase, failureClass: kept.failureClass },
+          timestamp: new Date(),
+        });
+        this.ctx.onProgress?.(
+          `[${task.id}] Work kept on branch ${branch} (${commit.slice(0, 7)}). After fixing the cause, "tf resume ${this.ctx.runId}" re-checks it${candidateNeedsNoAgent(kept) ? ' without calling any agent' : ' and lets the agent continue from it'}.`,
+        );
+      })
+      .catch(() => {
+        // never let bookkeeping break the run
+      });
+    this.pendingPreserves.push(work);
+  }
+
+  private clearCandidate(taskId: string): void {
+    if (!this.candidates.delete(taskId)) return;
+    this.ctx.runRepo.mergeMetadata(this.ctx.runId, { candidates: Object.fromEntries(this.candidates) });
+  }
+
+  /** A kept candidate whose blocker was not about the work: only the checks need to run again. */
+  private reusableCandidate(task: Task): PreservedCandidate | undefined {
+    const candidate = this.candidates.get(task.id);
+    return candidate && candidateNeedsNoAgent(candidate) ? candidate : undefined;
+  }
+
+  /** Stands in for an agent run: puts the kept commit in a worktree so gates and checks run on it. */
+  private async reuseCandidate(
+    task: Task,
+    candidate: PreservedCandidate,
+    assignmentId: string,
+  ): Promise<GovernedAssignmentResult> {
+    this.ctx.onProgress?.(
+      `[${task.id}] ↻ Reusing the work kept from the previous attempt (${candidate.commit.slice(0, 7)}): re-running the checks only, no agent call.`,
+    );
+    const wt = await this.ctx.worktreeManager.createWorktree(task.id, assignmentId, candidate.commit, {
+      detached: true,
+    });
+    return {
+      success: true,
+      commitHash: candidate.commit,
+      output: 'Work kept from a previous attempt; re-verified without calling an agent.',
+      worktreePath: wt.path,
+      durationMs: 0,
+    };
   }
 
   /**
@@ -344,6 +440,14 @@ export class DeterministicScheduler {
 
     if (params.candidateCommit && params.candidateCommit !== this.ctx.baseCommit) {
       this.recoveryBaseCommitByTask.set(task.id, params.candidateCommit);
+      this.preserveCandidate(task, {
+        commit: params.candidateCommit,
+        phase: params.phase,
+        failureClass,
+        reason: params.reason,
+        evidence: params.evidence,
+        agentId: params.agentId,
+      });
     }
 
     const decision = decideTaskRecovery(
@@ -762,6 +866,7 @@ export class DeterministicScheduler {
       await Promise.all(runningPromises.values());
     }
 
+    await Promise.all(this.pendingPreserves);
     const tasks = graph.getAllTasks();
     const tasksCompleted = tasks.filter((t) => t.status === 'integrated').length;
     const tasksFailed = tasks.filter((t) => t.status === 'failed' || t.status === 'blocked').length;
@@ -912,7 +1017,10 @@ export class DeterministicScheduler {
         const executor = this.ctx.collaborativeExecutors.get(task.id)!;
         const taskScopedContext =
           taskBaseCommit === baseCommit ? this.ctx : { ...this.ctx, baseCommit: taskBaseCommit };
-        const res = await executor(executionTask, taskScopedContext);
+        const reusableTeamWork = this.reusableCandidate(task);
+        const res = reusableTeamWork
+          ? await this.reuseCandidate(task, reusableTeamWork, collabAsgnId)
+          : await executor(executionTask, taskScopedContext);
         if (!res.success) {
           const teamReason =
             ((res as { output?: string; message?: string }).output ??
@@ -989,6 +1097,12 @@ export class DeterministicScheduler {
             'completion',
             `Completion gate rejected the team result: ${collabGate.evidence.explanation || collabGate.failureReason}`,
           );
+          this.preserveCandidate(task, {
+            commit: res.commitHash,
+            phase: 'completion',
+            failureClass: 'code_or_test',
+            reason: `Completion gate rejected the team result: ${collabGate.evidence.explanation || collabGate.failureReason}`,
+          });
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           graph.updateTaskStatus(task.id, 'blocked');
@@ -1039,6 +1153,12 @@ export class DeterministicScheduler {
             'scope',
             `Changed files outside the allowed scope (${task.contract.allowedScope.join(', ')}): ${collabScopeViolations.slice(0, 10).join(', ')}`,
           );
+          this.preserveCandidate(task, {
+            commit: res.commitHash,
+            phase: 'verification',
+            failureClass: 'code_or_test',
+            reason: `Changed files outside the allowed scope: ${collabScopeViolations.slice(0, 10).join(', ')}`,
+          });
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           graph.updateTaskStatus(task.id, 'blocked');
@@ -1091,6 +1211,13 @@ export class DeterministicScheduler {
               ? 'Verification is not configured for this scope: add verification.commands to .taskforge/config.yaml (run "tf init" to generate it).'
               : `Verification failed: ${verResult.failureReason ?? 'unknown reason'}`,
           );
+          this.preserveCandidate(task, {
+            commit: res.commitHash,
+            phase: 'verification',
+            failureClass,
+            reason: verResult.failureReason?.split('\n')[0] ?? 'Verification failed',
+            evidence: verResult.failureReason,
+          });
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           graph.updateTaskStatus(task.id, 'blocked');
@@ -1120,6 +1247,16 @@ export class DeterministicScheduler {
               ? `Independent review by ${collabReview.reviewerId} rejected the change: ${collabReview.findings}`
               : `Dual review is required but unavailable: ${collabReview.reason}`,
           );
+          this.preserveCandidate(task, {
+            commit: res.commitHash,
+            phase: 'review',
+            failureClass: collabReview.decision === 'rejected' ? 'code_or_test' : 'policy',
+            reason:
+              collabReview.decision === 'rejected'
+                ? 'Independent review rejected the change'
+                : `Dual review is required but unavailable: ${collabReview.reason}`,
+            evidence: collabReview.decision === 'rejected' ? collabReview.findings : undefined,
+          });
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           graph.updateTaskStatus(task.id, 'blocked');
@@ -1152,8 +1289,10 @@ export class DeterministicScheduler {
 
         graph.updateTaskStatus(task.id, 'integrated');
         taskRepo.updateStatus(task.id, 'integrated');
+        this.clearCandidate(task.id);
         return;
       } finally {
+        await this.ctx.worktreeManager.removeWorktree(task.id, collabAsgnId, true, true).catch(() => {});
         this.ctx.activityTracker?.completeAssignment(collabAsgnId);
         const taskAssignments = this.ctx.assignmentRepo.listByTask(task.id);
         for (const asgn of taskAssignments) {
@@ -1216,7 +1355,10 @@ export class DeterministicScheduler {
       });
 
       // 3. Execute with agent through the governed assignment pipeline
-      const govResult = await executeGovernedAssignment({
+      const reusableWork = this.reusableCandidate(task);
+      const govResult = reusableWork
+        ? await this.reuseCandidate(task, reusableWork, assignmentId)
+        : await executeGovernedAssignment({
         runId,
         baseCommit: taskBaseCommit,
         repoRoot: this.ctx.repoRoot,
@@ -1824,6 +1966,7 @@ export class DeterministicScheduler {
       taskRepo.updateStatus(task.id, 'integrated');
       this.recoveryIncidentsByTask.delete(task.id);
       this.recoveryBaseCommitByTask.delete(task.id);
+      this.clearCandidate(task.id);
     } finally {
       this.ctx.activityTracker?.completeAssignment(assignmentId);
     }

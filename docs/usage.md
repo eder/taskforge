@@ -378,6 +378,21 @@ Cancel one active assignment by index:
 
 TaskForge keeps persisted run state and audit information so you can inspect what happened afterward.
 
+### When a task is blocked, the agents' work is not lost
+
+If agents produced a change and the task is then blocked (verification failed, a policy stopped it, a reviewer was unavailable), TaskForge keeps that change on a branch named `taskforge/candidate/<run>/<task>` and the end-of-run report names it. Nothing has to be recovered by hand.
+
+What `tf resume <run-id>` does with it depends on **why** the task was blocked:
+
+| Blocked because | `tf resume` |
+| --- | --- |
+| The verification command itself does not work for the project (wrong test runner, missing plugin, command not found), the environment cannot run the checks, or a policy such as "no independent reviewer available" | Re-runs only the checks on the kept work. **No agent is called**, so fixing the configuration and resuming costs no tokens. |
+| The work itself was wrong (a real failing check, rejected review, out-of-scope change) | The agent continues **from the kept commit** with what went wrong, instead of starting over. |
+
+Use `tf resume --fresh <run-id>` to discard the kept work and start the task over.
+
+A typical case: `tf init` proposed a test command that does not suit the project, the first code task was blocked, you fix `.taskforge/config.yaml` (for example with `tf init --check --force`), then `tf resume` finishes the task without another agent call.
+
 ### Resume an interrupted or failed run
 
 `/pause` and `/resume` only control a live session. If a run was cancelled, crashed, or ended `failed` or `BLOCKED`, continue it from the CLI:
