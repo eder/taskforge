@@ -18,7 +18,7 @@ import {
   TaskRepository,
   WorkspaceRepository,
 } from '@taskforge/persistence';
-import { VerificationRunner } from '@taskforge/verification';
+import { VerificationRunner, isDocumentationOnlyChange } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
 import { NegotiationManager } from '@taskforge/negotiation';
 import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
@@ -422,6 +422,40 @@ export class DeterministicScheduler {
     return git.commitTree(tree, base, `${task.title} (${task.id})`, worktreePath);
   }
 
+  /** Files the task changed, relative to the state it started from (recovery candidates ignored). */
+  private async changedFilesSinceTaskStart(
+    task: Task,
+    commitHash: string | undefined,
+    worktreePath: string,
+  ): Promise<string[]> {
+    if (!commitHash) return [];
+    const base = await this.resolveCumulativeBase(task);
+    const out = await new GitService(worktreePath)
+      .exec(['diff', '--name-only', base, commitHash], worktreePath)
+      .catch(() => '');
+    return out
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  /**
+   * Documentation-only changes need no code verification. Only applies when
+   * no explicit verification commands are configured for the task; those
+   * still run, and still must pass, whatever the change contains.
+   */
+  private async isDocumentationOnly(
+    task: Task,
+    commitHash: string | undefined,
+    worktreePath: string,
+  ): Promise<boolean> {
+    if (!commitHash || !taskProducesChanges(task)) return false;
+    if ((verificationCommandsForTask(task, this.ctx.config) ?? []).length > 0) return false;
+    return isDocumentationOnlyChange(
+      await this.changedFilesSinceTaskStart(task, commitHash, worktreePath),
+    );
+  }
+
   /**
    * Deterministic write-boundary check: every file the task changed (relative
    * to the state it started from, ignoring recovery candidates) must fall
@@ -435,13 +469,9 @@ export class DeterministicScheduler {
     if (this.ctx.config.verification.enforceScope === false) return [];
     const scopes = task.contract.allowedScope;
     if (!commitHash || !taskProducesChanges(task) || !scopes || scopes.length === 0) return [];
-    const base = await this.resolveCumulativeBase(task);
-    const out = await new GitService(worktreePath)
-      .exec(['diff', '--name-only', base, commitHash], worktreePath)
-      .catch(() => '');
     const violations = filesOutsideScope(
       scopes,
-      out.split('\n').map((line) => line.trim()).filter(Boolean),
+      await this.changedFilesSinceTaskStart(task, commitHash, worktreePath),
     );
     if (violations.length > 0) {
       this.ctx.eventRepo.append({
@@ -996,6 +1026,7 @@ export class DeterministicScheduler {
                 config,
                 taskType: task.type,
                 explicitCommands: verificationCommandsForTask(task, config),
+                documentationOnlyChange: await this.isDocumentationOnly(task, res.commitHash, verifyPath),
               })
             : ({ passed: true, checks: [] } as VerificationResult));
 
@@ -1605,6 +1636,11 @@ export class DeterministicScheduler {
               config,
               taskType: task.type,
               explicitCommands: verificationCommandsForTask(task, config),
+              documentationOnlyChange: await this.isDocumentationOnly(
+                task,
+                agentResult.commitHash,
+                wt.path,
+              ),
             })
           : ({ passed: true, checks: [] } as VerificationResult));
 

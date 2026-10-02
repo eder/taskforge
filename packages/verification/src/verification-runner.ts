@@ -24,6 +24,23 @@ export function verificationEnvPolicy(passEnv: string[] = []): EnvironmentPolicy
   };
 }
 
+const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.markdown', '.txt', '.rst', '.adoc']);
+const DOC_BASENAMES = new Set(['license', 'notice', 'authors', 'contributors', 'changelog', 'readme', 'codeowners']);
+
+/**
+ * True when every changed file is documentation (prose files, or a well-known
+ * project doc such as LICENSE). Code, config, scripts and data files are never
+ * documentation, even under a docs/ folder. An empty list is not a docs change.
+ */
+export function isDocumentationOnlyChange(files: string[]): boolean {
+  if (files.length === 0) return false;
+  return files.every((file) => {
+    const base = path.posix.basename(file.replace(/\\/g, '/')).toLowerCase();
+    const ext = path.posix.extname(base);
+    return DOC_EXTENSIONS.has(ext) || (ext === '' && DOC_BASENAMES.has(base));
+  });
+}
+
 export interface RunVerificationOptions {
   taskId: string;
   runId: string;
@@ -42,6 +59,13 @@ export interface RunVerificationOptions {
    */
   explicitCommands?: string[];
   expectation?: VerificationExpectation;
+  /**
+   * Every file the task changed is documentation. Code verification cannot be
+   * discovered for such a change in many projects (no package.json, ...), and
+   * a prose edit has no code to verify, so missing evidence is not a failure.
+   * Explicit commands, when configured, still run and still must pass.
+   */
+  documentationOnlyChange?: boolean;
 }
 
 export class VerificationRunner {
@@ -60,6 +84,7 @@ export class VerificationRunner {
       taskType,
       explicitCommands,
       expectation = 'pass',
+      documentationOnlyChange = false,
     } = options;
 
     if (this.eventRepo) {
@@ -201,7 +226,12 @@ export class VerificationRunner {
       config.verification.tests ||
       config.verification.lint ||
       config.verification.typecheck;
-    if (requiresCodeVerification && verificationRequested && results.length === 0) {
+    if (
+      requiresCodeVerification &&
+      verificationRequested &&
+      results.length === 0 &&
+      !documentationOnlyChange
+    ) {
       overallPassed = false;
       failureReason =
         'No verification checks were executed for a code-changing task. ' +
