@@ -40,42 +40,93 @@ describe('context between runs in the shell', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('attaches the last run report when the message refers to earlier work, and says so in the plan', async () => {
+  const withSelector = (answer: string | null) => {
+    const calls: string[] = [];
+    (shell as any).planner.setEarlierRunSelector(async (messages: Array<{ content: string }>) => {
+      calls.push(messages[1].content);
+      return { earlierRunId: answer };
+    });
+    return calls;
+  };
+
+  it('attaches the report when the planner says the request depends on it, in any language', async () => {
     seedRun('run-1790000000000001', 1, { T1: '1. Fix the retry loop\n2. Add tests' });
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    const calls = withSelector('run-1790000000000001');
 
-    const reply = plain(await shell.handleInput('implement item 1 and add regression tests'));
+    const reply = plain(await shell.handleInput('1番の修正を実装して、回帰テストも追加してください'));
 
     expect(reply).toContain('Plan Proposal');
     expect(reply).toContain('Context: using the output of run-1790000000000001');
-    expect(reply).toContain('sem contexto');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('Fix the retry loop');
   });
 
-  it('attaches nothing when the user opts out', async () => {
+  it('attaches nothing when the planner says the request stands alone', async () => {
     seedRun('run-1790000000000002', 1, { T1: 'report' });
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-
-    const reply = plain(await shell.handleInput('implement item 1 sem contexto, add retry tests'));
-
-    expect(reply).not.toContain('Context: using the output');
-  });
-
-  it('attaches nothing from a stale run, and says that no earlier output was found', async () => {
-    seedRun('run-1790000000000003', 72, { T1: 'report' });
-    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-
-    const reply = plain(await shell.handleInput('implement item 1 and add regression tests'));
-
-    expect(reply).not.toContain('Context: using the output');
-    expect(reply).toContain('no recent');
-  });
-
-  it('does not attach anything to a self-contained request', async () => {
-    seedRun('run-1790000000000004', 1, { T1: 'report' });
-    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    withSelector(null);
 
     const reply = plain(await shell.handleInput('implement password reset with token expiry and add tests'));
 
-    expect(reply).not.toContain('Context: using');
+    expect(reply).not.toContain('Context: using the output');
+  });
+
+  it('ignores a run id the model invented', async () => {
+    seedRun('run-1790000000000003', 1, { T1: 'report' });
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    withSelector('run-9999999999999999');
+
+    const reply = plain(await shell.handleInput('implement password reset with token expiry and add tests'));
+
+    expect(reply).not.toContain('Context: using the output');
+  });
+
+  it('does not ask the model, and attaches nothing, when there is no recent run', async () => {
+    seedRun('run-1790000000000004', 72, { T1: 'report' });
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    const calls = withSelector('run-1790000000000004');
+
+    const reply = plain(await shell.handleInput('implement item 1 and add regression tests'));
+
+    expect(calls).toHaveLength(0);
+    expect(reply).not.toContain('Context: using the output');
+  });
+
+  it('without a model, falls back to message length only', async () => {
+    seedRun('run-1790000000000005', 1, { T1: 'report' });
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    (shell as any).planner.apiKey = undefined;
+
+    const short = plain(await shell.handleInput('do item 1 now'));
+    expect(short).toContain('Context: using the output of run-1790000000000005');
+
+    const long = plain(
+      await shell.handleInput('implement password reset with token expiry and add regression tests for it'),
+    );
+    expect(long).not.toContain('Context: using the output');
+  });
+
+  it('honours an explicit run id without asking the model', async () => {
+    seedRun('run-1790000000000006', 100, { T1: 'old report' });
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    const calls = withSelector(null);
+
+    const reply = plain(await shell.handleInput('implement item 1 from run-1790000000000006 with tests'));
+
+    expect(calls).toHaveLength(0);
+    expect(reply).toContain('Context: using the output of run-1790000000000006');
+  });
+
+  it('does nothing when context.carryOver is off', async () => {
+    seedRun('run-1790000000000007', 1, { T1: 'report' });
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    (shell as any).config.context = { carryOver: false, maxAgeHours: 24, maxChars: 12000 };
+    const calls = withSelector('run-1790000000000007');
+
+    const reply = plain(await shell.handleInput('do item 1 now'));
+
+    expect(calls).toHaveLength(0);
+    expect(reply).not.toContain('Context: using the output');
   });
 });

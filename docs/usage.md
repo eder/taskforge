@@ -410,7 +410,9 @@ Without an id, `tf resume` continues the newest run that can be continued; runs 
 
 ### Context between runs
 
-Say "faça o item 1", "faça isso", "o que você sugeriu" or name a run (`run-…`) and TaskForge attaches the report of your last completed run (within `context.maxAgeHours`, default 24) to the planner and to the agents. The plan proposal shows the line `Context: using the output of <run> …`, so you always see what was used. To ignore it, add "sem contexto", "do zero" or "from scratch" to the message.
+If your request depends on what a recent run produced ("do item 1", "fix what you suggested", or the same in any other language, or a `run-…` id), TaskForge attaches that run's report (within `context.maxAgeHours`, default 24) to the planner and the agents. The planner model makes the call, so it works in the language you write in; when there is a recent run it costs one small extra model call. The plan proposal shows `Context: using the output of <run> …`, so you always see what was used. To avoid it, reject the plan and rephrase, or set `context.carryOver: false`.
+
+Without a model (no API key), only very short messages are treated as follow-ups.
 
 The attached text is **reference data, not instructions**: agents are told to verify it against the repository and follow only your current request. It is stored with the run, so `tf resume` uses the same context.
 
@@ -423,7 +425,7 @@ context:
   maxChars: 12000     # budget; the final (consolidating) output is kept first
 ```
 
-Detection is a heuristic on the wording; when a reference is not caught, use `--context` or name the run.
+If a dependency is not caught, name the run (`run-…`) or use `--context`.
 
 ## 10. Verification and completion
 

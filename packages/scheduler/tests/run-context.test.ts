@@ -1,67 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import { TaskForgeDatabase, RunRepository, GoalRepository } from '@taskforge/persistence';
 import {
-  referencesPriorWork,
+  extractRunId,
+  isShortFollowUp,
+  findPriorRunCandidates,
   findPriorRunContext,
   renderPriorContext,
   describeAge,
 } from '../src/run-context.js';
 
-describe('referencesPriorWork: a request that points back at earlier work', () => {
-  it.each([
-    'faça essa atividade',
-    'vamos fazer isso',
-    'Faça o item 1',
-    'corrija o ponto 2 do relatório',
-    'implemente o que você sugeriu',
-    'resolva o primeiro problema',
-    'aplique a sugestão',
-    'continue com isso',
-    'prossiga com o plano',
-    'do item 3',
-    'fix the first issue',
-    'implement that',
-    'go ahead with the plan',
-    'do what you suggested',
-    'apply the recommendation',
-    'start on step 2',
-  ])('"%s" refers to earlier work', (message) => {
-    expect(referencesPriorWork(message).follow).toBe(true);
+describe('extractRunId', () => {
+  it('reads an explicit run id, whatever language surrounds it', () => {
+    expect(extractRunId('use o relatório da run-1790909005950090 e corrija')).toBe('run-1790909005950090');
+    expect(extractRunId('run-1790909005950090 の続きをお願いします')).toBe('run-1790909005950090');
+    expect(extractRunId('no run mentioned')).toBeUndefined();
   });
+});
 
-  it.each([
-    'implemente um endpoint /health que retorna 200',
-    'adicione cache local para reduzir a latência',
-    'what is the architecture of this project?',
-    'corrija o bug do login quando a senha tem acentos',
-    'write unit tests for the retry module',
-    'liste os arquivos do diretório server',
-  ])('"%s" is self-contained', (message) => {
-    expect(referencesPriorWork(message).follow).toBe(false);
-  });
-
-  it('honours an explicit opt-out even when the message points back', () => {
-    for (const message of [
-      'faça o item 1, sem contexto',
-      'faça isso do zero',
-      'do item 2 from scratch',
-      'ignore o contexto anterior e faça a atividade 1',
-    ]) {
-      const ref = referencesPriorWork(message);
-      expect(ref.optOut).toBe(true);
-      expect(ref.follow).toBe(false);
-    }
-  });
-
-  it('detects an explicit run id and normalizes it', () => {
-    expect(referencesPriorWork('use o relatório da run-1790909005950090 e corrija').explicitRunId).toBe(
-      'run-1790909005950090',
-    );
-    expect(referencesPriorWork('sem run nenhuma').explicitRunId).toBeUndefined();
-  });
-
-  it('does not guess for a very long self-contained brief', () => {
-    expect(referencesPriorWork(`${'Descrição detalhada do requisito. '.repeat(200)} faça isso`).follow).toBe(false);
+describe('isShortFollowUp', () => {
+  it('counts characters, so it behaves the same in any script', () => {
+    expect(isShortFollowUp('do item 1')).toBe(true);
+    expect(isShortFollowUp('1番をやって')).toBe(true);
+    expect(isShortFollowUp('faça isso')).toBe(true);
+    expect(isShortFollowUp('Implement password reset with token expiry and add regression tests for it')).toBe(false);
+    expect(isShortFollowUp('')).toBe(false);
   });
 });
 
@@ -101,6 +63,17 @@ describe('findPriorRunContext', () => {
     expect(findPriorRunContext(deps, { explicitRunId: 'run-old' })?.text).toBe('ancient report');
     expect(findPriorRunContext(deps, { explicitRunId: 'run-failed' })?.text).toBe('partial output');
     expect(findPriorRunContext(deps, { explicitRunId: 'run-missing' })).toBeUndefined();
+    db.close();
+  });
+
+  it('lists several recent candidates, newest first, skipping failed and empty runs', () => {
+    const { db, add, deps } = setup();
+    add('run-a', 'completed', { T1: 'a' }, 3);
+    add('run-b', 'completed', { T1: 'b' }, 2);
+    add('run-c', 'failed', { T1: 'c' }, 1);
+    add('run-d', 'completed', { T1: 'd' }, 0);
+    expect(findPriorRunCandidates(deps, { limit: 3 }).map((c) => c.runId)).toEqual(['run-d', 'run-b', 'run-a']);
+    expect(findPriorRunCandidates(deps, { limit: 2 }).map((c) => c.runId)).toEqual(['run-d', 'run-b']);
     db.close();
   });
 
