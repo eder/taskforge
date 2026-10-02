@@ -113,3 +113,22 @@ export function findWordRight(text: string, pos: number): number {
   while (i < text.length && /\s/.test(text[i])) i++;
   return i;
 }
+
+/**
+ * One-line summary of a (possibly huge) goal for list views: the first
+ * non-empty line, whitespace collapsed, cut at a word boundary.
+ */
+export function summarizeGoal(text: string, maxLength = 110): string {
+  const firstLine =
+    text
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? '';
+  const collapsed = firstLine.replace(/\s+/g, ' ');
+  if (collapsed.length <= maxLength) {
+    return text.trim().includes('\n') && text.trim() !== collapsed ? `${collapsed} …` : collapsed;
+  }
+  const cut = collapsed.slice(0, maxLength);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > maxLength * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()} …`;
+}
