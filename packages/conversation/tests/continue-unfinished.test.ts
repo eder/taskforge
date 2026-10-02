@@ -109,9 +109,13 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
 
     expect(reply).toContain('stopped on the environment, not on your request');
     expect(reply).toContain('.env');
-    expect(reply).toContain('Press Enter');
+    expect(reply).toContain('Enter: do that, then continue with your instruction');
     expect(resumed).toEqual([]); // nothing runs until the person agrees
-    expect((shell as any).suggestedAction).toBe('/fix run-1790000000000012');
+    expect((shell as any).focusedRun).toMatchObject({
+      runId: 'run-1790000000000012',
+      action: { kind: 'fix' },
+      guidance: 'arrume isso',
+    });
 
     // Enter applies the repair, then continues with the instruction that was waiting.
     const after = plain(await shell.handleInput(''));

@@ -167,7 +167,12 @@ export function describeRunFailures(
 export function formatRunFailureLines(
   lines: RunFailureLine[],
   runId: string,
-  options: { spend?: { spent: number; budget: number }; repoRoot?: string } = {},
+  options: {
+    spend?: { spent: number; budget: number };
+    repoRoot?: string;
+    /** Leave out the CLI-style next-step lines (the REPL proposes the next move itself). */
+    omitNext?: boolean;
+  } = {},
 ): string[] {
   if (lines.length === 0) return [];
   const out: string[] = ['Why the run did not complete:'];
@@ -187,6 +192,7 @@ export function formatRunFailureLines(
       }
     }
   }
+  if (options.omitNext) return out;
   const step = recommendNextStep(lines, runId, options.spend, options.repoRoot);
   if (step) {
     out.push(`Next: ${step.command}   — ${step.why}`);

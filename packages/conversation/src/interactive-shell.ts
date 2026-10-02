@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { buildRunFocus, type RunFocus } from './run-focus.js';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { Readable, Writable } from 'node:stream';
@@ -21,6 +22,7 @@ import {
   type ExecutionIntentDecision,
   TASKFORGE_VERSION,
   SECURITY_NOTICE,
+  addToProjectConfigList,
   shouldShowSecurityNotice,
   markSecurityNoticeShown,
 } from '@taskforge/shared';
@@ -62,9 +64,9 @@ import {
   allowedWritersForTask,
   describeRunFailures,
   formatRunFailureLines,
-  recommendNextStep,
   planRunRepair,
   repairRun,
+  waitForPort,
   describeRunConfidence,
   formatRunConfidence,
   type RunConfidence,
@@ -96,7 +98,7 @@ import {
   UsageCalibrationEngine,
   ExecutionUsageEstimator,
 } from '@taskforge/telemetry';
-import { InteractionGateway } from '@taskforge/execution';
+import { InteractionGateway, ProcessRunner } from '@taskforge/execution';
 import { DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
 import { SessionRegistry } from '@taskforge/collaboration';
 import { TuiDashboard } from './tui-dashboard.js';
@@ -163,10 +165,8 @@ export class InteractiveShell {
   private lastGoalDescription?: string;
   /** Intent settled when the plan was proposed (deterministic reading + planner model, stricter wins). */
   private settledIntent?: ExecutionIntentDecision;
-  /** The slash command a bare Enter runs: the recommended next step of a failed run (see recommendNextStep). */
-  private suggestedAction?: string;
-  /** What the user asked for while a run was waiting on a repair; given to the agents once it continues. */
-  private pendingGuidance?: { runId: string; text: string };
+  /** The stopped run the REPL is "in": Enter accepts its proposal and typing goes to it (see run-focus.ts). */
+  private focusedRun?: RunFocus;
   /** Output of an earlier run attached to the plan being proposed ("do item 1"). */
   private pendingPriorContext?: { runId: string; text: string; chars: number; createdAt: string };
   private isPaused = false;
@@ -599,12 +599,24 @@ export class InteractiveShell {
       spent: this.telemetry.getRunTokenTotal(result.runId),
       budget: this.config.execution.tokenBudget,
     };
-    const failureLines = formatRunFailureLines(failures, result.runId, { spend, repoRoot: this.repoRoot });
-    const step = recommendNextStep(failures, result.runId, spend, this.repoRoot);
-    if (step?.runnable) {
-      const fixing = step.command.startsWith('tf fix');
-      this.suggestedAction = `${fixing ? '/fix' : '/retry'} ${result.runId}`;
-      failureLines.push(`Press Enter to do that now (or ${fixing ? '/fix' : '/retry'}).`);
+    // In the REPL the next move is proposed in words and accepted with Enter; the
+    // CLI-style "Next: tf ..." lines are for the command line.
+    const failureLines = formatRunFailureLines(failures, result.runId, {
+      spend,
+      repoRoot: this.repoRoot,
+      omitNext: true,
+    });
+    if (result.status === 'failed' && failures.length > 0) {
+      const proposal = buildRunFocus({ runId: result.runId, failures, repoRoot: this.repoRoot, spend });
+      this.focusedRun = proposal.focus;
+      failureLines.push(
+        '',
+        ...proposal.lines,
+        '',
+        `↵ ${proposal.hint}   ·   or just tell me what you want   ·   /back to leave this run`,
+      );
+    } else {
+      this.focusedRun = undefined;
     }
     const summary = await formatRunSummary(
       {
@@ -743,10 +755,9 @@ export class InteractiveShell {
   async handleInput(input: string, abortSignal?: AbortSignal): Promise<string> {
     const text = input.trim();
     if (!text) {
-      // Enter alone accepts the one suggested next step, if there is one.
-      return this.suggestedAction ? this.handleInput(this.suggestedAction, abortSignal) : '';
+      // Enter alone accepts what the stopped run proposed, if the REPL is in one.
+      return this.focusedRun ? this.acceptFocus() : '';
     }
-    if (!text.startsWith('/retry') && !text.startsWith('/fix')) this.suggestedAction = undefined;
 
     if (text === '/exit' || text === '/quit' || text === 'exit' || text === 'quit') {
       return 'Session closed.';
@@ -767,6 +778,11 @@ export class InteractiveShell {
     if (text === '/back' || text === '/overview' || text === 'q') {
       if (this.focusedAssignmentId) {
         return this.exitFocusMode();
+      }
+      if (this.focusedRun && text !== 'q') {
+        const left = this.focusedRun.runId;
+        this.focusedRun = undefined;
+        return `${colors.dim}Left ${left}. It stays in /runs and can be continued any time with /retry.${colors.reset}`;
       }
       // 'q' with nothing focused is not a recognized overview command --
       // fall through to normal intent handling below.
@@ -813,6 +829,21 @@ export class InteractiveShell {
       hasPendingInteractions: this.interactionGateway.getPendingRequests().length > 0,
       hasDeliverable: Boolean(this.activeRunId && this.deliveryService.getDelivery(this.activeRunId)),
     });
+
+    // The REPL is "in" a stopped run: a plain yes/no answers its proposal, and a
+    // message is about that run unless the planner says it is a new task.
+    if (this.focusedRun && !text.startsWith('/') && !this.currentGraph) {
+      if (intent.type === 'approve_plan') return this.acceptFocus();
+      if (intent.type === 'reject_plan') {
+        const left = this.focusedRun.runId;
+        this.focusedRun = undefined;
+        return `${colors.dim}Left ${left}. It stays in /runs and can be continued any time with /retry.${colors.reset}`;
+      }
+      if (intent.type === 'submit_goal') {
+        const reply = await this.handleFocusedMessage(text);
+        if (reply !== undefined) return reply;
+      }
+    }
 
     switch (intent.type) {
       case 'inspect_agents': {
@@ -1198,36 +1229,7 @@ export class InteractiveShell {
           runs.listAll().find((r) => ['failed', 'cancelled'].includes(r.status))?.id;
         if (!runId) return 'Nothing to fix: no failed run. See /runs.';
 
-        this.suggestedAction = undefined;
-        const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
-        if (plan.fixes.length === 0) {
-          return `${colors.dim}Nothing TaskForge can repair on its own for ${runId}. /inspect ${runId} shows why it stopped; /retry ${runId} continues it once the cause is fixed.${colors.reset}`;
-        }
-        this.viewport.writeUpper(
-          `\n  ${colors.brand}✦ ${colors.bold}TaskForge Fix${colors.reset}\n${plan.descriptions.map((d) => `  ${colors.green}•${colors.reset} ${d}`).join('\n')}\n`,
-        );
-        const repair = await repairRun({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
-        const applied = repair.applied;
-        // Keep this session's view of the config in step with the file just written.
-        if (applied?.linksAdded.length) {
-          this.config.execution.worktreeLinks = [
-            ...new Set([...(this.config.execution.worktreeLinks ?? []), ...applied.linksAdded]),
-          ];
-        }
-        if (applied?.envAdded.length) {
-          this.config.verification.passEnv = [
-            ...new Set([...(this.config.verification.passEnv ?? []), ...applied.envAdded]),
-          ];
-        }
-        const doneLines = (applied?.applied ?? []).map((l) => `  ${colors.green}✔${colors.reset} ${l}`);
-        const failedLines = (applied?.failed ?? []).map((l) => `  ${colors.red}✖${colors.reset} ${l}`);
-        this.viewport.writeUpper([...doneLines, ...failedLines].join('\n'));
-        if (failedLines.length > 0) {
-          return `${colors.yellow}Not continuing: fix the ✖ above, then /fix ${runId} again.${colors.reset}`;
-        }
-        const guidance = this.pendingGuidance?.runId === runId ? this.pendingGuidance.text : undefined;
-        this.pendingGuidance = undefined;
-        return this.continueRun(runId, guidance);
+        return this.fixAndContinue(runId);
       }
 
       case 'retry_run': {
@@ -1244,6 +1246,7 @@ export class InteractiveShell {
       case 'clear_context': {
         new SessionRepository(this.db).clearContext();
         this.pendingPriorContext = undefined;
+        this.focusedRun = undefined;
         // A plan that has not been approved is part of the conversation being
         // cleared; a run that is executing is not, and is left alone.
         let discarded = '';
@@ -1359,6 +1362,7 @@ export class InteractiveShell {
           }
         }
 
+        this.focusedRun = undefined; // a new task: the stopped run is no longer what we are talking about
         let executionIntent = detectExecutionIntent(intent.goal);
         if (this.planner instanceof SemanticPlanner) {
           const judgement = await this.planner.judgeExecutionIntent(intent.goal);
@@ -1775,6 +1779,37 @@ export class InteractiveShell {
    * One-time, non-blocking notice for projects without .taskforge/config.yaml.
    * The file is optional; this only explains that it exists and how to create it.
    */
+  /** Repairs what blocked a run (see environment-repair.ts) and continues it. */
+  private async fixAndContinue(runId: string, guidance?: string): Promise<string> {
+        const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
+        if (plan.fixes.length === 0) {
+          return `${colors.dim}Nothing TaskForge can repair on its own for ${runId}. /inspect ${runId} shows why it stopped; /retry ${runId} continues it once the cause is fixed.${colors.reset}`;
+        }
+        this.viewport.writeUpper(
+          `\n  ${colors.brand}✦ ${colors.bold}TaskForge Fix${colors.reset}\n${plan.descriptions.map((d) => `  ${colors.green}•${colors.reset} ${d}`).join('\n')}\n`,
+        );
+        const repair = await repairRun({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
+        const applied = repair.applied;
+        // Keep this session's view of the config in step with the file just written.
+        if (applied?.linksAdded.length) {
+          this.config.execution.worktreeLinks = [
+            ...new Set([...(this.config.execution.worktreeLinks ?? []), ...applied.linksAdded]),
+          ];
+        }
+        if (applied?.envAdded.length) {
+          this.config.verification.passEnv = [
+            ...new Set([...(this.config.verification.passEnv ?? []), ...applied.envAdded]),
+          ];
+        }
+        const doneLines = (applied?.applied ?? []).map((l) => `  ${colors.green}✔${colors.reset} ${l}`);
+        const failedLines = (applied?.failed ?? []).map((l) => `  ${colors.red}✖${colors.reset} ${l}`);
+        this.viewport.writeUpper([...doneLines, ...failedLines].join('\n'));
+        if (failedLines.length > 0) {
+          return `${colors.yellow}Not continuing: fix the ✖ above, then press Enter or /fix to try again.${colors.reset}`;
+        }
+        return this.continueRun(runId, guidance);
+  }
+
   /** The newest failed or cancelled run that can still be continued, within the context window. */
   private async findUnfinishedRun(limits: {
     maxAgeHours?: number;
@@ -1790,15 +1825,20 @@ export class InteractiveShell {
     if (Date.now() - created.getTime() > maxAgeMs) return undefined;
     if (limits.notBefore && created < limits.notBefore) return undefined;
     if (await this.buildOrchestrator().checkResumable(run.id)) return undefined;
+    return this.describeUnfinished(run.id);
+  }
 
+  /** What the planner is told about a run that stopped: its goal, when, and why. */
+  private describeUnfinished(runId: string): { runId: string; goal: string; createdAt: string; summary: string } | undefined {
+    const run = new RunRepository(this.db).get(runId);
+    if (!run) return undefined;
     const lines = describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, run.id);
     const summary = lines
       .filter((l) => l.kind !== 'not_started')
       .map((l) => (l.kind === 'budget' ? l.reason : `${l.title}: ${l.reason ?? 'stopped'}`))
       .join(' | ')
       .slice(0, 400);
-    const goalId = run.goalId;
-    const goal = goalId ? new GoalRepository(this.db).get(goalId)?.description : undefined;
+    const goal = run.goalId ? new GoalRepository(this.db).get(run.goalId)?.description : undefined;
     return {
       runId: run.id,
       goal: (goal ?? '').split('\n').find((l) => l.trim())?.trim().slice(0, 200) ?? '',
@@ -1815,22 +1855,89 @@ export class InteractiveShell {
   private async respondToUnfinishedRun(runId: string, message: string): Promise<string> {
     const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
     if (plan.fixes.length === 0) return this.continueRun(runId, message);
-    this.pendingGuidance = { runId, text: message };
-    this.suggestedAction = `/fix ${runId}`;
+    this.focusedRun = { runId, action: { kind: 'fix' }, guidance: message };
     return [
       `${colors.brand}✦ ${colors.bold}${runId} stopped on the environment, not on your request${colors.reset}`,
       ...plan.descriptions.map((d) => `  ${colors.green}•${colors.reset} ${d}`),
-      `  ${colors.dim}Press Enter and I will do that and then continue with your instruction.${colors.reset}`,
+      `  ${colors.dim}↵ Enter: do that, then continue with your instruction  ·  /back to leave${colors.reset}`,
     ].join('\n');
   }
 
+  /** Accepts what the stopped run proposed (a bare Enter, or a plain "yes"). */
+  private async acceptFocus(): Promise<string> {
+    const focus = this.focusedRun;
+    if (!focus) return '';
+    switch (focus.action.kind) {
+      case 'fix':
+        return this.fixAndContinue(focus.runId, focus.guidance);
+      case 'continue':
+        return this.continueRun(focus.runId, focus.guidance);
+      case 'raise_budget':
+        return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.action.budget });
+      case 'none':
+        return `${colors.dim}There is nothing for me to do on my own here. Tell me what you want, or /back to leave ${focus.runId}.${colors.reset}`;
+    }
+  }
+
+  /**
+   * A message typed while the REPL is in a stopped run. Answers a question TaskForge
+   * asked, or is an instruction for that run. Returns undefined when the planner
+   * says it is a new task, so the caller plans it normally.
+   */
+  private async handleFocusedMessage(text: string): Promise<string | undefined> {
+    const focus = this.focusedRun;
+    if (!focus) return undefined;
+
+    if (focus.question?.kind === 'start_command') return this.startServiceWith(focus, focus.question.port, text);
+    if (focus.question?.kind === 'check_command') return this.saveCheckCommand(focus, text);
+
+    if (this.planner instanceof SemanticPlanner && this.planner.canSelectEarlierRun()) {
+      const info = this.describeUnfinished(focus.runId);
+      const chosen = info
+        ? await this.planner.selectEarlierRun(text, [
+            { id: info.runId, goal: info.goal, age: describeAge(info.createdAt), excerpt: info.summary, state: 'not_finished' },
+          ])
+        : null;
+      if (chosen === null) {
+        this.focusedRun = undefined; // a different task: leave the run and plan it
+        return undefined;
+      }
+    }
+    return this.respondToUnfinishedRun(focus.runId, text);
+  }
+
+  /** The person typed the command that starts the service the checks need: run it, wait for the port, continue. */
+  private async startServiceWith(focus: RunFocus, port: number, command: string): Promise<string> {
+    this.viewport.writeUpper(`\n  ${colors.brand}✦ ${colors.bold}Starting the service${colors.reset}\n  ${colors.dim}$ ${command}${colors.reset}\n`);
+    const result = await ProcessRunner.run({ command: 'sh', args: ['-c', command], cwd: this.repoRoot, timeoutMs: 120_000 });
+    const tail = `${result.stdout}\n${result.stderr}`.trim().split('\n').slice(-6).join('\n');
+    if (result.exitCode !== 0) {
+      return `${colors.red}✖ That command failed (exit ${result.exitCode}).${colors.reset}\n${tail}\n${colors.dim}Type another command, or start it yourself and press Enter.${colors.reset}`;
+    }
+    if (!(await waitForPort(port, 30_000))) {
+      return `${colors.yellow}The command ran, but port ${port} did not accept connections within 30s.${colors.reset}\n${colors.dim}Type another command, or start it yourself and press Enter.${colors.reset}`;
+    }
+    this.viewport.writeUpper(`  ${colors.green}✔${colors.reset} Port ${port} is accepting connections.\n`);
+    return this.continueRun(focus.runId, focus.guidance);
+  }
+
+  /** The person typed the command that verifies the project: save it and re-check. */
+  private async saveCheckCommand(focus: RunFocus, command: string): Promise<string> {
+    const { added } = addToProjectConfigList(this.repoRoot, ['verification', 'commands'], [command], []);
+    this.config.verification.commands = [...new Set([...(this.config.verification.commands ?? []), command])];
+    this.viewport.writeUpper(
+      `\n  ${colors.green}✔${colors.reset} ${added.length > 0 ? `Saved "${command}" as the check command in .taskforge/config.yaml` : `"${command}" is already the check command`}\n`,
+    );
+    return this.continueRun(focus.runId, focus.guidance);
+  }
+
   /** Continues an unfinished run (the REPL's `tf resume`), optionally with what the user just asked for. */
-  private async continueRun(runId: string, guidance?: string): Promise<string> {
+  private async continueRun(runId: string, guidance?: string, options: { tokenBudget?: number } = {}): Promise<string> {
         const orchestrator = this.buildOrchestrator();
         const notResumable = await orchestrator.checkResumable(runId);
         if (notResumable) return notResumable;
 
-        this.suggestedAction = undefined;
+        this.focusedRun = undefined;
         this.activeRunId = runId;
         this.conversationState = 'EXECUTING';
         const controller = new AbortController();
@@ -1852,6 +1959,7 @@ export class InteractiveShell {
           abortSignal: controller.signal,
           activityTracker: this.activityTracker,
           guidance,
+          tokenBudget: options.tokenBudget,
           onProgress: (msg) => this.viewport.writeUpper(theme.formatProgressMessage(msg)),
         });
         if (this.options.asyncExecution ?? this.viewport.isInteractive) {
@@ -1934,7 +2042,7 @@ export class InteractiveShell {
       for await (const line of rl) {
         const trimmed = line.trim();
         if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'exit' || trimmed === 'quit') break;
-        if (!trimmed && !this.suggestedAction) continue;
+        if (!trimmed && !this.focusedRun) continue;
         const reply = await this.handleInput(trimmed);
         if (reply) {
           outStream.write(`${reply}\n`);
@@ -2483,7 +2591,7 @@ export class InteractiveShell {
       }
 
       // A bare Enter only means something while a retry is being suggested.
-      if (!trimmed && !this.suggestedAction) {
+      if (!trimmed && !this.focusedRun) {
         continue;
       }
 

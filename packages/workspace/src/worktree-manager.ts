@@ -13,6 +13,26 @@ function isTrackedPathPlaceholder(target: string): boolean {
   }
 }
 
+/**
+ * `git worktree add/remove/prune` read and write the shared `.git/worktrees`
+ * directory. Run concurrently (a competitive team creates several worktrees at
+ * once), one of them can read another's half-written entry and fail with
+ * "failed to read .git/worktrees/<id>/commondir". They are serialized per
+ * repository within this process; everything else still runs in parallel.
+ */
+const worktreeLocks = new Map<string, Promise<unknown>>();
+
+async function withWorktreeLock<T>(repoRoot: string, task: () => Promise<T>): Promise<T> {
+  const previous = worktreeLocks.get(repoRoot) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(task);
+  worktreeLocks.set(repoRoot, run);
+  try {
+    return await run;
+  } finally {
+    if (worktreeLocks.get(repoRoot) === run) worktreeLocks.delete(repoRoot);
+  }
+}
+
 export interface WorktreeInfo {
   taskId: string;
   assignmentId: string;
@@ -194,12 +214,14 @@ export class WorktreeManager {
       ? ['worktree', 'add', '--detach', targetPath, targetBaseCommit]
       : ['worktree', 'add', '-B', branchName, targetPath, targetBaseCommit];
 
-    const addResult = await ProcessRunner.run({
-      command: 'git',
-      args: gitArgs,
-      cwd: this.repoRoot,
-      timeoutMs: 30000,
-    });
+    const addResult = await withWorktreeLock(this.repoRoot, () =>
+      ProcessRunner.run({
+        command: 'git',
+        args: gitArgs,
+        cwd: this.repoRoot,
+        timeoutMs: 30000,
+      }),
+    );
 
     if (addResult.exitCode !== 0) {
       throw new WorkspaceCreationError(
@@ -239,21 +261,25 @@ export class WorktreeManager {
     const targetPath = this.getWorktreePath(taskId, assignmentId);
     const branchName = info?.branchName ?? `taskforge/${taskId}/${assignmentId}`;
 
-    const removeResult = await ProcessRunner.run({
-      command: 'git',
-      args: ['worktree', 'remove', force ? '--force' : '', targetPath].filter(Boolean),
-      cwd: this.repoRoot,
-      timeoutMs: 30000,
-    });
+    const removeResult = await withWorktreeLock(this.repoRoot, () =>
+      ProcessRunner.run({
+        command: 'git',
+        args: ['worktree', 'remove', force ? '--force' : '', targetPath].filter(Boolean),
+        cwd: this.repoRoot,
+        timeoutMs: 30000,
+      }),
+    );
 
     if (fs.existsSync(targetPath)) {
       if (force || removeResult.exitCode !== 0) {
         fs.rmSync(targetPath, { recursive: true, force: true });
-        await ProcessRunner.run({
-          command: 'git',
-          args: ['worktree', 'prune'],
-          cwd: this.repoRoot,
-        }).catch(() => {});
+        await withWorktreeLock(this.repoRoot, () =>
+          ProcessRunner.run({
+            command: 'git',
+            args: ['worktree', 'prune'],
+            cwd: this.repoRoot,
+          }),
+        ).catch(() => {});
       }
     }
 
@@ -273,11 +299,13 @@ export class WorktreeManager {
   }
 
   async prune(): Promise<void> {
-    await ProcessRunner.run({
-      command: 'git',
-      args: ['worktree', 'prune'],
-      cwd: this.repoRoot,
-    });
+    await withWorktreeLock(this.repoRoot, () =>
+      ProcessRunner.run({
+        command: 'git',
+        args: ['worktree', 'prune'],
+        cwd: this.repoRoot,
+      }),
+    );
   }
 
   async cleanOrphanedWorktreesAndBranches(): Promise<number> {
