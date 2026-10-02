@@ -8,6 +8,8 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- **Token budget.** `execution.tokenBudget` (or `tf run --budget 500k`, `tf resume --budget 1.5m`) caps what a run may spend, counting all its attempts. At 80% it warns; at 100% it stops starting new tasks, lets running ones finish, and ends as a resumable run that says "Stopped at the token budget" and prints the `tf resume … --budget` command (`TOKEN_BUDGET_REACHED` event). It can overshoot by what was in flight.
+- **Actual spend after every run**, in the CLI and the REPL summary: tokens used, approximate cost, share of the budget, the plan's estimate and the task that used most. It says so when the agents reported no usage.
 - **Name a run without copying its id.** `last`, the number from `tf runs` (`2`, `#2`) or a unique end/start of the id work in `tf resume|apply|inspect|abandon|cost|pr create` and in the REPL's `/diff`, `/apply`, `/pr`, `/inspect`. `tf runs` now numbers its rows. An ambiguous fragment is refused with the matching ids.
 - **Sessions.** Opening `tf` prints which run it continues from. `/clear` (and `tf --new`) starts fresh: earlier runs stop being offered as context and a plan waiting for approval is discarded; nothing is deleted. The boundary is stored in a new `session_state` table.
 - REPL `/resume` is now `/unpause` (the old name still works) so it is not confused with `tf resume`.

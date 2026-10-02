@@ -552,6 +552,7 @@ export class InteractiveShell {
         deliveryService: this.deliveryService,
         repoRoot: this.repoRoot,
         telemetry: this.telemetry,
+        tokenBudget: this.config.execution.tokenBudget,
       },
       result,
     );

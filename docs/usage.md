@@ -586,6 +586,30 @@ Execution/orchestration statistics:
 /stats
 ```
 
+### Capping what a run can spend
+
+At the end of every run TaskForge prints what it actually used, for example:
+
+```text
+Tokens used: 312,400 (~$1.20) · 62% of the 500,000 budget · the plan estimated ~120,000 · most went to TASK-02 (180,000, 58%)
+```
+
+Only usage reported by the agents is counted; when an agent reports none, the line says the cost is unknown.
+
+Set a ceiling per run in `.taskforge/config.yaml`, or per command:
+
+```yaml
+execution:
+  tokenBudget: 500000   # tokens per run, all attempts included
+```
+
+```bash
+tf run "…" --budget 500k
+tf resume last --budget 1.5m     # new total cap; what was already spent counts
+```
+
+At 80% TaskForge warns. At 100% it **stops starting new tasks**, lets the ones already running finish (killing them would leave half-done changes, so a run can overshoot by what was in flight), and ends as a resumable run with "Stopped at the token budget" and the exact `tf resume … --budget` command. Nothing is lost.
+
 TaskForge treats provider token usage as telemetry. It should not label a run efficient or inefficient based only on absolute token volume; orchestration efficiency requires evidence such as failed assignments, unnecessary fan-out, rework, or cancelled work.
 
 ## 14. Headless and automation
@@ -705,6 +729,7 @@ execution:
   databasePath: .taskforge/taskforge.db
   runsDir: .taskforge/runs
   # autoPruneOlderThan: 7d   # opt-in cleanup of stale worktrees/branches at run start
+  # tokenBudget: 500000       # stop starting new tasks after this many tokens per run
 
 collaboration:
   maxAgentsPerTask: 3
