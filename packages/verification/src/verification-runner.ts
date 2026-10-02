@@ -235,7 +235,9 @@ export class VerificationRunner {
       overallPassed = false;
       failureReason =
         'No verification checks were executed for a code-changing task. ' +
-        'Provide task verification commands or repository verification configuration.';
+        'TaskForge only discovers checks for Node projects (package.json scripts). ' +
+        'Tell it how to verify this project by adding `verification.commands` to ' +
+        '.taskforge/config.yaml (run `tf init` to generate one), or see "Verification commands" in docs/usage.md.';
     }
 
     const finalResult: VerificationResult = {

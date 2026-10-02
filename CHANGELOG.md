@@ -8,6 +8,9 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- `tf init [--print] [--check] [--yes] [--force]`: proposes a project `.taskforge/config.yaml` from what it detects (Node, Python and its virtualenv, Go, Rust, Swift, Makefile), shows it, and only writes after confirmation; never overwrites. `--check` runs each detected command once and reports whether it works.
+- Starting `tf` in a project without a config prints a one-time notice that the file is optional and how to create it (`TASKFORGE_NO_HINTS=1` disables it); `tf doctor` shows whether a project config exists.
+- Docs: "Do I need `.taskforge/config.yaml`?" in `docs/usage.md`.
 - `tf resume [run-id]` / `RunOrchestrator.resume()`: continue an interrupted, cancelled or failed run, keeping tasks already integrated into the run branch. Runs now checkpoint their goal, base commit, base branch, task dependencies and task outputs.
 - Human-readable delivery branch for pull requests (`taskforge/<goal-slug>`) via `DeliveryService.prepareDeliveryBranch()` and `slugifyGoal()`.
 - `tf cleanup --prune --older-than <age> [--dry-run]` and opt-in `execution.autoPruneOlderThan` for age-based cleanup of stale worktrees and temporary branches.
@@ -24,6 +27,7 @@ All workspace packages are released in lockstep under a single version.
 - Hermetic test setup (`tests/setup/hermetic.ts`): tests no longer depend on installed agent CLIs, exported API keys, or `~/.taskforge`.
 
 ### Fixed
+- The "No verification checks were executed" block message now says that TaskForge only discovers Node checks and names the file, key and `tf init`, instead of the vague "provide verification configuration".
 - A change that only touches documentation (`.md`, `.txt`, `.rst`, ... or LICENSE/README-style files) is no longer BLOCKED for lack of verification commands, per task and in the final integration check. Anything that touches code or config still fails closed, and explicitly configured verification commands still run and must pass.
 - **Antigravity (`agy`) output was always empty.** The adapter only recognised `{"type":"result"}`, but `agy` emits `{"event":"result","result":{"response":...}}`, so every Antigravity assignment returned no report (checked against a real captured run). The result event, its nested status, and the per-step `text_delta` fallback are now parsed.
 - `IntegrationService` cached the first run's integration branch for every later run on the same instance; it is now per run and re-validated against git. `tf resume` also removes a stale integration worktree when the run branch is gone.
