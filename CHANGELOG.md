@@ -8,6 +8,9 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- `router.timeoutSeconds` (default 60): how long the planner waits for the model.
+- The plan proposal now says that the team shown is for the first task, that each task is staffed when it starts, and which token cap will stop the run, so the estimate is not read as a ceiling.
+- The failure report prints `git show --stat <branch>` for work the agents kept.
 - **Beta readiness.** A safety notice (experimental; agents run as your user with no sandbox; use a test repository or a container/VM; nothing is applied without your command) is shown at the start of `tf setup`, once on first launch, and in a new README "Safety" section with the known limits (language support, platforms, verification).
 - **Default spend cap.** `execution.tokenBudget` now defaults to 2,000,000 tokens per run (`0` turns the cap off), so a new user never has unlimited spend by accident.
 - Releases of `0.x` versions are published to npm under the `beta` tag.
@@ -50,6 +53,10 @@ All workspace packages are released in lockstep under a single version.
 - Hermetic test setup (`tests/setup/hermetic.ts`): tests no longer depend on installed agent CLIs, exported API keys, or `~/.taskforge`.
 
 ### Fixed
+- **A pasted numbered list became one task per line.** When the planning model timed out, the fallback plan turned every line, including `●` sub-bullets, into a task (13 tasks for 4 requirements). It now makes one task per numbered item, with its bullets as details, and ignores a lead-in such as "Let's do these tasks 1. …".
+- The planner's timeout (15s) was shorter than long multi-part goals need and silently downgraded the plan; it is now 60s and configurable, and the proposal says "the planning model did not answer in time" instead of "This operation was aborted".
+- **Check failures caused by the environment were treated as the agent's fault.** Output such as `no LLM api_key configured`, `Connection refused` / `[Errno 61]`, `ModuleNotFoundError` or a missing environment variable is now classified as an environment problem: the agent is not retried, and the report names the likely fix (`verification.passEnv`, `execution.worktreeLinks`, start the service).
+- A retry that costs a lot was offered as a one-key action: when the run has already used half its token budget, `Press Enter to do that now` is no longer offered and the recommendation says why.
 - Two interaction responses created in the same millisecond collided on their primary key (`resp-<timestamp>` ids), which could fail an approval and made a cockpit test fail intermittently. Response ids are now unique.
 - A leading "no ..." / "y ..." / "yes ..." answered a plan that did not exist: "No modifiques nada del repositorio" (Spanish) discarded the plan instead of starting a request. These prefixes now count as an answer only while a plan or permission question is pending; exact "yes"/"no" are unchanged.
 - **`tf` run from a sub-folder used a new, empty `.taskforge/`.** Config, database, runs and worktrees were all relative to the current directory, so `tf resume` in `repo/server` answered "Nothing to resume" (it was looking at an empty database), ignored `repo/.taskforge/config.yaml`, and left a stray `.taskforge/` inside the sub-folder. The CLI now works from the project root (nearest enclosing git repository, or an existing `.taskforge/`, never the home directory) and says so on stderr when that differs from the current directory. `TASKFORGE_PROJECT_ROOT` overrides it.

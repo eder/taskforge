@@ -71,6 +71,8 @@ export const TaskForgeConfigSchema = z.object({
       fallback: z.enum(['static']).default('static'),
       adaptive: z.boolean().default(false),
       apiKey: z.string().optional(),
+      /** How long the planner waits for the model before falling back to a simpler plan. */
+      timeoutSeconds: z.number().int().positive().default(60),
     })
     .default({
       provider: 'openai',

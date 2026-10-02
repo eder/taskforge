@@ -178,6 +178,8 @@ export function formatRunFailureLines(lines: RunFailureLine[], runId: string): s
   if (step) {
     out.push(`Next: ${step.command}   — ${step.why}`);
     out.push(`Also: ${step.alternatives.join('   ·   ')}`);
+    const keptBranch = lines.find((l) => l.keptBranch)?.keptBranch;
+    if (keptBranch) out.push(`See what the agents changed: git show --stat ${keptBranch}`);
   }
   return out;
 }
@@ -200,7 +202,33 @@ function roundUp(value: number, step: number): number {
  * the person is not handed a menu. Deterministic: it reads the recorded
  * failure classes and the kept work, nothing else.
  */
-export function recommendNextStep(lines: RunFailureLine[], runId: string): NextStep | undefined {
+/** What an environment-caused check failure usually needs, from the words in the recorded reason. */
+export function environmentHint(reasons: string[]): string {
+  const text = reasons.join('\n').toLowerCase();
+  const parts: string[] = [];
+  if (/api[_ ]?key|environment variable|unset|not set/.test(text)) {
+    parts.push('the checks run without secret-looking environment variables (names with KEY, TOKEN, SECRET or PASSWORD): list the ones the tests need under verification.passEnv');
+  }
+  if (/\.env\b|dotenv/.test(text)) {
+    parts.push('gitignored files such as .env are not in the isolated copy: add them to execution.worktreeLinks');
+  }
+  if (/connection refused|econnrefused|connect call failed|errno (?:61|111)|could not connect/.test(text)) {
+    parts.push('a service the tests connect to (for example a database) is not running: start it first');
+  }
+  if (/modulenotfounderror|cannot find module/.test(text)) {
+    parts.push('a dependency is not installed in the environment the checks use');
+  }
+  return parts.length > 0
+    ? `the checks need something the isolated copy does not have: ${parts.join('; ')}`
+    : 'the checks cannot run in this environment';
+}
+
+export function recommendNextStep(
+  lines: RunFailureLine[],
+  runId: string,
+  /** What the run has spent so far, to avoid making an expensive retry a one-key action. */
+  spend?: { spent: number; budget: number },
+): NextStep | undefined {
   if (lines.length === 0) return undefined;
   const abandon = `tf abandon ${runId} (if no longer needed)`;
   const inspect = `tf inspect ${runId}`;
@@ -227,9 +255,10 @@ export function recommendNextStep(lines: RunFailureLine[], runId: string): NextS
   }
 
   if (lines.some((l) => l.failureClass === 'environment')) {
+    const reasons = lines.filter((l) => l.failureClass === 'environment').map((l) => l.reason ?? '');
     return {
       command: `tf resume ${runId}`,
-      why: 'after fixing the environment problem above; the kept work is re-checked without calling agents',
+      why: `${environmentHint(reasons)}. Then resume: the kept work is re-checked without calling agents`,
       runnable: false,
       alternatives: [inspect, abandon],
     };
@@ -244,12 +273,18 @@ export function recommendNextStep(lines: RunFailureLine[], runId: string): NextS
     };
   }
 
+  // A retry spends tokens again. When the run already used a large share of its
+  // budget, that is the person's decision, not a one-key action.
+  const costly = spend && spend.budget > 0 && spend.spent / spend.budget >= 0.5;
+  const share = spend && spend.budget > 0 ? Math.round((spend.spent / spend.budget) * 100) : 0;
   return {
     command: `tf resume ${runId}`,
-    why: kept
-      ? 'the agent continues from its kept work with the failure evidence'
-      : 'keeps what was integrated and runs the rest again',
-    runnable: true,
+    why:
+      (kept
+        ? 'the agent continues from its kept work with the failure evidence'
+        : 'keeps what was integrated and runs the rest again') +
+      (costly ? `; this run already used ${share}% of its token budget and a retry spends more` : ''),
+    runnable: !costly,
     alternatives: [...(kept ? [`tf resume ${runId} --fresh (start the tasks over)`] : []), abandon, inspect],
   };
 }

@@ -363,6 +363,19 @@ This is intended to make retry behavior diagnostic rather than repetitive.
 - **Transient machine failures during verification** (a lock held by another process, a dropped connection, a timeout): the same checks run once more after a short wait. Nothing is skipped or weakened to make a check pass; both attempts stay in the record (`VERIFY_RETRIED_TRANSIENT`).
 - **Problems that need you**: a check command that does not work for the project, a broken environment, a policy. TaskForge never skips verification to get past them. It keeps the agent's work, names the cause, and recommends one action.
 
+### When the checks cannot run here
+
+Checks run in an isolated copy of your repository. That copy has no gitignored files (such as `.env`) and, by design, none of the environment variables whose names contain `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. A test suite that needs an API key, a database or an installed dependency can therefore fail to even start, for reasons that have nothing to do with the agent's change (for example `35 errors during collection: no LLM api_key configured`).
+
+TaskForge recognises these failures (missing key or variable, connection refused, module not found) as **environment** problems: it does not retry the agent, keeps the work, and the report says what is probably missing:
+
+- a secret-looking variable the tests need: list it under `verification.passEnv`;
+- a gitignored file such as `.env`: add it to `execution.worktreeLinks`;
+- a service the tests connect to (a database): start it before resuming;
+- a dependency that is not installed in the environment the checks use.
+
+Then `tf resume` re-checks the kept work without calling an agent. `git show --stat <kept branch>` (printed in the report) shows what the agents changed in the meantime.
+
 ### One recommended next step
 
 When a run does not complete, the report ends with a single recommendation, not a menu:
@@ -669,6 +682,12 @@ Last 30 days: 14 runs
 
 It shows where to invest (a recurring stop cause is a config or environment fix, not a model problem) without anyone pasting logs. It is computed from this project's local database only; nothing is collected or sent.
 
+### What the plan's estimate does and does not tell you
+
+The plan proposal shows an estimated range. It is not a ceiling: the team shown is for the first task, and each task is staffed when it starts (up to `collaboration.maxAgentsPerTask`, default 3, agents each). A heavy task can use several agents in sequence, so real usage can exceed the estimate; the proposal says so and shows the token cap that will stop the run.
+
+If the planning model does not answer within `router.timeoutSeconds` (default 60), TaskForge falls back to a simpler plan and says why in the proposal. For a pasted numbered list ("1. … 2. …") that fallback makes one task per numbered item, with the bullets under it as details.
+
 ### Capping what a run can spend
 
 At the end of every run TaskForge prints what it actually used, for example:
@@ -806,6 +825,7 @@ router:
   provider: openai
   model: gpt-5.6-luna
   fallback: static
+  # timeoutSeconds: 60   # how long the planner waits for the model before using a simpler plan
 
 execution:
   maxParallelTasks: 3

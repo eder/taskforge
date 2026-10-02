@@ -54,5 +54,8 @@ describe('plan usage estimate', () => {
     expect(reply).toContain('Plan Proposal');
     expect(reply).toContain('Estimated usage');
     expect(reply.indexOf('Estimated usage')).toBeLessThan(reply.indexOf('Do you want me to execute'));
+    // The estimate is not a ceiling: tell the person how staffing and the cap really work.
+    expect(reply).toContain('Each task is staffed when it starts');
+    expect(reply).toContain('stops starting new tasks at 2,000,000 tokens');
   });
 });
