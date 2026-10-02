@@ -1,6 +1,12 @@
 import * as path from 'node:path';
 import { Command } from 'commander';
-import { loadConfig, getGlobalStateDatabasePath, TASKFORGE_VERSION, parseTokenCount } from '@taskforge/shared';
+import {
+  loadConfig,
+  getGlobalStateDatabasePath,
+  TASKFORGE_VERSION,
+  parseTokenCount,
+  markSecurityNoticeShown,
+} from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import {
   TaskForgeDatabase,
@@ -382,6 +388,7 @@ export function createCli(): Command {
         },
         ask: (question, defaultYes) => confirmOnTerminal(question, defaultYes),
         runCommand: (args) => createCli().parseAsync(args, { from: 'user' }).then(() => undefined),
+        noticeShown: markSecurityNoticeShown,
         log: (line) => console.log(line),
       });
       if (outcome.status === 'needs_attention') process.exitCode = 1;

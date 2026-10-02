@@ -8,6 +8,9 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- **Beta readiness.** A safety notice (experimental; agents run as your user with no sandbox; use a test repository or a container/VM; nothing is applied without your command) is shown at the start of `tf setup`, once on first launch, and in a new README "Safety" section with the known limits (language support, platforms, verification).
+- **Default spend cap.** `execution.tokenBudget` now defaults to 2,000,000 tokens per run (`0` turns the cap off), so a new user never has unlimited spend by accident.
+- Releases of `0.x` versions are published to npm under the `beta` tag.
 - **`tf insights [--since <days>] [--json]`**: completion rate, outcomes, how many runs needed `tf resume` or were undone, the most frequent causes that stopped work, and tokens/cost per run, computed from the project's local history only (nothing is sent anywhere).
 
 - **`tf setup`**: one guided first-time command. It runs the environment checks (`tf doctor`), proposes and verifies the project config (`tf init --check`, written only after confirmation) and runs a small read-only test task capped at 60k tokens, asking before each step. `--yes` accepts the defaults, `--no-smoke` skips the test task; without a terminal it asks nothing and changes nothing. The one-time "no config" notice now points to it.

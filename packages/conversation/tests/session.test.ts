@@ -173,3 +173,20 @@ describe('retry from the REPL', () => {
     expect(OperatorIntentParser.parse('/retry 2')).toEqual({ type: 'retry_run', runId: '2' });
   });
 });
+
+describe('first-launch security notice', () => {
+  it('is shown once per machine, then not again', () => {
+    const previousHome = process.env.HOME;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-notice-shell-'));
+    process.env.HOME = path.join(dir, 'home'); // a machine that has never shown it
+    const database = new TaskForgeDatabase(path.join(dir, 'test.db'));
+    const shell = new InteractiveShell({ repoRoot: dir, database });
+    const first = plain((shell as any).securityNotice());
+    expect(first).toContain('Before you start');
+    expect(first).toContain('no sandbox');
+    expect((shell as any).securityNotice()).toBe('');
+    shell.close(); // also closes the database it was given
+    process.env.HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

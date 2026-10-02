@@ -24,6 +24,8 @@ This is a volunteer-maintained open-source project. Reports are acknowledged on 
 
 ## Security model and known limitations
 
+This page is summarised for new users in the README's [Safety](README.md#safety-read-this-first) section, in `tf setup`, and in a notice shown once on first launch.
+
 Be aware of what TaskForge does and does not enforce:
 
 - **Agents run as your user.** There is no OS-level sandbox. An agent shares your `HOME`, so it can read files your user can read (for example `~/.ssh`, `~/.aws`, shell history). TaskForge limits *what it forwards* and *what it integrates*, not what the agent process can touch. For untrusted repositories or high-risk work, run TaskForge inside a container or VM.

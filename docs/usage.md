@@ -683,8 +683,10 @@ Set a ceiling per run in `.taskforge/config.yaml`, or per command:
 
 ```yaml
 execution:
-  tokenBudget: 500000   # tokens per run, all attempts included
+  tokenBudget: 500000   # tokens per run, all attempts included (default 2000000; 0 = no cap)
 ```
+
+The default is 2,000,000 tokens per run: generous enough not to interrupt normal work, low enough that a runaway run cannot spend without limit. Set `0` to remove the cap.
 
 ```bash
 tf run "…" --budget 500k

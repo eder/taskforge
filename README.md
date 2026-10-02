@@ -21,6 +21,10 @@ You describe the outcome. TaskForge plans the work, selects agents, creates isol
 
 > **Autonomous, not uncontrolled.**
 
+> [!WARNING]
+> **TaskForge is experimental (beta).** Use it on a test repository, or inside a container or VM, until you trust it.
+> The agents run as your user with **no sandbox**: they can read anything you can read (for example `~/.ssh`, `~/.aws`, your shell history). TaskForge never applies changes to your branch on its own; that is always your command (`/apply`, `tf apply`, `/pr`). See [Safety](#safety-read-this-first) and [SECURITY.md](SECURITY.md).
+
 ## Quick start
 
 ### Requirements
@@ -60,6 +64,22 @@ Now describe the engineering outcome naturally:
 ```
 
 TaskForge proposes a plan before writable execution. You can approve it, revise it conversationally, or add constraints before any delivery happens.
+
+## Safety: read this first
+
+- **No sandbox.** Agents are the CLIs you already have (`claude`, `codex`, `agy`) running as your user. TaskForge limits what it forwards to them and what it integrates; it does not stop an agent process from reading files your user can read, and writes outside its worktree are not prevented or detected. Use a test repository, or run TaskForge inside a container or VM, especially with code you did not write.
+- **Nothing reaches your branch by itself.** Work happens in isolated Git worktrees and an integration branch. `/apply`, `tf apply` and `/pr` are separate commands, `/apply` stops when the changes were not fully verified, and `tf undo` reverses an applied run with a revert commit.
+- **Spend is capped by default.** Each run stops starting new tasks after `execution.tokenBudget` tokens (default 2,000,000; `0` turns the cap off). It only counts usage the agent reports, so also watch your provider's own limits. Every run ends by printing what it used.
+- **Your own approval stays in the loop.** Writable plans are shown before they run, and agents ask before actions that need a permission.
+
+### Known limits
+
+- Beta: interfaces and configuration may change between `0.x` releases.
+- Tested on macOS and in CI on Linux (Node 22 and 24). Windows is not supported or tested.
+- Deciding whether a request is read-only, and whether it refers to an earlier run, uses your planner model and works in any language. Without a model (no `OPENAI_API_KEY`) only English and Portuguese phrases are recognised for read-only requests, and only very short messages count as follow-ups.
+- Conversational commands ("yes", "no", "pause", "who is available?") are keyword-based and understood in English and Portuguese only. Anything else is treated as a new request for the planner, so in other languages use the slash commands (`/approve`, `/reject`, `/pause`, `/apply`, …). A bare constraint such as "do not change .env files" typed while nothing is running is still recorded as a constraint rather than as a request.
+- `tf doctor` reports an agent as **ready** when its CLI is installed; it does not prove you are signed in. If an agent fails to authenticate, sign in with that CLI (for example run `claude` once) and retry.
+- Verification only helps if the project has check commands. `tf setup` / `tf init --check` configure and test them; a change that passed with no checks run is reported as **not verified**.
 
 ## What happens after a prompt
 
@@ -434,7 +454,7 @@ For a small edit where one agent already has everything it needs, using that cod
 
 ## Current status
 
-TaskForge is currently **v0.1.0** and under active development.
+TaskForge is currently **v0.1.x, beta** and under active development. Releases are published to npm under the `beta` tag (`npm install -g @taskforge/cli@beta`) until 1.0.
 
 It is already dogfooded on real repositories, but users should expect interfaces and configuration to evolve while the control plane is hardened.
 

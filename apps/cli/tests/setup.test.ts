@@ -26,6 +26,21 @@ function deps(over: Partial<SetupDeps> = {}) {
 }
 
 describe('tf setup', () => {
+  it('starts by telling the person there is no sandbox, before anything runs', async () => {
+    const { d, calls, log } = deps();
+    let marked = false;
+    d.noticeShown = () => {
+      marked = true;
+    };
+    await runSetup(d);
+    const text = log.join('\n');
+    expect(text.indexOf('Before you start')).toBe(0);
+    expect(text).toContain('no sandbox');
+    expect(text).toContain('container or VM');
+    expect(marked).toBe(true);
+    expect(calls[0]).toEqual(['doctor']);
+  });
+
   it('walks a new project through doctor, init --check and a capped read-only test task', async () => {
     const { d, calls, asked } = deps();
     const outcome = await runSetup(d);
