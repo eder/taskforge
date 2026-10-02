@@ -20,7 +20,8 @@ export class IntegrationService {
     private eventRepo?: EventRepository,
   ) {}
 
-  private branchInitPromise?: Promise<string>;
+  /** Per-run: one service instance may serve several runs (and resumes). */
+  private branchInitPromises = new Map<string, Promise<string>>();
   private queueLock: Promise<void> = Promise.resolve();
 
   getBranchName(runId: string): string {
@@ -28,23 +29,30 @@ export class IntegrationService {
   }
 
   async initIntegrationBranch(runId: string, baseCommit: string): Promise<string> {
-    if (!this.branchInitPromise) {
-      this.branchInitPromise = (async () => {
-        const branchName = this.getBranchName(runId);
-        const exists = await this.gitService.branchExists(branchName);
-        if (!exists) {
-          try {
-            await this.gitService.createBranch(branchName, baseCommit);
-          } catch (err) {
-            if (!(err as Error).message.includes('already exists')) {
-              throw err;
-            }
+    const branchName = this.getBranchName(runId);
+    const cached = this.branchInitPromises.get(runId);
+    if (cached) {
+      await cached;
+      // The branch may have been deleted since (for example by a cleanup);
+      // trusting the cache would leave worktree creation pointing at nothing.
+      if (await this.gitService.branchExists(branchName)) return branchName;
+      this.branchInitPromises.delete(runId);
+    }
+
+    const init = (async () => {
+      if (!(await this.gitService.branchExists(branchName))) {
+        try {
+          await this.gitService.createBranch(branchName, baseCommit);
+        } catch (err) {
+          if (!(err as Error).message.includes('already exists')) {
+            throw err;
           }
         }
-        return branchName;
-      })();
-    }
-    return this.branchInitPromise;
+      }
+      return branchName;
+    })();
+    this.branchInitPromises.set(runId, init);
+    return init;
   }
 
   async integrateTaskCommit(options: IntegrateTaskOptions): Promise<string> {
