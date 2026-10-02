@@ -30,6 +30,7 @@ All workspace packages are released in lockstep under a single version.
 - Hermetic test setup (`tests/setup/hermetic.ts`): tests no longer depend on installed agent CLIs, exported API keys, or `~/.taskforge`.
 
 ### Fixed
+- **`tf` run from a sub-folder used a new, empty `.taskforge/`.** Config, database, runs and worktrees were all relative to the current directory, so `tf resume` in `repo/server` answered "Nothing to resume" (it was looking at an empty database), ignored `repo/.taskforge/config.yaml`, and left a stray `.taskforge/` inside the sub-folder. The CLI now works from the project root (nearest enclosing git repository, or an existing `.taskforge/`, never the home directory) and says so on stderr when that differs from the current directory. `TASKFORGE_PROJECT_ROOT` overrides it.
 - Completion-gate rejections were shown as bare codes (`NO_CHANGES_PRODUCED`). They are now plain sentences ("The agent finished without changing any file, but this task requires a change. The work may already exist ..."), including for runs recorded earlier.
 - A verification command that does not suit the project (pytest without an asyncio plugin, "no tests ran", "file or directory not found", exit code 126/127, unrecognized arguments) is now classified as a verification-configuration problem instead of a code failure, so it blocks immediately without retrying agents.
 - The "Why the run did not complete" report summarizes a failed check (headline plus first output line) instead of dumping the command and output on one line, and says when the agents' work was kept.

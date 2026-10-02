@@ -1,4 +1,17 @@
 #!/usr/bin/env node
+// Work from the project root, whatever sub-folder `tf` was started in.
+// Config, database, runs and worktrees are all resolved relative to it. This
+// must run before anything reads the working directory (including .env).
+const { findProjectRoot } = await import('@taskforge/workspace');
+const startedIn = process.cwd();
+const projectRoot = findProjectRoot(startedIn);
+if (projectRoot !== startedIn) {
+  process.chdir(projectRoot);
+  // stderr, so machine-readable output (tf inspect --json) stays clean
+  const relative = startedIn.slice(projectRoot.length + 1) || '.';
+  console.error(`TaskForge: using the project root ${projectRoot} (you are in ${relative})`);
+}
+
 if (typeof process.loadEnvFile === 'function') {
   try {
     process.loadEnvFile();
