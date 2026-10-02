@@ -162,4 +162,45 @@ describe('DeliveryService', () => {
 
     db.close();
   });
+  describe('prepareDeliveryBranch', () => {
+    it('creates a goal-slug branch at the integration head and persists it', async () => {
+      const { db, runRepo, service } = makeService();
+      const runId = 'run-delivery-slug';
+      runRepo.create(runId, undefined, { goalDescription: 'Add commitment intelligence' });
+      const branch = await createIntegrationBranch(runId, 'ci.txt', 'ci\n');
+      service.markReady(runId, branch, 'main', baseCommit);
+
+      const name = await service.prepareDeliveryBranch(runId);
+
+      expect(name).toBe('taskforge/commitment-intelligence');
+      expect(await gitService.resolveRef(name!, testRepoRoot)).toBe(
+        await gitService.resolveRef(branch, testRepoRoot),
+      );
+      expect(service.getDelivery(runId)?.deliveryBranch).toBe(name);
+      // idempotent
+      expect(await service.prepareDeliveryBranch(runId)).toBe(name);
+      db.close();
+    });
+
+    it('suffixes the name when the slug is taken by different content', async () => {
+      const { db, runRepo, service } = makeService();
+      runRepo.create('run-a', undefined, { goalDescription: 'Add search' });
+      runRepo.create('run-b', undefined, { goalDescription: 'Add search' });
+      const branchA = await createIntegrationBranch('run-a', 'a.txt', 'a\n');
+      const branchB = await createIntegrationBranch('run-b', 'b.txt', 'b\n');
+      service.markReady('run-a', branchA, 'main', baseCommit);
+      service.markReady('run-b', branchB, 'main', baseCommit);
+
+      expect(await service.prepareDeliveryBranch('run-a')).toBe('taskforge/search');
+      expect(await service.prepareDeliveryBranch('run-b')).toBe('taskforge/search-2');
+      db.close();
+    });
+
+    it('returns undefined for a run without delivery information', async () => {
+      const { db, runRepo, service } = makeService();
+      runRepo.create('run-none');
+      expect(await service.prepareDeliveryBranch('run-none')).toBeUndefined();
+      db.close();
+    });
+  });
 });

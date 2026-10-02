@@ -1,6 +1,8 @@
 {
   "name": "@taskforge/integration",
   "version": "0.1.0",
+  "description": "TaskForge integration package.",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,19 +12,38 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@taskforge/shared": "workspace:*",
     "@taskforge/execution": "workspace:*",
-    "@taskforge/workspace": "workspace:*",
+    "@taskforge/git-workflow": "workspace:*",
     "@taskforge/persistence": "workspace:*",
+    "@taskforge/shared": "workspace:*",
+    "@taskforge/telemetry": "workspace:*",
     "@taskforge/verification": "workspace:*",
-    "@taskforge/telemetry": "workspace:*"
+    "@taskforge/workspace": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eder/taskforge.git",
+    "directory": "packages/integration"
+  },
+  "bugs": {
+    "url": "https://github.com/eder/taskforge/issues"
+  },
+  "homepage": "https://github.com/eder/taskforge#readme",
+  "publishConfig": {
+    "access": "public"
   }
 }

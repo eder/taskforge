@@ -11,12 +11,22 @@ import {
 import { TelemetryCollector } from '@taskforge/telemetry';
 import { integrationBranchName } from './branch-naming.js';
 
+/**
+ * Pushing and opening a PR are explicit, human-initiated actions performed on
+ * the user's behalf (not by an agent), so they need the user's own git/gh
+ * credentials (SSH agent, GH_TOKEN, credential helpers). Everything is
+ * inherited except TaskForge's own router key.
+ */
+const USER_ACTION_ENV_POLICY = { inherit: true, denyPatterns: ['TASKFORGE_OPENAI_API_KEY'] };
+
 export interface CreatePROptions {
   runId: string;
   title?: string;
   targetBranch?: string;
   draft?: boolean;
   repoRoot?: string;
+  /** Branch to open the PR from; defaults to the run's integration branch. */
+  headBranch?: string;
 }
 
 export interface PRCreationResult {
@@ -93,9 +103,20 @@ export class GitHubWorkflowService {
 
     lines.push('');
     lines.push('### 🛡️ Quality & Verification Evidence');
-    lines.push('- **Automated Tests:** PASS');
-    lines.push('- **Lint & Code Style:** PASS');
-    lines.push('- **TypeScript Typecheck:** PASS');
+    const verifications = this.verificationRepo.listLatestByRun(runId);
+    const withChecks = verifications.filter((v) => v.result.checks.length > 0);
+    if (withChecks.length === 0) {
+      lines.push(
+        '- No automated verification results were recorded for this run (verification was disabled, not applicable, or tasks were read-only). **Do not assume tests, lint or typecheck ran.**',
+      );
+    } else {
+      for (const { taskId, result } of withChecks) {
+        const checks = result.checks
+          .map((c) => `${c.success ? '✅' : '❌'} \`${c.command}\``)
+          .join(' · ');
+        lines.push(`- ${taskId ? `\`${taskId}\`: ` : ''}${checks}`);
+      }
+    }
     if (runStats) {
       lines.push(
         `- **First-pass verification rate:** ${(runStats.firstPassRate * 100).toFixed(1)}%`,
@@ -119,11 +140,39 @@ export class GitHubWorkflowService {
     return lines.join('\n');
   }
 
+  /**
+   * `gh pr create --head <branch>` requires the branch to exist on the remote.
+   * Pushes it (never forced). Returns an error message, or undefined on success.
+   */
+  private async pushBranch(branch: string, cwd: string): Promise<string | undefined> {
+    const remotes = await ProcessRunner.run({
+      command: 'git',
+      args: ['remote'],
+      cwd,
+      timeoutMs: 10000,
+      envPolicy: USER_ACTION_ENV_POLICY,
+    });
+    const names = remotes.stdout.split('\n').map((r) => r.trim()).filter(Boolean);
+    if (names.length === 0) return 'this repository has no git remote configured';
+    const remote = names.includes('origin') ? 'origin' : names[0];
+
+    const push = await ProcessRunner.run({
+      command: 'git',
+      args: ['push', '--set-upstream', remote, branch],
+      cwd,
+      timeoutMs: 60000,
+      envPolicy: USER_ACTION_ENV_POLICY,
+    });
+    return push.exitCode === 0 ? undefined : (push.stderr || push.stdout).trim();
+  }
+
   async createPullRequest(options: CreatePROptions): Promise<PRCreationResult> {
     const runId = options.runId;
-    const branchName = options.runId.startsWith('taskforge/')
-      ? options.runId
-      : integrationBranchName(options.runId);
+    const branchName =
+      options.headBranch ??
+      (options.runId.startsWith('taskforge/')
+        ? options.runId
+        : integrationBranchName(options.runId));
 
     const summary = this.generatePullRequestSummary(runId);
     const title = options.title ?? `taskforge: automated integration for ${runId}`;
@@ -139,6 +188,17 @@ export class GitHubWorkflowService {
         commandUsed,
         message:
           'GitHub CLI (`gh`) not found on system. PR summary generated successfully for manual submission.',
+      };
+    }
+
+    const cwd = options.repoRoot ?? this.repoRoot;
+    const pushError = await this.pushBranch(branchName, cwd);
+    if (pushError) {
+      return {
+        success: false,
+        summary,
+        commandUsed,
+        message: `Could not push ${branchName} before creating the pull request: ${pushError}`,
       };
     }
 
@@ -162,8 +222,9 @@ export class GitHubWorkflowService {
       const res = await ProcessRunner.run({
         command: 'gh',
         args,
-        cwd: options.repoRoot ?? this.repoRoot,
+        cwd,
         timeoutMs: 30000,
+        envPolicy: USER_ACTION_ENV_POLICY,
       });
 
       if (res.exitCode === 0) {
@@ -201,6 +262,7 @@ export class GitHubWorkflowService {
       args: ['issue', 'view', String(num), '--json', 'number,title,body'],
       cwd: this.repoRoot,
       timeoutMs: 15000,
+      envPolicy: USER_ACTION_ENV_POLICY,
     });
 
     if (res.exitCode !== 0) {
