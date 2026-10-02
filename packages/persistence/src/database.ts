@@ -78,6 +78,12 @@ export class TaskForgeDatabase {
 
   private initSchema(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS session_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
         goal_id TEXT,

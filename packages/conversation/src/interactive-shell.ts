@@ -60,6 +60,7 @@ import {
   describeRunFailures,
   formatRunFailureLines,
   extractRunId,
+  resolveRunRef,
   isShortFollowUp,
   findPriorRunCandidates,
   findPriorRunContext,
@@ -71,6 +72,7 @@ import {
   DatabaseHealthReport,
   InteractionRepository,
   RunRepository,
+  SessionRepository,
   GoalRepository,
   EventRepository,
   TaskRepository,
@@ -124,6 +126,8 @@ export interface ShellOptions {
   streamBus?: AgentStreamBus;
   asyncExecution?: boolean;
   interactive?: boolean;
+  /** Start with a clean context: earlier runs are not offered to new requests (`tf --new`). */
+  freshSession?: boolean;
 }
 
 export class InteractiveShell {
@@ -513,7 +517,12 @@ export class InteractiveShell {
   }
 
   private resolveDeliveryRunId(explicit?: string): string | undefined {
-    if (explicit) return explicit;
+    if (explicit) {
+      // `last`, `#2` or a short id fragment; anything unresolved is passed on
+      // unchanged so the caller reports it as an unknown run.
+      const resolved = resolveRunRef(new RunRepository(this.db), explicit);
+      return 'runId' in resolved ? resolved.runId : explicit;
+    }
     return this.deliveryService.findLatestReady()?.runId;
   }
 
@@ -546,6 +555,19 @@ export class InteractiveShell {
       },
       result,
     );
+  }
+
+  /** One line saying what the session continues from, so history is visible without asking. */
+  private continuationHint(): string {
+    if (this.options.freshSession || this.config.context?.carryOver === false) return '';
+    const boundary = new SessionRepository(this.db).getContextBoundary();
+    const [latest] = findPriorRunCandidates(
+      { runRepo: new RunRepository(this.db), goalRepo: new GoalRepository(this.db) },
+      { limit: 1, maxAgeHours: this.config.context?.maxAgeHours, notBefore: boundary },
+    );
+    if (!latest) return '';
+    const goal = latest.goal.length > 70 ? `${latest.goal.slice(0, 69)}…` : latest.goal;
+    return `\n  ${colors.dim}Continuing from ${colors.reset}${colors.bold}${latest.runId}${colors.reset} ${colors.dim}(${describeAge(latest.createdAt)}${goal ? `: ${goal}` : ''}). Refer to it as "last" or #1; /clear starts fresh.${colors.reset}\n`;
   }
 
   async renderBanner(): Promise<string> {
@@ -1043,6 +1065,23 @@ export class InteractiveShell {
         return this.operator.formatResponse(intent, {});
       }
 
+      case 'clear_context': {
+        new SessionRepository(this.db).clearContext();
+        this.pendingPriorContext = undefined;
+        // A plan that has not been approved is part of the conversation being
+        // cleared; a run that is executing is not, and is left alone.
+        let discarded = '';
+        if (this.conversationState === 'AWAITING_PLAN_APPROVAL' && this.currentGraph) {
+          this.currentGraph = undefined;
+          this.activeGoal = undefined;
+          this.lastGoalDescription = undefined;
+          this.settledIntent = undefined;
+          this.conversationState = 'IDLE';
+          discarded = ' The pending plan was discarded.';
+        }
+        return `${colors.green}✔${colors.reset} Context cleared.${discarded} ${colors.dim}Earlier runs stay in /runs and can still be resumed, applied or inspected; they just will not be attached to new requests.${colors.reset}`;
+      }
+
       case 'resume_execution': {
         this.isPaused = false;
         return this.operator.formatResponse(intent, {});
@@ -1087,6 +1126,7 @@ export class InteractiveShell {
             excludeRunId: this.activeRunId,
             maxAgeHours: this.config.context?.maxAgeHours,
             maxChars: this.config.context?.maxChars,
+            notBefore: new SessionRepository(this.db).getContextBoundary(),
           };
           const explicitRunId = extractRunId(intent.goal);
           let found: ReturnType<typeof findPriorRunContext>;
@@ -1581,7 +1621,8 @@ export class InteractiveShell {
     const repoName = path.basename(this.repoRoot);
     this.viewport.updateContext(repoName, gitStatus.currentBranch);
 
-    const banner = (await this.renderBanner()) + this.configHint();
+    if (this.options.freshSession) new SessionRepository(this.db).clearContext();
+    const banner = (await this.renderBanner()) + this.configHint() + this.continuationHint();
     const inStream = this.options.input ?? process.stdin;
     const outStream = this.options.output ?? process.stdout;
 

@@ -268,7 +268,8 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/reassign` | Reassign work to another healthy agent |
 | `/cancel` | Cancel the active run or one active assignment |
 | `/pause` | Pause orchestrator execution |
-| `/resume` | Resume paused execution |
+| `/unpause` | Continue a paused execution (`/resume` still works; it is not the same as `tf resume`) |
+| `/clear` | Start fresh: earlier runs stop being used as context for new requests |
 | `/cost` | Show token usage and cost telemetry |
 | `/stats` | Show execution and orchestration efficiency metrics |
 | `/diff` | Inspect changes from a completed run; accepts an optional run id |
