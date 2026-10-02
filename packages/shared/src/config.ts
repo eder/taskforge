@@ -11,11 +11,39 @@ export const AgentConfigSchema = z.object({
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string()).optional(),
+  /** Names of extra parent-environment variables to forward to this agent (e.g. SSH_AUTH_SOCK). */
+  passEnv: z.array(z.string()).optional(),
 });
 
 const OwnershipRuleSchema = z.object({
   scope: z.string().min(1),
   writers: z.array(z.string().min(1)).min(1),
+});
+
+/** Words that mark a task as sensitive when dual review is enabled. */
+export const DEFAULT_DUAL_REVIEW_KEYWORDS = [
+  'authentication',
+  'authorization',
+  'password',
+  'credential',
+  'secret',
+  'encryption',
+  'payment',
+  'billing',
+  'schema migration',
+  'database migration',
+  'security',
+];
+
+const DualReviewSchema = z.object({
+  /** Opt-in: sensitive tasks need an independent agent's approval before integration. */
+  enabled: z.boolean().default(false),
+  /** Task scopes (same glob rules as ownership) that are always sensitive, e.g. "db/migrations/**". */
+  scopes: z.array(z.string().min(1)).default([]),
+  /** Keywords in a task's title/objective that make it sensitive. */
+  keywords: z.array(z.string().min(1)).default(DEFAULT_DUAL_REVIEW_KEYWORDS),
+  /** What to do when no healthy agent other than the implementer(s) can review. */
+  onNoIndependentReviewer: z.enum(['block', 'skip']).default('block'),
 });
 
 const ScopedVerificationRuleSchema = z.object({
@@ -58,6 +86,21 @@ export const TaskForgeConfigSchema = z.object({
       worktreesDir: z.string().default('.taskforge/worktrees'),
       databasePath: z.string().default('.taskforge/taskforge.db'),
       runsDir: z.string().default('.taskforge/runs'),
+      /**
+       * Opt-in age-based cleanup (e.g. "7d") of stale TaskForge worktrees and
+       * temporary branches, run at the start of every new run.
+       */
+      /**
+       * Gitignored dependency directories symlinked from the main checkout into
+       * every worktree, so verification (tests/lint/typecheck) can run without
+       * a per-worktree install. Supports "*" for one path segment, e.g.
+       * "packages/*\/node_modules". Use [] to disable.
+       */
+      worktreeLinks: z.array(z.string().min(1)).default(['node_modules', 'packages/*/node_modules', 'apps/*/node_modules']),
+      autoPruneOlderThan: z
+        .string()
+        .regex(/^\d+[smhdw]$/, 'Use a number plus s, m, h, d or w (e.g. 7d)')
+        .optional(),
     })
     .default({
       maxParallelTasks: 3,
@@ -96,6 +139,13 @@ export const TaskForgeConfigSchema = z.object({
       maxReworkCycles: z.number().int().nonnegative().default(2),
       commands: z.array(z.string().min(1)).default([]),
       scopedCommands: z.array(ScopedVerificationRuleSchema).default([]),
+      /** Fail tasks that modify files outside their declared allowedScope. */
+      enforceScope: z.boolean().default(true),
+      /** Per-command timeout for verification commands. */
+      commandTimeoutSeconds: z.number().int().positive().default(600),
+      /** Extra environment variable names verification commands may see (secret-looking names are otherwise withheld). */
+      passEnv: z.array(z.string()).default([]),
+      dualReview: DualReviewSchema.default({}),
     })
     .default({
       tests: true,
@@ -352,9 +402,13 @@ export function loadConfig(configPath?: string): TaskForgeConfig {
   try {
     return TaskForgeConfigSchema.parse(merged);
   } catch (error) {
-    throw new ConfigurationError(
-      `Invalid configuration: ${(error as Error).message}`,
-      { error },
-    );
+    const details =
+      error instanceof z.ZodError
+        ? '\n' +
+          error.issues
+            .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
+            .join('\n')
+        : ` ${(error as Error).message}`;
+    throw new ConfigurationError(`Invalid configuration:${details}`, { error });
   }
 }

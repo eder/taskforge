@@ -24,7 +24,7 @@ import {
   InteractionRepository,
   AgentAvailabilityRepository,
 } from '@taskforge/persistence';
-import { GitService, WorktreeManager } from '@taskforge/workspace';
+import { GitService, WorktreeManager, parseAgeSpec } from '@taskforge/workspace';
 import {
   AgentRegistry,
   AgentDetector,
@@ -51,6 +51,7 @@ import { IntegrationService, DeliveryService, GitHubWorkflowService } from '@tas
 import {
   createGitWorkflowStrategy,
   detectWorkflowSuggestion,
+  reconcileTargetBranch,
   RepositoryContext,
 } from '@taskforge/git-workflow';
 import { InteractionGateway } from '@taskforge/execution';
@@ -58,8 +59,10 @@ import {
   DeterministicScheduler,
   SchedulerResult,
   SchedulerContext,
+  SchedulerResumeState,
 } from './deterministic-scheduler.js';
 import { executeExecutionTeam } from './execution-team.js';
+import { applyTaskIdRemap, planTaskIdRemap } from './task-id-allocation.js';
 import { allowedWritersForTask } from './task-policy.js';
 import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
 import {
@@ -244,7 +247,11 @@ export class RunOrchestrator {
     this.gitService = options.gitService ?? new GitService(this.repoRoot);
     this.worktreeManager =
       options.worktreeManager ??
-      new WorktreeManager(this.repoRoot, this.config.execution.worktreesDir);
+      new WorktreeManager(
+        this.repoRoot,
+        this.config.execution.worktreesDir,
+        this.config.execution.worktreeLinks,
+      );
     this.verificationRunner =
       options.verificationRunner ?? new VerificationRunner(this.verificationRepo, this.eventRepo);
     this.integrationService =
@@ -272,6 +279,23 @@ export class RunOrchestrator {
     const runId = options.runId ?? generateRunId();
     options.onProgress?.(`Starting TaskForge orchestrator run: ${runId}`);
 
+    await this.gitService.ensureLocalExclude('.taskforge/');
+
+    const autoPrune = this.config.execution.autoPruneOlderThan;
+    if (autoPrune) {
+      const report = await this.worktreeManager
+        .pruneStale({ olderThanMs: parseAgeSpec(autoPrune) })
+        .catch(() => undefined);
+      const removed = report
+        ? report.worktrees.length + report.directories.length + report.branches.length
+        : 0;
+      if (removed > 0) {
+        options.onProgress?.(
+          `Auto-prune: removed ${removed} stale worktree/branch artifact(s) older than ${autoPrune}`,
+        );
+      }
+    }
+
     const baseCommit = options.baseCommit ?? (await this.gitService.getHeadCommit());
     const baseBranch = await this.gitService
       .getStatus(this.repoRoot)
@@ -280,7 +304,7 @@ export class RunOrchestrator {
 
     // 1. Create Goal
     const goalRecord = this.goalRepo.create({
-      id: `goal-${Date.now()}`,
+      id: `goal-${Date.now()}-${randomUUID().slice(0, 6)}`,
       description: goalDescription,
       repository: this.repoRoot,
       constraints: [],
@@ -296,8 +320,9 @@ export class RunOrchestrator {
       createdAt: new Date(goalRecord.createdAt),
     };
 
-    // 2. Create Run Record
-    this.runRepo.create(runId, goal.id);
+    // 2. Create Run Record. Persist everything `resume()` needs to rebuild the
+    // run later without re-planning (base commit, goal text, base branch).
+    this.runRepo.create(runId, goal.id, { goalDescription, baseCommit, baseBranch });
 
     // 3. Execution intent is authoritative and must be known before planning.
     // Planning is an advisory interpretation layer; it is never allowed to
@@ -309,7 +334,23 @@ export class RunOrchestrator {
 
     // 4. Planning
     options.onProgress?.('Generating structured task graph...');
-    const rawGraph = options.preplannedGraph ?? (await this.planner.plan(goal));
+    let rawGraph = options.preplannedGraph ?? (await this.planner.plan(goal));
+
+    // Task ids must be unique across runs (see task-id-allocation.ts).
+    const idRemap = planTaskIdRemap(
+      rawGraph,
+      {
+        isTaken: (id) => this.taskRepo.idExists(id),
+        maxNumericId: () => this.taskRepo.maxNumericTaskId(),
+      },
+      runId,
+    );
+    if (idRemap) {
+      rawGraph = applyTaskIdRemap(rawGraph, idRemap);
+      options.onProgress?.(
+        `Task ids renumbered to stay unique across runs: ${[...idRemap].map(([from, to]) => `${from}→${to}`).join(', ')}`,
+      );
+    }
 
     // 5. Preflight Negotiation
     options.onProgress?.('Executing preflight contract negotiation...');
@@ -366,8 +407,151 @@ export class RunOrchestrator {
         type: task.type,
         status: task.status,
         contract: task.contract,
+        dependencies: task.dependencies,
       });
     }
+
+    return this.executeGraph({
+      runId,
+      goalId: goal.id,
+      goalDescription,
+      graph,
+      baseCommit,
+      baseBranch,
+      executionIntent,
+      options,
+      startTime,
+    });
+  }
+
+  /**
+   * Resumes a previously interrupted, cancelled or failed run. Tasks that were
+   * already integrated into the run branch are kept; every other task is reset
+   * and re-executed with a fresh recovery budget. Planning and negotiation are
+   * not repeated — the persisted task graph is authoritative.
+   */
+  async resume(runId: string, options: RunOptions = {}): Promise<OrchestrationResult> {
+    const startTime = Date.now();
+    const run = this.runRepo.get(runId);
+    if (!run) throw new Error(`Run ${runId} not found.`);
+    if (run.status === 'completed') {
+      throw new Error(`Run ${runId} already completed; use /diff, /apply or /pr to deliver it.`);
+    }
+
+    const goal = run.goalId ? this.goalRepo.get(run.goalId) : undefined;
+    const metadata = run.metadataJson ? JSON.parse(run.metadataJson) : {};
+    const goalDescription: string | undefined = metadata.goalDescription ?? goal?.description;
+    if (!goalDescription) throw new Error(`Run ${runId} has no recorded goal; cannot resume.`);
+
+    const records = this.taskRepo.listByRun(runId);
+    if (records.length === 0) throw new Error(`Run ${runId} has no persisted tasks; cannot resume.`);
+
+    const integrationBranch = this.integrationService.getBranchName(runId);
+    const branchExists = await this.gitService.branchExists(integrationBranch);
+
+    let baseCommit: string | undefined = metadata.baseCommit;
+    if (!baseCommit && branchExists) {
+      // Runs created before checkpoints were recorded: recover the base from the run branch.
+      baseCommit = await this.gitService
+        .execGit(['merge-base', integrationBranch, 'HEAD'])
+        .then((out) => out.trim())
+        .catch(() => undefined);
+    }
+    if (!baseCommit) throw new Error(`Run ${runId} has no recorded base commit; cannot resume.`);
+    const baseBranch: string = metadata.baseBranch ?? 'main';
+
+    // Integrated work only survives if the run branch still holds it (e.g. /clean removes it).
+    const keepIntegrated = branchExists;
+    const tasks: Task[] = records.map((record) => {
+      const contract = JSON.parse(record.contractJson ?? '{}');
+      const keep = keepIntegrated && record.status === 'integrated';
+      const dependencies =
+        record.dependencies && record.dependencies.length > 0
+          ? record.dependencies
+          : (contract.dependencies ?? []);
+      return {
+        id: record.id,
+        goalId: record.goalId ?? '',
+        title: record.title,
+        description: record.description,
+        type: record.type,
+        status: keep ? 'integrated' : 'accepted',
+        dependencies,
+        contract,
+        acceptanceCriteria: record.acceptanceCriteriaJson
+          ? JSON.parse(record.acceptanceCriteriaJson)
+          : (contract.acceptanceCriteria ?? []),
+        reworkCount: 0,
+        createdAt: new Date(record.createdAt),
+        updatedAt: new Date(),
+      };
+    });
+
+    const pending = tasks.filter((t) => t.status !== 'integrated');
+    if (pending.length === 0) {
+      throw new Error(`Run ${runId} has no pending tasks; nothing to resume.`);
+    }
+    for (const task of pending) this.taskRepo.updateStatus(task.id, 'accepted');
+
+    const graph = new TaskGraph(tasks);
+    const integratedIds = tasks.filter((t) => t.status === 'integrated').map((t) => t.id);
+    const hasIntegratedCommits =
+      branchExists && (await this.gitService.resolveRef(integrationBranch)) !== baseCommit;
+
+    this.runRepo.updateStatus(runId, 'running');
+    this.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId,
+      type: 'RUN_RESUMED',
+      payload: { integratedTasks: integratedIds, pendingTasks: pending.map((t) => t.id) },
+      timestamp: new Date(),
+    });
+    options.onProgress?.(
+      `Resuming run ${runId}: ${integratedIds.length} task(s) already integrated, ${pending.length} to execute`,
+    );
+    await this.worktreeManager.prune().catch(() => {});
+
+    return this.executeGraph({
+      runId,
+      goalId: run.goalId ?? '',
+      goalDescription,
+      graph,
+      baseCommit,
+      baseBranch,
+      executionIntent: detectExecutionIntent(goalDescription),
+      options,
+      startTime,
+      resumeState: {
+        taskOutputs: (metadata.taskOutputs as Record<string, string> | undefined) ?? {},
+        hasIntegratedCommits,
+      },
+    });
+  }
+
+  private async executeGraph(params: {
+    runId: string;
+    goalId: string;
+    goalDescription: string;
+    graph: TaskGraph;
+    baseCommit: string;
+    baseBranch: string;
+    executionIntent: ExecutionIntentDecision;
+    options: RunOptions;
+    startTime: number;
+    resumeState?: SchedulerResumeState;
+  }): Promise<OrchestrationResult> {
+    const {
+      runId,
+      goalId,
+      goalDescription,
+      graph,
+      baseCommit,
+      baseBranch,
+      executionIntent,
+      options,
+      startTime,
+      resumeState,
+    } = params;
 
     // 5. Check Agent Availability / Fallback
     const detected = await AgentDetector.detect(this.agentRegistry.list());
@@ -618,6 +802,7 @@ export class RunOrchestrator {
       },
       onProgress: options.onProgress,
       abortSignal: options.abortSignal,
+      resumeState,
     });
 
     const schedulerResult = await scheduler.run();
@@ -652,9 +837,16 @@ export class RunOrchestrator {
         localBranches: await this.gitService.listLocalBranches(this.repoRoot).catch(() => []),
       };
       const workflowStrategy = createGitWorkflowStrategy(this.config.git);
-      const targetBranch =
+      const configuredTarget =
         this.config.delivery.targetBranch ??
         workflowStrategy.resolveTargetBranch(repoContext, goalDescription);
+      const reconciled = reconcileTargetBranch(configuredTarget, repoContext);
+      const targetBranch = reconciled.branch;
+      if (reconciled.adjustedFrom) {
+        options.onProgress?.(
+          `Delivery: target branch "${reconciled.adjustedFrom}" does not exist in this repository; using "${targetBranch}" instead (set git.targetBranch to override).`,
+        );
+      }
       this.deliveryService.markReady(
         runId,
         schedulerResult.integrationBranch,
@@ -674,10 +866,12 @@ export class RunOrchestrator {
         }
       } else if (this.config.delivery.mode === 'pull_request') {
         try {
+          const headBranch = await this.deliveryService.prepareDeliveryBranch(runId);
           const pr = await this.githubWorkflowService.createPullRequest({
             runId,
             targetBranch,
             repoRoot: this.repoRoot,
+            headBranch,
           });
           if (pr.success && pr.prUrl) {
             this.deliveryService.markPrCreated(runId, pr.prUrl);
@@ -714,7 +908,7 @@ export class RunOrchestrator {
 
     return {
       runId,
-      goalId: goal.id,
+      goalId,
       status: schedulerResult.status,
       tasksCompleted: schedulerResult.tasksCompleted,
       tasksFailed: schedulerResult.tasksFailed,

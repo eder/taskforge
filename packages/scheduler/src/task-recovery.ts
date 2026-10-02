@@ -1,4 +1,9 @@
-export type RecoveryPhase = 'execution' | 'completion' | 'verification' | 'collaboration';
+export type RecoveryPhase =
+  | 'execution'
+  | 'completion'
+  | 'verification'
+  | 'collaboration'
+  | 'review';
 
 export type RecoveryFailureClass =
   | 'code_or_test'
