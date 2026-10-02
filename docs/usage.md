@@ -369,11 +369,13 @@ Pause orchestration:
 /pause
 ```
 
-Resume:
+Continue a paused execution:
 
 ```text
-/resume
+/unpause
 ```
+
+(`/resume` still works as an alias. It is not the same as `tf resume`, which continues a run that failed, was cancelled or was interrupted; see below.)
 
 Cancel the active run:
 
@@ -529,6 +531,26 @@ If you do not want to apply or open a PR, keep the integration branch without de
 The important boundary is that verified autonomous execution and external delivery are separate actions.
 
 ## 12. Inspect previous work
+
+### Naming a run without copying its id
+
+Anywhere a run is expected (`tf resume`, `tf apply`, `tf inspect`, `tf abandon`, `tf cost`, `tf pr create`, and `/diff`, `/apply`, `/pr`, `/inspect` in the REPL) you can write:
+
+| You write | Meaning |
+|---|---|
+| `last` | the newest run |
+| `2` or `#2` | the number shown by `tf runs` (`#1` is the newest) |
+| `4521` | the end (or start) of the id, when it is unique |
+| `run-1790…` | the full id |
+
+An ambiguous fragment is refused with the matching ids rather than guessed.
+
+### Continuing and starting fresh
+
+TaskForge does not keep a chat transcript; what carries over is the run history. When you open `tf`, it prints `Continuing from run-… (3h ago: <goal>)` for the newest run still within `context.maxAgeHours`, and requests that depend on it get its report automatically (see "Context between runs").
+
+- `/clear` starts fresh: earlier runs stop being used as context for new requests, and a plan waiting for approval is discarded. Nothing is deleted: `/runs`, `tf resume`, `tf apply` and `tf inspect` still see every run. A run that is executing is left alone.
+- `tf --new` opens the REPL already cleared.
 
 List runs:
 

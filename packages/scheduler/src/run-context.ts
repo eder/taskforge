@@ -54,6 +54,8 @@ export interface FindPriorRunOptions {
   maxAgeHours?: number;
   maxChars?: number;
   now?: Date;
+  /** Ignore runs created before this moment (the user cleared the context). */
+  notBefore?: Date;
 }
 
 /** Combines a run's task outputs within a budget, keeping the final (consolidating) outputs first. */
@@ -128,6 +130,7 @@ export function findPriorRunCandidates(
   for (const run of runs.slice(0, 12)) {
     if (run.id === options.excludeRunId) continue;
     if (!options.explicitRunId && now - new Date(run.createdAt).getTime() > maxAgeMs) break;
+    if (!options.explicitRunId && options.notBefore && new Date(run.createdAt) < options.notBefore) break;
     const context = contextOfRun(deps, run, maxChars);
     if (context) found.push(context);
     if (found.length >= limit) break;

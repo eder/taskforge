@@ -24,6 +24,7 @@ export type OperatorIntent =
       targetAgentId?: string;
     }
   | { type: 'add_constraint'; constraint: string; readOnlyScope?: string }
+  | { type: 'clear_context' }
   | { type: 'approve_plan' }
   | { type: 'reject_plan'; feedback?: string }
   | { type: 'revise_plan'; revision: PlanRevision }
@@ -123,7 +124,8 @@ export class OperatorIntentParser {
     if (text.startsWith('/dash') || text.startsWith('/graph') || text.startsWith('/status'))
       return { type: 'inspect_dashboard' };
     if (text.startsWith('/pause')) return { type: 'pause_execution' };
-    if (text.startsWith('/resume')) return { type: 'resume_execution' };
+    if (text.startsWith('/unpause') || text.startsWith('/resume')) return { type: 'resume_execution' };
+    if (text === '/clear' || text.startsWith('/clear ')) return { type: 'clear_context' };
     if (text.startsWith('/pending')) return { type: 'inspect_pending_interactions' };
 
     if (text.startsWith('/apply')) {

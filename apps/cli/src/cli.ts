@@ -45,6 +45,7 @@ import {
   formatRunFailureLines,
   findPriorRunContext,
   renderPriorContext,
+  resolveRunRef,
 } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
@@ -105,8 +106,9 @@ export function createCli(): Command {
     .alias('taskforge')
     .description('TaskForge: Conversational control plane for self-organizing coding-agent teams')
     .version(TASKFORGE_VERSION)
-    .action(async () => {
-      const shell = new InteractiveShell();
+    .option('--new', 'Start a fresh session: earlier runs are not offered as context to new requests', false)
+    .action(async (options: { new?: boolean }) => {
+      const shell = new InteractiveShell({ freshSession: options.new ?? false });
       await shell.start();
       process.exit(0);
     });
@@ -124,6 +126,17 @@ export function createCli(): Command {
         `  ${colors.green}✔${colors.reset} Cleaned up ${count} temporary TaskForge branches and worktrees.\n`,
       );
     });
+
+  /** Resolves `last`, `#2`, an id or a unique id fragment; explains and exits when it cannot. */
+  const resolveRunOrExit = (db: TaskForgeDatabase, ref: string): string => {
+    const resolved = resolveRunRef(new RunRepository(db), ref);
+    if ('error' in resolved) {
+      console.error(`\n${resolved.error}\n`);
+      db.close();
+      return process.exit(1);
+    }
+    return resolved.runId;
+  };
 
   // tf runs
   program
@@ -143,7 +156,7 @@ export function createCli(): Command {
       console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge Runs History${colors.reset}`);
       console.log(`  ${colors.darkGray}${'─'.repeat(64)}${colors.reset}`);
       const deliveryService = new DeliveryService(process.cwd(), new GitService(process.cwd()), runRepo);
-      for (const r of runs.slice(0, 10)) {
+      for (const [position, r] of runs.slice(0, 10).entries()) {
         const goal = r.goalId ? goalRepo.get(r.goalId) : undefined;
         const statusColor =
           r.status === 'completed'
@@ -154,7 +167,7 @@ export function createCli(): Command {
                 ? colors.dim
                 : colors.yellow;
         console.log(
-          `  ● ${colors.bold}${r.id}${colors.reset} [${statusColor}${r.status.toUpperCase()}${colors.reset}] ${colors.dim}(${r.createdAt.slice(0, 19).replace('T', ' ')})${colors.reset}`,
+          `  ${colors.dim}#${position + 1}${colors.reset} ${colors.bold}${r.id}${colors.reset} [${statusColor}${r.status.toUpperCase()}${colors.reset}] ${colors.dim}(${r.createdAt.slice(0, 19).replace('T', ' ')})${colors.reset}`,
         );
         if (goal) {
           console.log(`    ${colors.dim}Goal:${colors.reset}   ${summarizeGoal(goal.description)}`);
@@ -187,6 +200,7 @@ export function createCli(): Command {
       if (runs.length > 10) {
         console.log(`  ${colors.dim}Showing the 10 most recent of ${runs.length} runs.${colors.reset}\n`);
       }
+      console.log(`  ${colors.dim}Refer to a run by number or \`last\`: tf resume 2, tf apply last, tf inspect #3.${colors.reset}`);
       console.log(`  ${colors.darkGray}${'─'.repeat(64)}${colors.reset}\n`);
       db.close();
     });
@@ -745,12 +759,13 @@ export function createCli(): Command {
 
   // tf abandon <run-id>
   program
-    .command('abandon <run-id>')
+    .command('abandon <run>')
     .description('Close a failed, cancelled or interrupted run you no longer want to resume')
-    .action((runId: string) => {
+    .action((runRef: string) => {
       const config = loadConfig();
       const db = new TaskForgeDatabase(config.execution.databasePath);
       const runRepo = new RunRepository(db);
+      const runId = resolveRunOrExit(db, runRef);
       const run = runRepo.get(runId);
       if (!run) {
         console.error(`\nRun ${runId} not found. Use \`tf runs\` to list runs.\n`);
@@ -781,7 +796,7 @@ export function createCli(): Command {
 
   // tf resume [run-id]
   program
-    .command('resume [run-id]')
+    .command('resume [run]')
     .description(
       'Resume an interrupted, cancelled or failed run: keeps integrated tasks and re-executes the rest',
     )
@@ -804,7 +819,7 @@ export function createCli(): Command {
       const db = new TaskForgeDatabase(config.execution.databasePath);
       const orchestrator = new RunOrchestrator({ repoRoot, config, gitService, database: db });
 
-      let targetRunId = runId;
+      let targetRunId = runId ? resolveRunOrExit(db, runId) : undefined;
       if (!targetRunId) {
         // Without an id, continue the newest run that can actually be resumed.
         // Older runs (for example from before resume checkpoints existed) are
@@ -918,7 +933,7 @@ export function createCli(): Command {
   program
     .command('pr')
     .description('Pull request commands')
-    .command('create [run-id]')
+    .command('create [run]')
     .description('Create a pull request on GitHub with verified audit evidence summary')
     .option('-b, --base <branch>', 'Base target branch', 'main')
     .option('-d, --draft', 'Create PR as draft', false)
@@ -928,9 +943,9 @@ export function createCli(): Command {
       const db = new TaskForgeDatabase(config.execution.databasePath);
       const runRepo = new RunRepository(db);
 
-      const targetRunId = runId ?? runRepo.listAll()[0]?.id;
+      const targetRunId = runId ? resolveRunOrExit(db, runId) : runRepo.listAll()[0]?.id;
       if (!targetRunId) {
-        console.error('Error: No run found. Specify a run-id: tf pr create <run-id>');
+        console.error('Error: No run found. Specify a run: tf pr create <run> (number, last or id)');
         db.close();
         process.exit(1);
       }
@@ -959,7 +974,7 @@ export function createCli(): Command {
 
   // tf apply [run-id]
   program
-    .command('apply [run-id]')
+    .command('apply [run]')
     .description('Apply a completed run\'s changes to its target branch')
     .action(async (runId?: string) => {
       const repoRoot = process.cwd();
@@ -969,9 +984,9 @@ export function createCli(): Command {
       const gitService = new GitService(repoRoot);
       const deliveryService = new DeliveryService(repoRoot, gitService, runRepo);
 
-      const targetRunId = runId ?? deliveryService.findLatestReady()?.runId;
+      const targetRunId = runId ? resolveRunOrExit(db, runId) : deliveryService.findLatestReady()?.runId;
       if (!targetRunId) {
-        console.error('Error: No run is ready to apply. Specify a run-id: tf apply <run-id>');
+        console.error('Error: No run is ready to apply. Specify a run: tf apply <run> (number, last or id)');
         db.close();
         process.exit(1);
       }
@@ -1033,13 +1048,13 @@ export function createCli(): Command {
 
   // tf cost [run-id]
   program
-    .command('cost [run-id]')
+    .command('cost [run]')
     .description('View cost breakdown and token telemetry for a run')
     .action((runId?: string) => {
       const config = loadConfig();
       const db = new TaskForgeDatabase(config.execution.databasePath);
       const runRepo = new RunRepository(db);
-      const targetRunId = runId ?? runRepo.listAll()[0]?.id;
+      const targetRunId = runId ? resolveRunOrExit(db, runId) : runRepo.listAll()[0]?.id;
 
       if (!targetRunId) {
         console.log('No runs recorded yet.');
@@ -1052,14 +1067,14 @@ export function createCli(): Command {
 
   // tf inspect <run-id>
   program
-    .command('inspect [run-id]')
+    .command('inspect [run]')
     .description('Inspect detailed structured run state, tasks, assignments and interactions')
     .option('--json', 'Output full run report as JSON', false)
     .action((runId?: string, options?: { json?: boolean }) => {
       const config = loadConfig();
       const db = new TaskForgeDatabase(config.execution.databasePath);
       const runRepo = new RunRepository(db);
-      const targetRunId = runId ?? runRepo.listAll()[0]?.id;
+      const targetRunId = runId ? resolveRunOrExit(db, runId) : runRepo.listAll()[0]?.id;
 
       if (!targetRunId) {
         console.log(options?.json ? '{}' : 'No runs recorded yet.');
