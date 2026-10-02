@@ -582,6 +582,30 @@ tf pr create run-<id> --base main --draft
 
 ## 15. Configuration
 
+### Do I need `.taskforge/config.yaml`?
+
+**No. The file is optional.** Without it TaskForge runs with its defaults, and it never creates the file on its own. It exists for settings the defaults cannot know, above all **how to verify a code change** in your project.
+
+| Your project | Without the file |
+| --- | --- |
+| Node (`package.json` with `test`/`lint`/`typecheck` scripts) | Works: TaskForge discovers those scripts itself. |
+| Python, Go, Rust, Swift, ... | Read-only and documentation-only tasks work. A task that **changes code** is BLOCKED, because there is nothing to verify it with. |
+
+To create one, run `tf init` in the project. It detects what it can (Node, Python with its virtualenv, Go, Rust, Swift packages, a Makefile `test` target), **prints the proposed file and asks before writing it**, and never overwrites an existing config (`--force` replaces it).
+
+```bash
+tf init            # show the proposal, ask, then write
+tf init --print    # only show it
+tf init --check    # also run each detected command once and report whether it works
+tf init --yes      # write without asking (scripts/CI)
+```
+
+Use `--check` for projects whose tests do not run the way the detector guesses (for example test files that are run one by one as scripts instead of with `pytest`). Edit the file freely afterwards.
+
+When you start `tf` in a project without the file, it prints a short notice (once per project) explaining all of this. You can ignore it: nothing else changes. Set `TASKFORGE_NO_HINTS=1` to never see it. `tf doctor` also shows whether the project has a config.
+
+The file is local to the project you run `tf` in, and `~/.taskforge/config.yaml` can hold settings shared by all projects. Later files override earlier ones: defaults, then global, then project.
+
 Project-local configuration:
 
 ```text

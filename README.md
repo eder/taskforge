@@ -306,6 +306,9 @@ tf inspect run-<id> --json
 tf apply run-<id>
 tf pr create run-<id> --base main
 
+# Optional per-project config (shows the file before writing it)
+tf init
+
 # Diagnostics and cleanup
 tf doctor
 tf health
