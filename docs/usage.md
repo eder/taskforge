@@ -342,6 +342,31 @@ Recovery context can include:
 
 This is intended to make retry behavior diagnostic rather than repetitive.
 
+### What TaskForge repairs by itself, and what it does not
+
+- **Code or test failures** (attempts 1 and 2 above): the agent repairs its own work with the evidence, then another agent tries.
+- **Transient machine failures during verification** (a lock held by another process, a dropped connection, a timeout): the same checks run once more after a short wait. Nothing is skipped or weakened to make a check pass; both attempts stay in the record (`VERIFY_RETRIED_TRANSIENT`).
+- **Problems that need you**: a check command that does not work for the project, a broken environment, a policy. TaskForge never skips verification to get past them. It keeps the agent's work, names the cause, and recommends one action.
+
+### One recommended next step
+
+When a run does not complete, the report ends with a single recommendation, not a menu:
+
+```text
+Next: tf init --check   — a check command does not work for this project, so no change can be verified; fix it, then "tf resume run-…" re-checks the kept work without calling agents
+Also: tf resume run-…   ·   tf inspect run-…
+```
+
+| Situation | Recommended |
+|---|---|
+| a check command does not work for the project | `tf init --check`, then `tf resume` |
+| the environment cannot run the checks | fix it, then `tf resume` |
+| a policy stopped the run | `tf inspect` |
+| stopped at the token budget | `tf resume <run> --budget <more>` |
+| the work itself failed after retries | `tf resume` (the agent continues from its kept work) |
+
+In the REPL, when the recommendation is `tf resume` and nothing needs fixing first, the summary says *Press Enter to do that now*: a bare Enter (or `/retry`, optionally with a run such as `/retry 2`) continues the run. Typing anything else drops the suggestion. Spending more (a higher budget) and anything that needs your fix first are never one-key actions.
+
 You can inspect task/run state with:
 
 ```text

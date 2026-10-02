@@ -118,3 +118,58 @@ describe('session: /clear, tf --new and continuation', () => {
     expect(names).not.toContain('/resume');
   });
 });
+
+describe('retry from the REPL', () => {
+  let tmpDir: string;
+  let db: TaskForgeDatabase;
+  let shell: InteractiveShell | undefined;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-retry-test-'));
+    db = new TaskForgeDatabase(path.join(tmpDir, 'test.db'));
+  });
+  afterEach(() => {
+    shell?.close();
+    shell = undefined;
+    try {
+      db.close();
+    } catch {
+      // ignore
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('/retry with nothing to continue says so', async () => {
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    expect(plain(await shell.handleInput('/retry'))).toContain('Nothing to retry');
+  });
+
+  it('an unknown run reference is explained, not guessed', async () => {
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    new GoalRepository(db).create({ id: 'g1', description: 'x', repository: tmpDir });
+    new RunRepository(db).create('run-1790000000000001', 'g1', {});
+    expect(plain(await shell.handleInput('/retry run-nope'))).toContain('not found');
+  });
+
+  it('a bare Enter does nothing without a suggestion, and accepts the suggested retry with one', async () => {
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    expect(await shell.handleInput('')).toBe('');
+
+    new GoalRepository(db).create({ id: 'g2', description: 'x', repository: tmpDir });
+    new RunRepository(db).create('run-1790000000000002', 'g2', {});
+    (shell as any).suggestedRetry = 'run-1790000000000002';
+    (shell as any).buildOrchestrator = () => ({ checkResumable: async () => 'stub: not resumable' });
+    expect(await shell.handleInput('')).toBe('stub: not resumable');
+  });
+
+  it('typing something else drops the suggestion', async () => {
+    shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+    (shell as any).suggestedRetry = 'run-1790000000000003';
+    await shell.handleInput('/tasks');
+    expect((shell as any).suggestedRetry).toBeUndefined();
+  });
+
+  it('parses /retry with and without a run reference', () => {
+    expect(OperatorIntentParser.parse('/retry')).toEqual({ type: 'retry_run', runId: undefined });
+    expect(OperatorIntentParser.parse('/retry 2')).toEqual({ type: 'retry_run', runId: '2' });
+  });
+});

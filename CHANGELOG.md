@@ -8,6 +8,9 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- **One recommended next step.** A run that did not complete now ends with a single `Next:` command chosen from the recorded cause (broken check command → `tf init --check`; environment → fix, then `tf resume`; policy → `tf inspect`; budget → `tf resume --budget …`; failed work → `tf resume`) plus a short `Also:` line, instead of a menu. `recommendNextStep()`.
+- **REPL `/retry [run]`** continues a failed, cancelled or interrupted run (the REPL equivalent of `tf resume`), and a bare Enter accepts the suggestion when the recommended step is a plain resume. Steps that need a fix first or spend more are never one-key.
+- **Transient verification failures are retried once.** If the checks fail because of a lock, a dropped connection or a timeout, they run again after a short wait; nothing is skipped to make them pass and both attempts are recorded (`VERIFY_RETRIED_TRANSIENT`).
 - **Token budget.** `execution.tokenBudget` (or `tf run --budget 500k`, `tf resume --budget 1.5m`) caps what a run may spend, counting all its attempts. At 80% it warns; at 100% it stops starting new tasks, lets running ones finish, and ends as a resumable run that says "Stopped at the token budget" and prints the `tf resume … --budget` command (`TOKEN_BUDGET_REACHED` event). It can overshoot by what was in flight.
 - **Actual spend after every run**, in the CLI and the REPL summary: tokens used, approximate cost, share of the budget, the plan's estimate and the task that used most. It says so when the agents reported no usage.
 - **Name a run without copying its id.** `last`, the number from `tf runs` (`2`, `#2`) or a unique end/start of the id work in `tf resume|apply|inspect|abandon|cost|pr create` and in the REPL's `/diff`, `/apply`, `/pr`, `/inspect`. `tf runs` now numbers its rows. An ambiguous fragment is refused with the matching ids.

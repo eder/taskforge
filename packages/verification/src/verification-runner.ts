@@ -68,13 +68,66 @@ export interface RunVerificationOptions {
   documentationOnlyChange?: boolean;
 }
 
+/**
+ * Failures that come from the machine for a moment, not from the change or the
+ * configuration: a lock held by another process, a dropped connection, a timeout.
+ * Running the same checks again is safe (nothing is skipped or weakened) and
+ * often passes. Permanent problems such as "command not found" are not listed.
+ */
+const TRANSIENT_FAILURE_MARKERS = [
+  'index.lock',
+  'resource temporarily unavailable',
+  'text file busy',
+  'econnreset',
+  'etimedout',
+  'eai_again',
+  'socket hang up',
+  'connection reset by peer',
+  'temporary failure in name resolution',
+  'timed out',
+];
+
+export function isTransientVerificationFailure(result: VerificationResult): boolean {
+  if (result.passed) return false;
+  const text = [
+    result.failureReason ?? '',
+    ...result.checks.filter((c) => !c.success).flatMap((c) => [c.stderr, c.stdout]),
+  ]
+    .join('\n')
+    .toLowerCase();
+  return TRANSIENT_FAILURE_MARKERS.some((marker) => text.includes(marker));
+}
+
 export class VerificationRunner {
   constructor(
     private verificationRepo?: VerificationRepository,
     private eventRepo?: EventRepository,
+    /** Wait before re-running checks that failed for a transient reason; 0 disables the retry. */
+    private transientRetryDelayMs = 2000,
   ) {}
 
+  /**
+   * Runs the checks. If they fail for a transient reason (see above), waits
+   * briefly and runs them once more; the second result stands either way and
+   * both attempts stay recorded. Nothing is ever skipped to make a check pass.
+   */
   async verify(options: RunVerificationOptions): Promise<VerificationResult> {
+    const first = await this.verifyOnce(options);
+    if (this.transientRetryDelayMs <= 0 || !isTransientVerificationFailure(first)) return first;
+
+    this.eventRepo?.append({
+      id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      runId: options.runId,
+      taskId: options.taskId,
+      type: 'VERIFY_RETRIED_TRANSIENT',
+      payload: { reason: first.failureReason?.split('\n')[0] },
+      timestamp: new Date(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, this.transientRetryDelayMs));
+    return this.verifyOnce(options);
+  }
+
+  private async verifyOnce(options: RunVerificationOptions): Promise<VerificationResult> {
     const {
       taskId,
       runId,
