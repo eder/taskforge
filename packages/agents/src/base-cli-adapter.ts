@@ -445,11 +445,29 @@ export abstract class BaseCliAdapter implements AgentAdapter {
           } else if (typeof obj.result === 'string' && obj.result.trim().length > 0) {
             candidateResponse = obj.result;
           } else if (
-            obj.type === 'result' &&
+            // Claude uses {"type":"result"}; Antigravity uses {"event":"result"}.
+            (obj.type === 'result' || obj.event === 'result') &&
             obj.result &&
-            typeof obj.result.response === 'string'
+            typeof obj.result.response === 'string' &&
+            obj.result.response.trim().length > 0
           ) {
             candidateResponse = obj.result.response;
+          }
+
+          // Antigravity stream-json: the final status is nested under `result`,
+          // and each agent reply step carries its text in `text_delta`. The
+          // deltas are the fallback when the stream ends without a result event
+          // (interrupted or truncated runs still leave their partial report).
+          if (obj.event === 'result' && typeof obj.result?.status === 'string') {
+            providerStatus = obj.result.status;
+          }
+          if (
+            obj.event === 'step_update' &&
+            obj.step_update?.step_type === 'agent_response' &&
+            typeof obj.step_update.text_delta === 'string' &&
+            obj.step_update.text_delta.trim()
+          ) {
+            assistantTexts.push(obj.step_update.text_delta);
           }
 
           // 4. Codex final/progress agent messages.
