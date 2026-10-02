@@ -29,6 +29,7 @@ import { CompletionGate, sanitizeTaskOutput } from './completion-gate.js';
 import {
   PreservedCandidate,
   candidateNeedsNoAgent,
+  describeCompletionFailure,
   RecoveryIncident,
   RecoveryFailureClass,
   classifyCompletionFailure,
@@ -1739,7 +1740,7 @@ export class DeterministicScheduler {
           gateResult.failureReason,
           [gateResult.evidence.explanation, agentResult.output].filter(Boolean).join('\n'),
         ),
-        reason: gateResult.failureReason ?? 'Completion gate rejected the attempt',
+        reason: describeCompletionFailure(gateResult.failureReason),
         evidence: [gateResult.evidence.explanation, agentResult.output].filter(Boolean).join('\n'),
         candidateCommit: agentResult.commitHash,
         assignmentId,

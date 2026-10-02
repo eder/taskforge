@@ -35,3 +35,27 @@ describe('candidateNeedsNoAgent', () => {
     expect(candidateNeedsNoAgent({ ...base, failureClass: 'code_or_test' })).toBe(false);
   });
 });
+
+import { describeCompletionFailure } from '../src/task-recovery.js';
+
+describe('describeCompletionFailure', () => {
+  it('turns every completion code into a sentence, and never returns a bare code', () => {
+    for (const code of [
+      'NO_CHANGES_PRODUCED',
+      'REQUIRED_ACTION_DENIED',
+      'UNRESOLVED_INTERACTION',
+      'HARNESS_FAILED',
+      'EMPTY_PROVIDER_RESULT',
+      'INVALID_PROVIDER_RESULT',
+      'VERIFICATION_FAILED',
+      'ACCEPTANCE_NOT_MET',
+      'PROVIDER_QUOTA_EXCEEDED',
+    ]) {
+      const text = describeCompletionFailure(code);
+      expect(text).not.toBe(code);
+      expect(text.length).toBeGreaterThan(20);
+    }
+    expect(describeCompletionFailure(undefined)).toContain('rejected');
+    expect(describeCompletionFailure('SOMETHING_NEW')).toBe('SOMETHING_NEW');
+  });
+});
