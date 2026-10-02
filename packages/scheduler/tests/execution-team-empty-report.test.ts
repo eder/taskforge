@@ -3,12 +3,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentAssignment, AgentCapabilities, AgentContext, AgentResult } from '@taskforge/shared';
 import { getDefaultConfig } from '@taskforge/shared';
-import { TaskForgeDatabase, EventRepository } from '@taskforge/persistence';
+import { TaskForgeDatabase, EventRepository, TaskRepository } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { AgentRegistry, type AgentAdapter } from '@taskforge/agents';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
+import { describeRunFailures, formatRunFailureLines } from '../src/run-failure-report.js';
 
 class ReportingAgent implements AgentAdapter {
   constructor(
@@ -122,6 +123,72 @@ describe('parallel investigation: an empty report is not evidence', () => {
     const failed = events.filter((e) => e.type === 'INVESTIGATOR_FAILED');
     expect(JSON.stringify(failed.map((e) => e.payload))).not.toContain('"role":"researcher"');
     expect(result.taskOutputs?.['TASK-INV'] ?? '').not.toContain('architecture_reviewer');
+    db.close();
+  });
+
+  it('explains the failure: the task, the reason, and that the team path is no longer silent', async () => {
+    const progress: string[] = [];
+    const db = new TaskForgeDatabase(':memory:');
+    const registry = new AgentRegistry(false);
+    registry.register(new ReportingAgent('good', 'Good Agent', 'A substantive analysis.'));
+    registry.register(new ReportingAgent('silent', 'Silent Agent', ''));
+    const router: RoutingProvider = {
+      id: 'r',
+      route: async () => ({
+        strategy: 'parallel',
+        complexity: 'high',
+        risk: 'low',
+        uncertainty: 'high',
+        teamSize: 2,
+        investigationPolicy: 'all_required',
+        roles: [
+          { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'a', preferredAgent: 'good' },
+          { role: 'architecture_reviewer', requiredCapabilities: ['canRead'], objective: 'b', preferredAgent: 'silent' },
+        ],
+        communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
+        reason: 'test',
+      }),
+    };
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+    config.verification.review = false;
+    const first: Task = {
+      id: 'TASK-A',
+      goalId: 'g',
+      title: 'Map the project',
+      description: 'Read-only analysis',
+      type: 'investigation',
+      status: 'accepted',
+      dependencies: [],
+      contract: { objective: 'Map', allowedScope: [], forbiddenChanges: ['*'], acceptanceCriteria: ['report'], dependencies: [], completionMode: 'report' },
+      acceptanceCriteria: [],
+      reworkCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const second: Task = { ...first, id: 'TASK-B', title: 'Consolidate gaps', dependencies: ['TASK-A'], contract: { ...first.contract, dependencies: ['TASK-A'] } };
+    const orchestrator = new RunOrchestrator({ repoRoot: root, config, database: db, agentRegistry: registry, router, gitService: git, worktreeManager: worktrees });
+    const result = await orchestrator.run('Map then consolidate', {
+      preplannedGraph: new TaskGraph([first, second]),
+      onProgress: (m) => progress.push(m),
+    });
+
+    expect(result.status).toBe('failed');
+    // The team path used to end the task silently; now it says so.
+    expect(progress.join('\n')).toMatch(/\[TASK-A\] ✗ Team execution failed/);
+
+    const lines = describeRunFailures({ taskRepo: new TaskRepository(db), eventRepo: new EventRepository(db) }, result.runId);
+    const failed = lines.find((l) => l.taskId === 'TASK-A');
+    expect(failed?.kind).toMatch(/failed|blocked/);
+    expect(failed?.reason).toMatch(/Silent Agent|report|unsatisfied|Investigation/i);
+    const notStarted = lines.find((l) => l.taskId === 'TASK-B');
+    expect(notStarted).toMatchObject({ kind: 'not_started', waitingOn: ['TASK-A'] });
+
+    const text = formatRunFailureLines(lines, result.runId).join('\n');
+    expect(text).toContain('Why the run did not complete');
+    expect(text).toContain(`tf resume ${result.runId}`);
     db.close();
   });
 });

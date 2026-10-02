@@ -173,7 +173,24 @@ export class DeterministicScheduler {
   }
 
   /**
-   * Marks that a task's commit is now on the run branch. `tf resume` needs this
+   * Durable record of why a task ended failed/blocked. Progress lines scroll
+   * away and some failure paths printed nothing at all, which left users with
+   * "Tasks failed: 1" and no explanation. `tf inspect` and the run summary read
+   * this event.
+   */
+  private noteTaskFailure(task: Task, phase: string, reason: string): void {
+    const text = reason.replace(/\s+/g, ' ').trim().slice(0, 500) || 'no reason was recorded';
+    this.ctx.eventRepo.append({
+      id: `evt-${randomUUID()}`,
+      runId: this.ctx.runId,
+      taskId: task.id,
+      type: 'TASK_FAILED',
+      payload: { taskId: task.id, phase, reason: text },
+      timestamp: new Date(),
+    });
+  }
+
+  /** Marks that a task's commit is now on the run branch. `tf resume` needs this
    * to tell tasks whose work lives in git (must be redone if the branch is
    * gone) from read-only report tasks (nothing to lose, never redo them).
    */
@@ -708,6 +725,13 @@ export class DeterministicScheduler {
               ? `[${task.id}] ✗ Task is BLOCKED: no healthy agent is authorized for scope ${task.contract.allowedScope.join(', ')}. Allowed writers: ${allowedWriters.size > 0 ? [...allowedWriters].join(', ') : '(none after policy intersection)'}.`
               : `[${task.id}] ✗ No healthy coding agent is currently available; task will not be sent to a known-unavailable provider.`,
           );
+          this.noteTaskFailure(
+            task,
+            'staffing',
+            ownershipBlocked
+              ? `No healthy agent is authorized to write ${task.contract.allowedScope.join(', ')} (ownership policy)`
+              : 'No healthy coding agent was available (all unavailable or out of quota)',
+          );
           graph.updateTaskStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
           this.ctx.taskRepo.updateStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
           continue;
@@ -890,6 +914,15 @@ export class DeterministicScheduler {
           taskBaseCommit === baseCommit ? this.ctx : { ...this.ctx, baseCommit: taskBaseCommit };
         const res = await executor(executionTask, taskScopedContext);
         if (!res.success) {
+          const teamReason =
+            ((res as { output?: string; message?: string }).output ??
+              (res as { message?: string }).message ??
+              '')
+              .split('\n')
+              .map((line) => line.trim())
+              .find((line) => line.length > 0) ?? 'the team did not produce a successful result';
+          this.ctx.onProgress?.(`[${task.id}] ✗ Team execution failed: ${teamReason}`);
+          this.noteTaskFailure(task, 'collaboration', teamReason);
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           graph.updateTaskStatus(task.id, 'blocked');
@@ -951,6 +984,11 @@ export class DeterministicScheduler {
           this.ctx.onProgress?.(
             `[${task.id}] ✗ Completion gate rejected collaborative execution: ${collabGate.evidence.explanation || collabGate.failureReason}`,
           );
+          this.noteTaskFailure(
+            task,
+            'completion',
+            `Completion gate rejected the team result: ${collabGate.evidence.explanation || collabGate.failureReason}`,
+          );
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           graph.updateTaskStatus(task.id, 'blocked');
@@ -995,6 +1033,11 @@ export class DeterministicScheduler {
         if (collabScopeViolations.length > 0) {
           this.ctx.onProgress?.(
             `[${task.id}] Collaborative task BLOCKED: changes outside the allowed scope (${task.contract.allowedScope.join(', ')}): ${collabScopeViolations.slice(0, 10).join(', ')}`,
+          );
+          this.noteTaskFailure(
+            task,
+            'scope',
+            `Changed files outside the allowed scope (${task.contract.allowedScope.join(', ')}): ${collabScopeViolations.slice(0, 10).join(', ')}`,
           );
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
@@ -1041,6 +1084,13 @@ export class DeterministicScheduler {
               ? `[${task.id}] Collaborative task BLOCKED: verification is not configured for this scope (add verification.commands to .taskforge/config.yaml; run "tf init" to generate it).`
               : `[${task.id}] Collaborative verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
           );
+          this.noteTaskFailure(
+            task,
+            'verification',
+            failureClass === 'verification_configuration'
+              ? 'Verification is not configured for this scope: add verification.commands to .taskforge/config.yaml (run "tf init" to generate it).'
+              : `Verification failed: ${verResult.failureReason ?? 'unknown reason'}`,
+          );
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           graph.updateTaskStatus(task.id, 'blocked');
@@ -1062,6 +1112,13 @@ export class DeterministicScheduler {
             collabReview.decision === 'rejected'
               ? `[${task.id}] Collaborative task BLOCKED: independent review rejected the change.`
               : `[${task.id}] Collaborative task BLOCKED: dual review is required but unavailable (${collabReview.reason}).`,
+          );
+          this.noteTaskFailure(
+            task,
+            'review',
+            collabReview.decision === 'rejected'
+              ? `Independent review by ${collabReview.reviewerId} rejected the change: ${collabReview.findings}`
+              : `Dual review is required but unavailable: ${collabReview.reason}`,
           );
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
@@ -1252,6 +1309,7 @@ export class DeterministicScheduler {
             },
             timestamp: new Date(),
           });
+          this.noteTaskFailure(task, 'collaboration', `Emergent collaboration rejected: maxAgentsPerTask limit (${maxAgents}) reached`);
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           return;
@@ -1270,6 +1328,7 @@ export class DeterministicScheduler {
           this.ctx.onProgress?.(
             `[${task.id}] ⚠ Emergent collaboration rejected: no suitable alternative agent found.`,
           );
+          this.noteTaskFailure(task, 'collaboration', 'Emergent collaboration rejected: no suitable alternative agent was available');
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
           return;
@@ -1291,6 +1350,7 @@ export class DeterministicScheduler {
             },
             timestamp: new Date(),
           });
+          this.noteTaskFailure(task, 'collaboration', `Emergent collaboration delayed: no concurrency slot for ${candidateAgent.name}`);
           graph.updateTaskStatus(task.id, 'blocked');
           taskRepo.updateStatus(task.id, 'blocked');
           return;
@@ -1386,6 +1446,11 @@ export class DeterministicScheduler {
         if (!newGovResult.success) {
           graph.updateTaskStatus(task.id, 'failed');
           taskRepo.updateStatus(task.id, 'failed');
+          this.noteTaskFailure(
+            task,
+            'collaboration',
+            `Emergent collaborator ${candidateAgent.name} failed: ${newGovResult.message ?? 'no details'}`,
+          );
           this.ctx.onProgress?.(`[${task.id}] ✗ Emergent collaborator ${candidateAgent.name} failed.`);
           return;
         }
@@ -1508,6 +1573,7 @@ export class DeterministicScheduler {
       this.ctx.onProgress?.(`[${task.id}] ✗ Completion gate rejected: ${failMsg}`);
 
       if (gateResult.failureReason === 'REQUIRED_ACTION_DENIED') {
+        this.noteTaskFailure(task, 'completion', `A required action was denied by policy: ${failMsg}`);
         graph.updateTaskStatus(task.id, 'failed');
         taskRepo.updateStatus(task.id, 'failed');
         await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
@@ -1515,6 +1581,7 @@ export class DeterministicScheduler {
       }
 
       if (task.type === 'review' && gateResult.failureReason === 'ACCEPTANCE_NOT_MET') {
+        this.noteTaskFailure(task, 'completion', `Review acceptance criteria were not met: ${failMsg}`);
         graph.updateTaskStatus(task.id, 'failed');
         taskRepo.updateStatus(task.id, 'failed');
         graph.updateTaskStatus(task.id, 'blocked');

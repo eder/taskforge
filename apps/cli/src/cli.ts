@@ -36,7 +36,12 @@ import {
   DeliveryService,
   integrationBranchName,
 } from '@taskforge/integration';
-import { DeterministicScheduler, RunOrchestrator } from '@taskforge/scheduler';
+import {
+  DeterministicScheduler,
+  RunOrchestrator,
+  describeRunFailures,
+  formatRunFailureLines,
+} from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
 
@@ -70,6 +75,22 @@ export function installGracefulAbort(label: string): { signal: AbortSignal; disp
       process.removeListener('SIGTERM', onTerm);
     },
   };
+}
+
+/** Prints why a run did not complete (which task failed and the recorded reason). */
+export function printRunFailures(db: TaskForgeDatabase, runId: string): void {
+  const lines = formatRunFailureLines(
+    describeRunFailures(
+      { taskRepo: new TaskRepository(db), eventRepo: new EventRepository(db) },
+      runId,
+    ),
+    runId,
+  );
+  if (lines.length === 0) return;
+  console.log('');
+  lines.forEach((line, index) =>
+    console.log(index === 0 ? `${colors.bold}${line}${colors.reset}` : line.trimStart().startsWith('✖') ? `${colors.red}${line}${colors.reset}` : `${colors.dim}${line}${colors.reset}`),
+  );
 }
 
 export function createCli(): Command {
@@ -578,6 +599,7 @@ export function createCli(): Command {
         if (result.integrationBranch) {
           console.log(`Integrated into branch: ${result.integrationBranch}`);
         }
+        if (result.status === 'failed') printRunFailures(db, runId);
 
         db.close();
       },
@@ -630,6 +652,12 @@ export function createCli(): Command {
         console.log(`Integration branch created: ${result.integrationBranch}`);
       }
       console.log(`Duration: ${(result.durationMs / 1000).toFixed(2)}s`);
+      if (result.status === 'failed') {
+        const reportDb = new TaskForgeDatabase(config.execution.databasePath);
+        printRunFailures(reportDb, result.runId);
+        reportDb.close();
+        process.exitCode = 1;
+      }
       if (result.status === 'cancelled') {
         console.log(`Run cancelled. Continue it with: tf resume ${result.runId}`);
         process.exitCode = 130;
@@ -706,6 +734,7 @@ export function createCli(): Command {
         if (result.integrationBranch) {
           console.log(`Integration branch: ${result.integrationBranch}`);
         }
+        if (result.status === 'failed') printRunFailures(db, result.runId);
         if (result.status === 'cancelled') {
           console.log(`Run cancelled. Continue it again with: tf resume ${result.runId}`);
           process.exitCode = 130;
@@ -969,6 +998,7 @@ export function createCli(): Command {
             `  ● ${t.id}: ${t.title} [${t.status.toUpperCase()}] (verified: ${ver ? (ver.passed ? 'YES' : 'NO') : 'N/A'})`,
           );
         }
+        printRunFailures(db, targetRunId);
         if (interactions.length > 0) {
           console.log(`\nInteractions (${interactions.length}):`);
           for (const i of interactions) {

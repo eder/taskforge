@@ -34,6 +34,8 @@ export interface RunDiffContext {
 }
 
 export interface RunSummaryContext {
+  /** Pre-rendered "why the run did not complete" lines (plain text). */
+  failureLines?: string[];
   deliveryService: DeliveryService;
   repoRoot: string;
   telemetry: TelemetryCollector;
@@ -407,6 +409,19 @@ export async function formatRunSummary(ctx: RunSummaryContext, result: Orchestra
     deliveryBlock,
     result.error
       ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
+      : '',
+    ctx.failureLines && ctx.failureLines.length > 0
+      ? '\n' +
+        ctx.failureLines
+          .map((line, index) =>
+            index === 0
+              ? `    ${colors.bold}${line}${colors.reset}`
+              : line.trimStart().startsWith('✖')
+                ? `    ${colors.red}${line}${colors.reset}`
+                : `    ${colors.dim}${line}${colors.reset}`,
+          )
+          .join('\n') +
+        '\n'
       : '',
     `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
     `  ${divider}`,
