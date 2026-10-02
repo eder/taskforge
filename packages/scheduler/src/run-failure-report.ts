@@ -5,7 +5,7 @@ export interface RunFailureLine {
   taskId: string;
   title: string;
   /** 'failed' / 'blocked' ended on their own; 'not_started' never ran. */
-  kind: 'failed' | 'blocked' | 'not_started';
+  kind: 'failed' | 'blocked' | 'not_started' | 'budget';
   reason?: string;
   /** Branch holding the agents' work for this task, if it was kept. */
   keptBranch?: string;
@@ -100,8 +100,25 @@ export function describeRunFailures(
     timestamp: Date | string;
   }>;
 
+  // A run that stopped on its token budget has no failed task to point at; say
+  // so, unless the run was resumed since (then the budget stop is history).
+  const lastStop = [...events]
+    .filter((e) => e.type === 'TOKEN_BUDGET_REACHED' || e.type === 'RUN_RESUMED')
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+  const budgetLines: RunFailureLine[] =
+    lastStop?.type === 'TOKEN_BUDGET_REACHED'
+      ? [
+          {
+            taskId: '',
+            title: '',
+            kind: 'budget',
+            reason: `Stopped at the token budget: ${Number(lastStop.payload.spent).toLocaleString('en-US')} of ${Number(lastStop.payload.budget).toLocaleString('en-US')} tokens. The remaining tasks were not started and nothing was lost.`,
+          },
+        ]
+      : [];
+
   const bad = new Set(tasks.filter((t) => t.status === 'failed' || t.status === 'blocked').map((t) => t.id));
-  const lines: RunFailureLine[] = [];
+  const lines: RunFailureLine[] = [...budgetLines];
 
   for (const task of tasks) {
     if (bad.has(task.id)) {
@@ -136,7 +153,9 @@ export function formatRunFailureLines(lines: RunFailureLine[], runId: string): s
   if (lines.length === 0) return [];
   const out: string[] = ['Why the run did not complete:'];
   for (const line of lines) {
-    if (line.kind === 'not_started') {
+    if (line.kind === 'budget') {
+      out.push(`  ⏸ ${line.reason}`);
+    } else if (line.kind === 'not_started') {
       out.push(`  ○ ${line.taskId}  ${line.title}`);
       out.push(`      not started: waiting for ${line.waitingOn?.join(', ')}`);
     } else {
@@ -148,6 +167,12 @@ export function formatRunFailureLines(lines: RunFailureLine[], runId: string): s
         out.push(`      the agents' work is kept on branch ${line.keptBranch} (nothing was lost)`);
       }
     }
+  }
+  if (lines.length === 1 && lines[0].kind === 'budget') {
+    out.push(
+      `Next: "tf resume ${runId} --budget <more tokens>" continues where it stopped (e.g. --budget 1500000)   ·   tf cost ${runId}   ·   tf abandon ${runId}`,
+    );
+    return out;
   }
   out.push(
     lines.some((l) => l.keptBranch)

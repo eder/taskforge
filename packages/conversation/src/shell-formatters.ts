@@ -39,6 +39,8 @@ export interface RunSummaryContext {
   deliveryService: DeliveryService;
   repoRoot: string;
   telemetry: TelemetryCollector;
+  /** execution.tokenBudget, to show how much of it the run used. */
+  tokenBudget?: number;
 }
 
 /**
@@ -333,6 +335,7 @@ export async function formatRunSummary(ctx: RunSummaryContext, result: Orchestra
             : '',
           `      ${colors.dim}Output:${colors.reset}           ${exactTokens(efficiency.providerOutputTokens)} tokens`,
           `      ${colors.dim}Total:${colors.reset}            ${exactTokens(efficiency.providerReportedTokens)} tokens`,
+          `      ${colors.dim}${ctx.telemetry.formatSpendLine(result.runId, ctx.tokenBudget)}${colors.reset}`,
         ]
           .filter(Boolean)
           .join('\n')

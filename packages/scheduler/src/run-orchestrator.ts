@@ -124,6 +124,8 @@ export interface RunOptions {
    * only make the run more restrictive.
    */
   executionIntent?: ExecutionIntentDecision;
+  /** Token cap for this run; overrides `execution.tokenBudget` (on resume it is the new total cap). */
+  tokenBudget?: number;
 }
 
 export interface OrchestrationResult {
@@ -967,6 +969,8 @@ export class RunOrchestrator {
       },
       onProgress: options.onProgress,
       abortSignal: options.abortSignal,
+      tokenBudget: options.tokenBudget ?? this.config.execution.tokenBudget,
+      tokensSpent: () => this.telemetry.getRunTokenTotal(runId),
       resumeState,
     });
 

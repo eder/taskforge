@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { Command } from 'commander';
-import { loadConfig, getGlobalStateDatabasePath, TASKFORGE_VERSION } from '@taskforge/shared';
+import { loadConfig, getGlobalStateDatabasePath, TASKFORGE_VERSION, parseTokenCount } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import {
   TaskForgeDatabase,
@@ -80,6 +80,26 @@ export function installGracefulAbort(label: string): { signal: AbortSignal; disp
       process.removeListener('SIGTERM', onTerm);
     },
   };
+}
+
+/** Prints what a run actually spent, against the plan's estimate and the budget. */
+export function printRunSpend(db: TaskForgeDatabase, runId: string, budget?: number): void {
+  try {
+    console.log(`${colors.dim}${new TelemetryCollector(db).formatSpendLine(runId, budget)}${colors.reset}`);
+  } catch {
+    // Spend reporting is informational and must never change the outcome.
+  }
+}
+
+/** Reads --budget; exits with a clear message when it is not a token amount. */
+function parseBudgetOption(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = parseTokenCount(value);
+  if (!parsed) {
+    console.error(`Error: --budget expects a number of tokens such as 500000, 500k or 1.5m (got "${value}").`);
+    process.exit(1);
+  }
+  return parsed;
 }
 
 /** Prints why a run did not complete (which task failed and the recorded reason). */
@@ -682,7 +702,8 @@ export function createCli(): Command {
     .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
     .option('--fake', 'Force deterministic fake agent fallback', false)
     .option('--context <run>', 'Give the agents the output of an earlier run (a run id, or "last")')
-    .action(async (goalText?: string, options?: { concurrency?: string; fake?: boolean; context?: string }) => {
+    .option('--budget <tokens>', 'Stop starting new tasks after this many tokens (e.g. 500k); overrides execution.tokenBudget')
+    .action(async (goalText?: string, options?: { concurrency?: string; fake?: boolean; context?: string; budget?: string }) => {
       const repoRoot = process.cwd();
       const config = loadConfig();
       if (options?.concurrency) {
@@ -725,6 +746,7 @@ export function createCli(): Command {
         priorContext = { runId: found.runId, text: renderPriorContext(found), chars: found.chars };
       }
 
+      const budget = parseBudgetOption(options?.budget) ?? config.execution.tokenBudget;
       console.log('TaskForge Pipeline starting...');
       const abort = installGracefulAbort('the run');
       let result;
@@ -732,6 +754,7 @@ export function createCli(): Command {
         result = await orchestrator.run(goalText ?? 'Default execution goal', {
           fakeFallback: options?.fake ?? true,
           priorContext,
+          tokenBudget: budget,
           onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
           abortSignal: abort.signal,
         });
@@ -745,6 +768,9 @@ export function createCli(): Command {
         console.log(`Integration branch created: ${result.integrationBranch}`);
       }
       console.log(`Duration: ${(result.durationMs / 1000).toFixed(2)}s`);
+      const spendDb = new TaskForgeDatabase(config.execution.databasePath);
+      printRunSpend(spendDb, result.runId, budget);
+      spendDb.close();
       if (result.status === 'failed') {
         const reportDb = new TaskForgeDatabase(config.execution.databasePath);
         printRunFailures(reportDb, result.runId);
@@ -803,7 +829,8 @@ export function createCli(): Command {
     .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
     .option('--fake', 'Force deterministic fake agent fallback', false)
     .option('--fresh', 'Discard work kept from blocked tasks and start those tasks over', false)
-    .action(async (runId?: string, options?: { concurrency?: string; fake?: boolean; fresh?: boolean }) => {
+    .option('--budget <tokens>', 'Total token cap for the run, counting what it already spent (e.g. 1.5m)')
+    .action(async (runId?: string, options?: { concurrency?: string; fake?: boolean; fresh?: boolean; budget?: string }) => {
       const repoRoot = process.cwd();
       const config = loadConfig();
       if (options?.concurrency) {
@@ -853,11 +880,13 @@ export function createCli(): Command {
         }
       }
 
+      const budget = parseBudgetOption(options?.budget) ?? config.execution.tokenBudget;
       const abort = installGracefulAbort('the run');
       try {
         const result = await orchestrator.resume(targetRunId, {
           fakeFallback: options?.fake ?? false,
           freshStart: options?.fresh ?? false,
+          tokenBudget: budget,
           onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
           abortSignal: abort.signal,
         });
@@ -866,6 +895,7 @@ export function createCli(): Command {
         if (result.integrationBranch) {
           console.log(`Integration branch: ${result.integrationBranch}`);
         }
+        printRunSpend(db, result.runId, budget);
         if (result.status === 'failed') printRunFailures(db, result.runId);
         if (result.status === 'cancelled') {
           console.log(`Run cancelled. Continue it again with: tf resume ${result.runId}`);
