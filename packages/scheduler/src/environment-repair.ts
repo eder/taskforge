@@ -160,7 +160,7 @@ export function describeFix(fix: EnvironmentFix): string {
   }
 }
 
-function waitForPort(port: number, timeoutMs: number): Promise<boolean> {
+export function waitForPort(port: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve) => {
     const attempt = () => {

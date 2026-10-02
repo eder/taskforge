@@ -409,7 +409,28 @@ Also: tf resume run-…   ·   tf inspect run-…
 | stopped at the token budget | `tf resume <run> --budget <more>` |
 | the work itself failed after retries | `tf resume` (the agent continues from its kept work) |
 
-In the REPL, when the recommendation is `tf resume` and nothing needs fixing first, the summary says *Press Enter to do that now*: a bare Enter (or `/retry`, optionally with a run such as `/retry 2`) continues the run. Typing anything else drops the suggestion. Spending more (a higher budget) and anything that needs your fix first are never one-key actions.
+That table is what the command line prints. The REPL does not hand you commands: it goes into the run (see below).
+
+### In the REPL, a stopped run is a conversation
+
+When a run stops, the REPL **enters it**. It says in plain words what stopped the run, what it would do about it, and what you can do:
+
+```text
+  ✖ Memory extraction [BLOCKED]
+      The checks need something the isolated copy does not have: …
+
+  The checks cannot run in the isolated copy, so the work could not be verified. That is not a problem with the change.
+  What I'd do: link server/.env into the isolated copies so the tests can load it; and start the "memory-postgres" service on port 5432. Then continue the run.
+
+  ↵ Enter: fix this and continue   ·   or just tell me what you want   ·   /back to leave this run
+```
+
+- **Enter** (or a plain "yes") does what it proposed and continues the run. What it proposes depends on the cause: repair the environment and continue; raise the token cap (it says to what) and continue; let the agent continue from the work it kept; re-check after something only you can do.
+- **It asks when it needs something from you.** If the checks need a service on a port and no docker compose file starts it, it asks for the command that starts it, runs what you type, waits for the port and continues. If the project's check command does not work, it asks which command verifies the project, saves it in `.taskforge/config.yaml` and re-checks.
+- **Type anything else** and it goes to that run as your instruction ("use the smaller fixture set"). With a planner model, a message that is clearly a new task leaves the run and is planned normally; without one, the message goes to the run.
+- **`/back`** (or a plain "no") leaves the run. It stays in `/runs` and `/retry` continues it later. Starting a new task or `/clear` also leaves it.
+
+`/fix` and `/retry` still exist for when you want to name a run yourself.
 
 You can inspect task/run state with:
 
