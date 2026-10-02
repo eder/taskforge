@@ -93,6 +93,8 @@ export interface PlannerProvenance {
   provider?: string;
   model?: string;
   fallbackReason?: string;
+  /** Short, secret-free explanation of why the model plan was not used (HTTP error, timeout, invalid plan). */
+  fallbackDetail?: string;
   promptVersion?: string;
   schemaVersion?: string;
 }

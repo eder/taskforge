@@ -603,6 +603,8 @@ tf init --yes      # write without asking (scripts/CI)
 
 `--check` shows the command's first output lines live, prints a heartbeat every 10s, stops the command after the time limit (default 120s), can be stopped with Ctrl-C, and closes stdin so a command waiting for input cannot hang. When a command fails it shows the last lines and, for common causes (asyncio script-style tests run under `pytest`, a missing virtualenv or dependency, tests that need a running service), a specific tip. Use it for projects whose tests do not run the way the detector guesses (for example test files that are run one by one as scripts instead of with `pytest`). Edit the file freely afterwards.
 
+**Test suites run as scripts.** Some projects run each test file directly (`python test_x.py`) instead of with `pytest`. `tf init` recognizes this (most `test_*.py` files have a `__main__` guard or call `asyncio.run`) and proposes a loop over the scripts. With `--check` it runs each script on its own (up to 60s each) and keeps **only the ones that pass in this environment**; the rest are listed as comments with the reason, usually because they need a database, a server or audio. The list is explicit, so add new test files to it as you create them.
+
 When you start `tf` in a project without the file, it prints a short notice (once per project) explaining all of this. You can ignore it: nothing else changes. Set `TASKFORGE_NO_HINTS=1` to never see it. `tf doctor` also shows whether the project has a config.
 
 The file is local to the project you run `tf` in, and `~/.taskforge/config.yaml` can hold settings shared by all projects. Later files override earlier ones: defaults, then global, then project.

@@ -23,6 +23,12 @@ export interface DetectedStack {
   autoDiscovered?: boolean;
   /** Caveat shown to the user and written as a comment. */
   note?: string;
+  /**
+   * Test files that are run one by one as scripts (`python test_x.py`) instead
+   * of with pytest. `commands` is derived from `files`; `tf init --check`
+   * narrows `files` to the ones that pass here and records the rest.
+   */
+  scriptTests?: { dir: string; python: string; files: string[]; excluded?: Array<{ file: string; why: string }> };
 }
 
 export interface ProjectSetup {
@@ -65,6 +71,50 @@ function hasPythonTests(dir: string): boolean {
   }
 }
 
+const SCRIPT_MARKER = /if\s+__name__\s*==\s*['"]__main__['"]|^\s*asyncio\.run\(/m;
+
+/** Test files at the top of `dir` that are meant to be run directly as scripts. */
+function listScriptStyleTests(dir: string): string[] {
+  let files: string[];
+  try {
+    files = fs.readdirSync(dir).filter((name) => /^test_.*\.py$/.test(name)).sort();
+  } catch {
+    return [];
+  }
+  if (files.length === 0) return [];
+  const scripts = files.filter((name) => {
+    try {
+      return SCRIPT_MARKER.test(fs.readFileSync(path.join(dir, name), 'utf8'));
+    } catch {
+      return false;
+    }
+  });
+  // Script style only when most files are scripts: a mixed pytest project with
+  // one script is still a pytest project.
+  return scripts.length / files.length >= 0.6 ? scripts : [];
+}
+
+/** Runs each file in turn with the given interpreter and stops at the first failure. */
+export function scriptLoopCommand(rel: string, python: string, files: string[]): string {
+  const wrapped: string[] = [];
+  let line = '';
+  for (const file of files) {
+    if ((line + ' ' + file).length > 68 && line) {
+      wrapped.push(line);
+      line = file;
+    } else {
+      line = line ? `${line} ${file}` : file;
+    }
+  }
+  if (line) wrapped.push(line);
+  return [
+    `${rel ? `cd ${rel} && ` : ''}for f in \\`,
+    ...wrapped.map((l, i) => `  ${l}${i === wrapped.length - 1 ? '; do' : ' \\'}`),
+    `  ${python} "$f" || { echo "FAILED: $f"; exit 1; }`,
+    'done',
+  ].join('\n');
+}
+
 function pythonStack(root: string, rel: string): { stack: DetectedStack; venvLink?: string } | undefined {
   const dir = rel ? path.join(root, rel) : root;
   const marker = ['pyproject.toml', 'pytest.ini', 'setup.cfg', 'tox.ini', 'requirements.txt'].some((f) =>
@@ -74,6 +124,22 @@ function pythonStack(root: string, rel: string): { stack: DetectedStack; venvLin
 
   const venv = findVenv(dir);
   const python = venv ? `${venv}/bin/python` : 'python3';
+
+  const scripts = listScriptStyleTests(dir);
+  if (scripts.length > 0) {
+    return {
+      stack: {
+        label: `Python (test scripts run one by one) in ${rel ? rel + '/' : './'}`,
+        commands: [scriptLoopCommand(rel, python, scripts)],
+        scriptTests: { dir: rel, python, files: scripts },
+        note:
+          'These tests run as scripts (python test_x.py), not with pytest. The list includes every script; ' +
+          'some may need services (database, server, audio). Run `tf init --check` to keep only the ones that pass here.',
+      },
+      venvLink: venv ? (rel ? `${rel}/${venv}` : venv) : undefined,
+    };
+  }
+
   const command = `${rel ? `cd ${rel} && ` : ''}${python} -m pytest -q`;
   return {
     stack: {
@@ -190,10 +256,24 @@ export function renderProjectConfig(setup: ProjectSetup): string {
       '  # code is BLOCKED if there is nothing to verify it with. Documentation-only',
       '  # changes do not need them.',
       '  commands:',
-      ...commands.map((c) => `    - ${yamlString(c)}`),
+      ...commands.flatMap((c) =>
+        c.includes('\n')
+          ? ['    - |', ...c.split('\n').map((l) => `      ${l}`)]
+          : [`    - ${yamlString(c)}`],
+      ),
     );
     for (const stack of setup.stacks.filter((s) => s.note)) {
       lines.push(`  # ${stack.label}: ${stack.note}`);
+    }
+    for (const stack of setup.stacks) {
+      const excluded = stack.scriptTests?.excluded ?? [];
+      if (excluded.length > 0) {
+        lines.push(
+          '  # Left out because they did not pass when this file was generated (usually they need',
+          '  # a running service, a database, audio input or manual setup). Add them back if they should run:',
+          ...excluded.map((e) => `  #   ${e.file} - ${e.why}`),
+        );
+      }
     }
     lines.push('');
   } else {
