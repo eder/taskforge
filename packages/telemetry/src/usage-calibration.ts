@@ -20,7 +20,8 @@ function quantile(sorted: number[], q: number): number {
 }
 
 function clampRatio(value: number): number {
-  return Math.max(0.25, Math.min(4, value));
+  // Wide enough to learn from a badly under-estimated baseline (observed up to ~13x).
+  return Math.max(0.25, Math.min(25, value));
 }
 
 export class UsageCalibrationEngine {

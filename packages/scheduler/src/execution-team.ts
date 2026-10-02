@@ -622,7 +622,11 @@ async function runConcurrentTeam(
           .removeWorktree(task.id, currentAssignment.id, true, true)
           .catch(() => {});
 
-        if (res.success) {
+        // An investigator that exits cleanly but returns an empty report has
+        // produced no evidence. Counting it as satisfied would let a synthesis
+        // (and the run summary) claim a perspective that does not exist.
+        const emptyReport = res.output !== undefined && res.output.trim() === '';
+        if (res.success && !emptyReport) {
           outputs.push({ role: asgn.role, agentId: currentAgent.id, output: res.output ?? 'Done' });
           roleOutcomes.push({ role: asgn.role, satisfied: true, attempts: attempt });
 
@@ -692,7 +696,9 @@ async function runConcurrentTeam(
 
         const cancelled = Boolean(ctx.abortSignal?.aborted);
         const failureClass = classifyTeamMemberFailure(res.completionReason, cancelled);
-        const reason = res.message || res.output || 'Execution failed';
+        const reason = emptyReport
+          ? `${currentAgent.name} finished without producing any report`
+          : res.message || res.output || 'Execution failed';
 
         if (failureClass !== 'provider_unavailable') {
           // Semantic/permission/cancellation failure: the work itself did

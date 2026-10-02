@@ -424,5 +424,5 @@ export function formatUsageEstimate(estimate: RunUsageEstimate): string {
   const range = `${formatApproxTokens(estimate.minTokens)}–${formatApproxTokens(estimate.maxTokens)}`;
   const level =
     estimate.maxTokens >= 1_000_000 ? colors.red : estimate.maxTokens >= 250_000 ? colors.yellow : colors.dim;
-  return `  ${colors.dim}Estimated usage:${colors.reset} ${level}~${formatApproxTokens(estimate.expectedTokens)} tokens${colors.reset} ${colors.dim}(range ${range}, confidence ${estimate.confidence}; approximate, includes retries only partially)${colors.reset}`;
+  return `  ${colors.dim}Estimated usage:${colors.reset} ${level}~${formatApproxTokens(estimate.expectedTokens)} tokens${colors.reset} ${colors.dim}(range ${range}, confidence ${estimate.confidence}; fresh tokens only, excludes cached context and most retries, so provider totals run higher)${colors.reset}`;
 }

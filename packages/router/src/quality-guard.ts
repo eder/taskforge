@@ -6,6 +6,25 @@ import {
   RouterProposal,
 } from './router-types.js';
 
+/**
+ * Whether the task must change the repository (and so needs an implementer).
+ * Read-only contracts never do; otherwise the explicit completion mode wins,
+ * falling back to the task type for legacy persisted contracts.
+ */
+export function taskRequiresMutation(task: RoutingInput['task']): boolean {
+  if (task.contract.forbiddenChanges?.includes('*')) return false;
+  switch (task.contract.completionMode) {
+    case 'mutation':
+      return true;
+    case 'report':
+    case 'review':
+    case 'verification':
+      return false;
+    default:
+      return task.type === 'implementation' || task.type === 'refactoring';
+  }
+}
+
 export class RouterQualityGuard {
   private static readonly DOMAIN_SIGNALS = [
     {
@@ -44,10 +63,38 @@ export class RouterQualityGuard {
    * Deterministic guardrail to ensure complex, cross-cutting runtime refactors
    * are not erroneously classified as low complexity / low risk.
    */
-  public static evaluate(
-    proposal: RoutingDecision,
-    input: RoutingInput,
-  ): RoutingDecision {
+  public static evaluate(proposal: RoutingDecision, input: RoutingInput): RoutingDecision {
+    return this.ensureImplementer(this.applyPolicies(proposal, input), input);
+  }
+
+  /**
+   * Invariant for every router (static, model, adaptive): a task that must
+   * change code is always staffed with an implementer. Without one the team
+   * path rejects the task at execution time, after other tasks may already
+   * have spent provider quota. Existing non-mutating roles are kept as support.
+   */
+  private static ensureImplementer(decision: RoutingDecision, input: RoutingInput): RoutingDecision {
+    if (!taskRequiresMutation(input.task)) return decision;
+    if (decision.roles.some((role) => role.role === 'implementer')) return decision;
+
+    const roles = [
+      {
+        role: 'implementer' as const,
+        requiredCapabilities: ['canWrite', 'canExecute'],
+        objective: input.task.contract.objective,
+      },
+      ...decision.roles,
+    ];
+    return {
+      ...decision,
+      roles,
+      teamSize: roles.length,
+      strategy: decision.strategy === 'single' ? 'pair' : decision.strategy,
+      reason: `${decision.reason} [Policy: the task requires a code change, so an implementer role was added.]`,
+    };
+  }
+
+  private static applyPolicies(proposal: RoutingDecision, input: RoutingInput): RoutingDecision {
     const text = [
       input.task.title,
       input.task.description,
