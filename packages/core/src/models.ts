@@ -13,6 +13,11 @@ export interface Goal {
   constraints: Constraint[];
   acceptanceCriteria: string[];
   createdAt: Date;
+  /**
+   * Output of an earlier run that this request refers to ("do item 1"). It is
+   * reference data for the planner, never instructions.
+   */
+  context?: string;
 }
 
 export interface Task {

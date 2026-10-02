@@ -56,6 +56,10 @@ import {
   allowedWritersForTask,
   describeRunFailures,
   formatRunFailureLines,
+  referencesPriorWork,
+  findPriorRunContext,
+  renderPriorContext,
+  describeAge,
 } from '@taskforge/scheduler';
 import {
   TaskForgeDatabase,
@@ -138,6 +142,8 @@ export class InteractiveShell {
   private currentGraph?: TaskGraph;
   private activeGoal?: Goal;
   private lastGoalDescription?: string;
+  /** Output of an earlier run attached to the plan being proposed ("do item 1"). */
+  private pendingPriorContext?: { runId: string; text: string; chars: number; createdAt: string };
   private isPaused = false;
   private activeRunId?: string;
   private conversationState: ConversationState = 'IDLE';
@@ -1062,6 +1068,32 @@ export class InteractiveShell {
         };
         this.activeGoal = goal;
 
+        // "do item 1" / "fix what you found" refer to the previous run's report.
+        // Deterministic detection; the planner and agents receive it as
+        // reference data and the user sees exactly what was attached.
+        this.pendingPriorContext = undefined;
+        let contextLine = '';
+        const priorRef = referencesPriorWork(intent.goal);
+        if ((this.config.context?.carryOver ?? true) && (priorRef.follow || priorRef.explicitRunId)) {
+          const found = findPriorRunContext(
+            { runRepo: new RunRepository(this.db), goalRepo: new GoalRepository(this.db) },
+            {
+              explicitRunId: priorRef.explicitRunId,
+              excludeRunId: this.activeRunId,
+              maxAgeHours: this.config.context?.maxAgeHours,
+              maxChars: this.config.context?.maxChars,
+            },
+          );
+          if (found) {
+            const rendered = renderPriorContext(found);
+            this.pendingPriorContext = { runId: found.runId, text: rendered, chars: found.chars, createdAt: found.createdAt };
+            goal.context = rendered;
+            contextLine = `  ${colors.dim}Context:${colors.reset} using the output of ${colors.bold}${found.runId}${colors.reset} ${colors.dim}(${describeAge(found.createdAt)}, ${found.chars} chars${found.truncated ? ', shortened' : ''}) because your message refers to earlier work. Write "sem contexto" to ignore it.${colors.reset}`;
+          } else {
+            contextLine = `  ${colors.yellow}Note:${colors.reset} ${colors.dim}your message seems to refer to earlier work, but there is no recent completed run with a report to use (see tf runs). Planning from your message alone.${colors.reset}`;
+          }
+        }
+
         const executionIntent = detectExecutionIntent(intent.goal);
         const proposedGraph = await this.planner.plan(goal);
         const negotiatedGraph = await this.negotiator.negotiateGraph(
@@ -1163,6 +1195,7 @@ export class InteractiveShell {
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
+          contextLine,
           this.planUsageEstimateLine(tasks, primaryTask.id, selected.length),
           `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
         ].join('\n');
@@ -1359,12 +1392,15 @@ export class InteractiveShell {
         if (isBackground) {
           const graphToRun = this.currentGraph;
           const goalDesc = this.lastGoalDescription ?? 'Approved execution';
+          const priorContext = this.pendingPriorContext;
+          this.pendingPriorContext = undefined;
           this.currentGraph = undefined;
           this.activeExecutionController = new AbortController();
 
           orchestrator
             .run(goalDesc, {
               runId,
+              priorContext,
               preplannedGraph: graphToRun,
               fakeFallback: isFakeRequested,
               abortSignal: this.activeExecutionController.signal,
@@ -1406,11 +1442,14 @@ export class InteractiveShell {
           ].join('\n');
         }
 
+        const foregroundContext = this.pendingPriorContext;
+        this.pendingPriorContext = undefined;
         try {
           const result = await orchestrator.run(
             this.lastGoalDescription ?? 'Approved execution',
             {
               runId,
+              priorContext: foregroundContext,
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
               abortSignal,

@@ -71,6 +71,8 @@ export interface SchedulerContext {
   repoRoot: string;
   /** Verbatim request that started the run. */
   originalUserRequest?: string;
+  /** Reference output of an earlier run the request refers to (see run-context.ts). */
+  priorContext?: string;
   config: TaskForgeConfig;
   graph: TaskGraph;
   agentRegistry: AgentRegistry;
@@ -708,6 +710,7 @@ export class DeterministicScheduler {
         baseCommit: candidateCommit,
         repoRoot: this.ctx.repoRoot,
         originalUserRequest: this.ctx.originalUserRequest,
+        priorContext: this.ctx.priorContext,
         config,
         task: reviewTask,
         assignment: reviewAssignment,
@@ -1364,6 +1367,7 @@ export class DeterministicScheduler {
         baseCommit: taskBaseCommit,
         repoRoot: this.ctx.repoRoot,
         originalUserRequest: this.ctx.originalUserRequest,
+        priorContext: this.ctx.priorContext,
         config,
         task,
         assignment,
@@ -1546,6 +1550,7 @@ export class DeterministicScheduler {
           baseCommit: baseCommitForNew,
           repoRoot: this.ctx.repoRoot,
           originalUserRequest: this.ctx.originalUserRequest,
+          priorContext: this.ctx.priorContext,
           config,
           task,
           assignment: newAsgn,

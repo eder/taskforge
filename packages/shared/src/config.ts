@@ -125,6 +125,16 @@ export const TaskForgeConfigSchema = z.object({
     codex: { enabled: true, maxParallel: 2 },
     agy: { enabled: true, maxParallel: 1 },
   }),
+  context: z
+    .object({
+      /** Attach the report of an earlier run when a request refers to it ("do item 1"). */
+      carryOver: z.boolean().default(true),
+      /** Only runs newer than this are used as context. */
+      maxAgeHours: z.number().positive().default(24),
+      /** Upper bound on the characters of earlier output given to the planner and agents. */
+      maxChars: z.number().int().positive().default(12000),
+    })
+    .default({ carryOver: true, maxAgeHours: 24, maxChars: 12000 }),
   ownership: z
     .object({
       rules: z.array(OwnershipRuleSchema).default([]),

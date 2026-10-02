@@ -108,6 +108,8 @@ export interface RunOptions {
   streamBus?: AgentStreamBus;
   /** resume only: ignore work kept from blocked tasks and start those tasks over. */
   freshStart?: boolean;
+  /** Rendered output of an earlier run the request refers to (see run-context.ts). */
+  priorContext?: { runId: string; text: string; chars: number };
 }
 
 export interface OrchestrationResult {
@@ -325,7 +327,25 @@ export class RunOrchestrator {
 
     // 2. Create Run Record. Persist everything `resume()` needs to rebuild the
     // run later without re-planning (base commit, goal text, base branch).
-    this.runRepo.create(runId, goal.id, { goalDescription, baseCommit, baseBranch });
+    this.runRepo.create(runId, goal.id, {
+      goalDescription,
+      baseCommit,
+      baseBranch,
+      // Kept so a later `tf resume` gives the agents the same context.
+      ...(options.priorContext ? { priorContext: options.priorContext } : {}),
+    });
+    if (options.priorContext) {
+      this.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        type: 'CONTEXT_ATTACHED',
+        payload: { fromRunId: options.priorContext.runId, chars: options.priorContext.chars },
+        timestamp: new Date(),
+      });
+      options.onProgress?.(
+        `Context from run ${options.priorContext.runId} attached (${options.priorContext.chars} chars, reference only).`,
+      );
+    }
 
     // 3. Execution intent is authoritative and must be known before planning.
     // Planning is an advisory interpretation layer; it is never allowed to
@@ -618,6 +638,10 @@ export class RunOrchestrator {
     );
     await this.worktreeManager.prune().catch(() => {});
 
+    if (metadata.priorContext && !options.priorContext) {
+      options = { ...options, priorContext: metadata.priorContext };
+    }
+
     return this.executeGraph({
       runId,
       goalId: run.goalId ?? '',
@@ -865,6 +889,7 @@ export class RunOrchestrator {
       baseCommit,
       repoRoot: this.repoRoot,
       originalUserRequest: goalDescription,
+      priorContext: options.priorContext?.text,
       config: this.config,
       graph,
       agentRegistry: this.agentRegistry,

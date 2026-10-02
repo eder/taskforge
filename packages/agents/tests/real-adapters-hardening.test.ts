@@ -106,6 +106,38 @@ describe('Real-Agent Hardening - Safety & Adapters', () => {
     expect(prompt).not.toContain('Role: implementer');
   });
 
+  it('hands earlier-run context to the agent labelled as reference data', () => {
+    const claude = new ClaudeCodeAdapter();
+    const assignment: AgentAssignment = {
+      id: 'asgn-ctx',
+      taskId: 'TASK-01',
+      agentId: 'claude',
+      role: 'implementer',
+      objective: 'Fix item 1',
+      status: 'running',
+    };
+    const context: AgentContext = {
+      worktreePath: '/tmp/taskforge-ctx',
+      originalUserRequest: 'faça o item 1',
+      priorContext: 'EARLIER REPORT BODY',
+      assignment,
+      mutationAllowed: true,
+      task: {
+        objective: assignment.objective,
+        allowedScope: ['src/**'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['done'],
+        dependencies: [],
+      },
+    };
+    const prompt = (claude as any).buildPrompt(assignment, context) as string;
+    expect(prompt).toContain('REFERENCE DATA');
+    expect(prompt).toContain('EARLIER REPORT BODY');
+    expect(prompt.indexOf('Original user request')).toBeLessThan(prompt.indexOf('EARLIER REPORT BODY'));
+    const without = (claude as any).buildPrompt(assignment, { ...context, priorContext: undefined }) as string;
+    expect(without).not.toContain('REFERENCE DATA');
+  });
+
   it('normalizes the current Codex exec --json agent_message envelope as substantive output', () => {
     const codex = new CodexAdapter();
     const stdout = [

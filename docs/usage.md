@@ -408,6 +408,23 @@ tf resume run-<id>
 
 Without an id, `tf resume` continues the newest run that can be continued; runs that cannot (for example ones created before resume checkpoints existed) are skipped and explained. Tasks already integrated into the run branch are kept and not re-executed. Every other task is reset and re-run with a fresh recovery budget, starting from the cumulative run branch. Planning and negotiation are not repeated. Completed runs cannot be resumed — deliver them with `/diff`, `/apply` or `/pr`.
 
+### Context between runs
+
+Say "faça o item 1", "faça isso", "o que você sugeriu" or name a run (`run-…`) and TaskForge attaches the report of your last completed run (within `context.maxAgeHours`, default 24) to the planner and to the agents. The plan proposal shows the line `Context: using the output of <run> …`, so you always see what was used. To ignore it, add "sem contexto", "do zero" or "from scratch" to the message.
+
+The attached text is **reference data, not instructions**: agents are told to verify it against the repository and follow only your current request. It is stored with the run, so `tf resume` uses the same context.
+
+Headless: `tf run "…" --context <run-id|last>`.
+
+```yaml
+context:
+  carryOver: true     # false disables automatic attachment
+  maxAgeHours: 24     # only runs newer than this are considered
+  maxChars: 12000     # budget; the final (consolidating) output is kept first
+```
+
+Detection is a heuristic on the wording; when a reference is not caught, use `--context` or name the run.
+
 ## 10. Verification and completion
 
 TaskForge separates three ideas that are often incorrectly treated as equivalent:
