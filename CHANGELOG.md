@@ -8,6 +8,11 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- **TaskForge repairs the environment itself.**
+  - **Preflight** (`verification.preflight`, default on): before any agent works on a writable run, the project's check commands run once on the unchanged code. If they cannot start (a missing `.env`, a service that is down) the run stops before any tokens are spent, with the evidence; checks that merely fail on unchanged code are reported and the run continues.
+  - **`tf fix [run]` / `/fix`** (Enter in the REPL): reads the recorded evidence and repairs what it can point at (links a gitignored `.env` through `execution.worktreeLinks`, allows a named variable through `verification.passEnv`, starts the docker compose service that publishes a refused port), writes `.taskforge/config.yaml` keeping its comments, and continues the run. The failure report offers it as the next step and says exactly what it will do.
+  - **Plain-language continuation:** in the REPL, a message about a run that stopped ("fix the reviewer's points") continues that run and gives the message to the agents as an instruction (`AgentContext.userGuidance`); a repairable block is offered first.
+- **Reviewers' findings are acted on.** Reviewers end with `REVIEW_VERDICT: APPROVED|REJECTED` and the required changes; a rejection is sent back to the implementer once in the same worktree (`collaboration.reviewFixPasses`, default 1, `0` = report only). In the pair path a rejection becomes blocking findings.
 - `router.timeoutSeconds` (default 60): how long the planner waits for the model.
 - The plan proposal now says that the team shown is for the first task, that each task is staffed when it starts, and which token cap will stop the run, so the estimate is not read as a ceiling.
 - The failure report prints `git show --stat <branch>` for work the agents kept.

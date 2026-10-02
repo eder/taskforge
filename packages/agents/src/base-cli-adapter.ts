@@ -145,6 +145,11 @@ export abstract class BaseCliAdapter implements AgentAdapter {
         : undefined,
       context.priorContext?.trim() ? context.priorContext : undefined,
       context.priorContext?.trim() ? '' : undefined,
+      context.userGuidance?.trim()
+        ? 'The user asked for this when continuing the run (follow it, within the assignment below):'
+        : undefined,
+      context.userGuidance?.trim() ? context.userGuidance : undefined,
+      context.userGuidance?.trim() ? '' : undefined,
       'TaskForge assignment:',
       `Task ID: ${assignment.taskId}`,
       `Assignment ID: ${assignment.id}`,

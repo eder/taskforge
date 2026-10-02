@@ -376,6 +376,22 @@ TaskForge recognises these failures (missing key or variable, connection refused
 
 Then `tf resume` re-checks the kept work without calling an agent. `git show --stat <kept branch>` (printed in the report) shows what the agents changed in the meantime.
 
+### TaskForge repairs the environment itself
+
+You should not have to fix this by hand. TaskForge does three things so that a run does not end with a to-do list for you:
+
+1. **Preflight.** Before any agent works on a writable run, TaskForge runs your project's check commands once on the unchanged code, in the same isolated copy the agents' work is checked in. If they cannot even start (a missing `.env`, a database that is down), the run stops **before any tokens are spent**, with the evidence. Checks that merely fail on the unchanged code are reported and the run continues. Turn it off with `verification.preflight: false`.
+2. **`tf fix [run]` / `/fix`.** It reads the recorded evidence and the project, and repairs what it can point at:
+   - a gitignored `.env` in your checkout: it is added to `execution.worktreeLinks`, so the isolated copies see it (the agents can read it there too, as they can in your checkout);
+   - a secret-looking variable the failure names and you have: added to `verification.passEnv`;
+   - a service the tests connect to: if the failure refuses a local port and a docker compose file publishes it, `docker compose -f <file> up -d <service>` is run and TaskForge waits for the port.
+   Then it continues the run (`tf fix --no-resume` only repairs). Config changes are written to `.taskforge/config.yaml` with your comments kept. The report offers it as the next step, and in the REPL a bare Enter accepts it; the line says exactly what it will do first.
+3. **Anything else is a plain message.** In the REPL, if what you write is about a run that stopped ("fix the reviewer's points", "continue"), TaskForge continues that run and gives your words to the agents as an instruction. If the run is blocked by something it can repair, it shows the repair, you press Enter, and your instruction is carried through. No run id needed.
+
+### Reviewers' findings are acted on
+
+When a team ends with an independent reviewer, the reviewer is asked to finish with `REVIEW_VERDICT: APPROVED` or `REVIEW_VERDICT: REJECTED` plus the required changes. A rejection is sent back to the implementer once, in the same worktree (`collaboration.reviewFixPasses`, default 1; `0` only reports them), and the fixed work is what goes on to verification. A reviewer that ignores the format changes nothing.
+
 ### One recommended next step
 
 When a run does not complete, the report ends with a single recommendation, not a menu:

@@ -37,7 +37,7 @@ describe('describeRunFailures', () => {
     addEvent('T2', 'TASK_FAILED', { reason: 'Verification is not configured for this scope' });
 
     const lines = describeRunFailures(deps, 'run-1');
-    expect(lines).toEqual([
+    expect(lines).toMatchObject([
       { taskId: 'T2', title: 'Title T2', kind: 'blocked', reason: 'Verification is not configured for this scope' },
       { taskId: 'T3', title: 'Title T3', kind: 'not_started', waitingOn: ['T2'] },
     ]);

@@ -310,6 +310,11 @@ export interface AgentContext {
    * instruction. Agents are told to verify it against the repository.
    */
   priorContext?: string;
+  /**
+   * What the user said when continuing an unfinished run ("fix the reviewer's
+   * points"). Unlike priorContext this IS the user's instruction and is followed.
+   */
+  userGuidance?: string;
   environment?: Record<string, string>;
   abortSignal?: AbortSignal;
   logPath?: string;

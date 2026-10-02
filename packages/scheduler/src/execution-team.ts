@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { REVIEW_CONTRACT, isReviewerRole, reviewChangesFrom, reviewFixObjective } from './review-verdict.js';
 import { AgentAssignment, VerificationResult, ReviewFinding } from '@taskforge/shared';
 import { Task, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter, AgentQuotaTracker } from '@taskforge/agents';
@@ -157,6 +158,7 @@ async function runCollaborativeTeam(
   }
 
   const outputs: string[] = [];
+  const stepOutputs: string[] = [];
   let lastRes: Awaited<ReturnType<typeof executeGovernedAssignment>> | undefined;
   let implementerRes: Awaited<ReturnType<typeof executeGovernedAssignment>> | undefined;
   let worktree: { path: string; branchName?: string } | undefined;
@@ -191,6 +193,7 @@ async function runCollaborativeTeam(
       }`,
     );
     lastRes = res;
+    stepOutputs[i] = res.output ?? '';
     if (i === 0) {
       implementerRes = res;
     }
@@ -207,6 +210,38 @@ async function runCollaborativeTeam(
     }
 
     worktree = { path: res.worktreePath, branchName: assignment.branchName };
+  }
+
+  // A reviewer that asked for changes is not the end: send the findings back to the
+  // implementer once, in the same worktree, so the person does not have to ask.
+  const reviewIdx = chain.map((s) => isReviewerRole(s.selection.roleRequest.role)).lastIndexOf(true);
+  const implIdx = chain.findIndex((s) => s.selection.roleRequest.role === 'implementer');
+  const maxFixPasses = ctx.config.collaboration?.reviewFixPasses ?? 1;
+  if (reviewIdx > 0 && implIdx >= 0 && implIdx < reviewIdx && maxFixPasses > 0) {
+    const review = reviewChangesFrom(stepOutputs[reviewIdx]);
+    if (review.rejected) {
+      const implementer = chain[implIdx].selection;
+      const objective = reviewFixObjective(task.contract.objective, review.changes);
+      ctx.onProgress?.(
+        `[${task.id}] ↻ The reviewer asked for ${review.changes.length} change(s); sending them back to ${implementer.agent.name} (fix pass 1/${maxFixPasses}).`,
+      );
+      const fixAssignment = buildAssignment(task, implementer, objective);
+      ctx.assignmentRepo.create(fixAssignment, ctx.runId);
+      const fixRes = await executeGovernedAssignment(
+        buildGovernedCtx(task, ctx, fixAssignment, implementer.agent, headCommit, {
+          objectiveOverride: objective,
+          existingWorktree: worktree,
+        }),
+      );
+      outputs.push(
+        `[Fix pass - ${implementer.agent.name} (implementer)]:\n${fixRes.output ?? 'Addressed the reviewer findings'}`,
+      );
+      lastRes = fixRes;
+      if (!fixRes.success) {
+        return { success: false, output: outputs.join('\n\n'), worktreePath: fixRes.worktreePath };
+      }
+      worktree = { path: fixRes.worktreePath, branchName: fixAssignment.branchName };
+    }
   }
 
   const finalWorktreePath = worktree?.path ?? implementerRes?.worktreePath ?? lastRes?.worktreePath;
@@ -436,6 +471,12 @@ async function runReviewTeam(
       }
       if (res.findings && res.findings.length > 0) {
         allFindings.push(...res.findings);
+      }
+      // A reviewer that asked for changes in words counts as a finding, so the
+      // existing reject-and-rework path acts on it.
+      const verdict = reviewChangesFrom(res.output);
+      if (verdict.rejected && !(res.findings && res.findings.length > 0)) {
+        for (const change of verdict.changes) allFindings.push({ severity: 'major', description: change });
       }
     }),
   );
@@ -1113,9 +1154,13 @@ async function runCompetitiveTeam(
 function buildAssignment(
   task: Task,
   selection: SelectedAgentAssignment,
-  objective: string,
+  objectiveText: string,
   status: AgentAssignment['status'] = 'running',
 ): AgentAssignment {
+  // Reviewers answer in a format code can act on (see review-verdict.ts).
+  const objective = isReviewerRole(selection.roleRequest.role)
+    ? `${objectiveText}\n${REVIEW_CONTRACT}`
+    : objectiveText;
   return {
     id: `asgn-${task.id}-${randomUUID().slice(0, 8)}`,
     taskId: task.id,
@@ -1144,6 +1189,7 @@ function buildGovernedCtx(
     repoRoot: ctx.repoRoot,
     originalUserRequest: ctx.originalUserRequest,
     priorContext: ctx.priorContext,
+    userGuidance: ctx.userGuidance,
     config: ctx.config,
     task,
     assignment,

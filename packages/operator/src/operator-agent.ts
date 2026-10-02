@@ -26,6 +26,7 @@ export type OperatorIntent =
   | { type: 'add_constraint'; constraint: string; readOnlyScope?: string }
   | { type: 'clear_context' }
   | { type: 'retry_run'; runId?: string }
+  | { type: 'fix_run'; runId?: string }
   | { type: 'approve_plan' }
   | { type: 'reject_plan'; feedback?: string }
   | { type: 'revise_plan'; revision: PlanRevision }
@@ -127,6 +128,9 @@ export class OperatorIntentParser {
       return { type: 'inspect_dashboard' };
     if (text.startsWith('/pause')) return { type: 'pause_execution' };
     if (text.startsWith('/unpause') || text.startsWith('/resume')) return { type: 'resume_execution' };
+    if (text === '/fix' || text.startsWith('/fix ')) {
+      return { type: 'fix_run', runId: text.split(/\s+/)[1] };
+    }
     if (text === '/retry' || text.startsWith('/retry ')) {
       return { type: 'retry_run', runId: text.split(/\s+/)[1] };
     }

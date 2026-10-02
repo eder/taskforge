@@ -1,5 +1,6 @@
 import { TaskRepository, EventRepository } from '@taskforge/persistence';
 import { describeCompletionFailure } from './task-recovery.js';
+import { diagnoseEnvironmentFailure, actionableFixes, describeFix, type EnvironmentFix } from './environment-repair.js';
 
 export interface RunFailureLine {
   taskId: string;
@@ -13,6 +14,8 @@ export interface RunFailureLine {
   waitingOn?: string[];
   /** What kind of problem stopped the task (see task-recovery.ts), when recorded. */
   failureClass?: string;
+  /** The full recorded evidence (check output), for diagnosis; `reason` is its headline. */
+  evidence?: string;
   /** For 'budget': what was spent against the cap. */
   budget?: { spent: number; budget: number };
 }
@@ -140,6 +143,9 @@ export function describeRunFailures(
         reason,
         keptBranch: typeof kept?.payload.branch === 'string' ? kept.payload.branch : undefined,
         failureClass: mine.map((e) => e.payload.failureClass).find((c) => typeof c === 'string') as string | undefined,
+        evidence: mine
+          .map((e) => [e.payload.reason, e.payload.evidence].filter((v) => typeof v === 'string').join('\n'))
+          .find((t) => t.trim().length > 0),
       });
     }
   }
@@ -155,7 +161,11 @@ export function describeRunFailures(
 }
 
 /** Plain-text rendering shared by the CLI and the REPL (callers add color). */
-export function formatRunFailureLines(lines: RunFailureLine[], runId: string): string[] {
+export function formatRunFailureLines(
+  lines: RunFailureLine[],
+  runId: string,
+  options: { spend?: { spent: number; budget: number }; repoRoot?: string } = {},
+): string[] {
   if (lines.length === 0) return [];
   const out: string[] = ['Why the run did not complete:'];
   for (const line of lines) {
@@ -174,7 +184,7 @@ export function formatRunFailureLines(lines: RunFailureLine[], runId: string): s
       }
     }
   }
-  const step = recommendNextStep(lines, runId);
+  const step = recommendNextStep(lines, runId, options.spend, options.repoRoot);
   if (step) {
     out.push(`Next: ${step.command}   — ${step.why}`);
     out.push(`Also: ${step.alternatives.join('   ·   ')}`);
@@ -223,11 +233,22 @@ export function environmentHint(reasons: string[]): string {
     : 'the checks cannot run in this environment';
 }
 
+/** The environment repairs TaskForge can apply by itself for the failures a run recorded. */
+export function environmentFixesFor(lines: RunFailureLine[], repoRoot: string): EnvironmentFix[] {
+  const text = lines
+    .filter((l) => l.failureClass === 'environment' || l.failureClass === 'verification_configuration')
+    .map((l) => l.evidence ?? l.reason ?? '')
+    .join('\n');
+  return text.trim() ? actionableFixes(diagnoseEnvironmentFailure({ repoRoot, text })) : [];
+}
+
 export function recommendNextStep(
   lines: RunFailureLine[],
   runId: string,
   /** What the run has spent so far, to avoid making an expensive retry a one-key action. */
   spend?: { spent: number; budget: number },
+  /** The project root, so environment failures can be diagnosed and offered a repair. */
+  repoRoot?: string,
 ): NextStep | undefined {
   if (lines.length === 0) return undefined;
   const abandon = `tf abandon ${runId} (if no longer needed)`;
@@ -251,6 +272,17 @@ export function recommendNextStep(
       why: `a check command does not work for this project, so no change can be verified; fix it, then "tf resume ${runId}" re-checks the kept work without calling agents`,
       runnable: false,
       alternatives: [`tf resume ${runId}`, inspect],
+    };
+  }
+
+  // An environment failure TaskForge knows how to repair: offer to do it, then continue.
+  const repairs = repoRoot ? environmentFixesFor(lines, repoRoot) : [];
+  if (repairs.length > 0) {
+    return {
+      command: `tf fix ${runId}`,
+      why: `it will ${repairs.map(describeFix).join('; and ')}, then continue the run`,
+      runnable: true,
+      alternatives: [`tf inspect ${runId}`, abandon],
     };
   }
 

@@ -106,6 +106,9 @@ describe('blocked work is kept and reused by tf resume', () => {
     const config = getDefaultConfig();
     config.verification.commands = verificationCommands;
     config.verification.review = false;
+    // These tests exercise what happens after the agent worked; the preflight (tested in
+    // preflight-and-fix.test.ts) would stop a misconfigured check before any agent runs.
+    config.verification.preflight = false;
     return new RunOrchestrator({
       repoRoot: root,
       config,
@@ -256,6 +259,7 @@ describe('blocked work is kept and reused by tf resume', () => {
       const config = getDefaultConfig();
       config.verification.commands = commands;
       config.verification.review = false;
+      config.verification.preflight = false;
       return new RunOrchestrator({
         repoRoot: root,
         config,

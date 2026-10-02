@@ -289,6 +289,7 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/cancel` | Cancel the active run or one active assignment |
 | `/pause` | Pause orchestrator execution |
 | `/unpause` | Continue a paused execution (`/resume` still works; it is not the same as `tf resume`) |
+| `/fix` | Repair what blocked a run (link a missing `.env`, start the database service) and continue it; pressing Enter accepts the suggestion |
 | `/retry` | Continue a failed, cancelled or interrupted run (same as `tf resume`); pressing Enter accepts the suggested retry |
 | `/clear` | Start fresh: earlier runs stop being used as context for new requests |
 | `/cost` | Show token usage and cost telemetry |

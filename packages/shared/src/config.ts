@@ -124,6 +124,12 @@ export const TaskForgeConfigSchema = z.object({
       maxAgentsPerTask: z.number().int().positive().default(3),
       maxMessagesPerRound: z.number().int().positive().default(6),
       maxRounds: z.number().int().positive().default(3),
+      /**
+       * When an independent reviewer asks for changes, send them back to the
+       * implementer this many times (default 1) before the task is judged. 0 = the
+       * reviewer's findings are only reported.
+       */
+      reviewFixPasses: z.number().int().min(0).default(1),
     })
     .default({
       maxAgentsPerTask: 3,
@@ -163,6 +169,12 @@ export const TaskForgeConfigSchema = z.object({
       enforceScope: z.boolean().default(true),
       /** Per-command timeout for verification commands. */
       commandTimeoutSeconds: z.number().int().positive().default(600),
+      /**
+       * Before any agent works, run the project's check commands once on the
+       * unchanged code. If they cannot run here (missing .env, service down), stop
+       * before spending tokens, instead of discovering it after the work is done.
+       */
+      preflight: z.boolean().default(true),
       /** Extra environment variable names verification commands may see (secret-looking names are otherwise withheld). */
       passEnv: z.array(z.string()).default([]),
       dualReview: DualReviewSchema.default({}),

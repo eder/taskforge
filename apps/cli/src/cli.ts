@@ -54,6 +54,8 @@ import {
   resolveRunRef,
   describeRunConfidence,
   formatRunConfidence,
+  planRunRepair,
+  repairRun,
 } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector, computeInsights, formatInsights } from '@taskforge/telemetry';
@@ -158,6 +160,7 @@ export function printRunFailures(db: TaskForgeDatabase, runId: string): void {
       runId,
     ),
     runId,
+    { repoRoot: process.cwd() },
   );
   if (lines.length === 0) return;
   console.log('');
@@ -1134,6 +1137,56 @@ export function createCli(): Command {
       } finally {
         db.close();
       }
+    });
+
+  // tf fix [run]
+  program
+    .command('fix [run]')
+    .description('Repair what blocked a run (a missing .env, a service that is down) and continue it')
+    .option('--no-resume', 'Repair only; do not continue the run')
+    .action(async (runRef?: string, options?: { resume?: boolean }) => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+      const deps = { taskRepo: new TaskRepository(db), eventRepo: new EventRepository(db) };
+
+      const targetRunId = runRef
+        ? resolveRunOrExit(db, runRef)
+        : runRepo.listAll().find((r) => r.status === 'failed' || r.status === 'cancelled')?.id;
+      if (!targetRunId) {
+        console.error('\nNothing to fix: no failed run. `tf runs` lists them.\n');
+        db.close();
+        process.exit(1);
+      }
+
+      const plan = planRunRepair(deps, repoRoot, targetRunId);
+      if (plan.fixes.length === 0) {
+        console.log(`\nNothing TaskForge can repair on its own for ${targetRunId}.`);
+        console.log(`\`tf inspect ${targetRunId}\` shows why it stopped; \`tf resume ${targetRunId}\` continues it once the cause is fixed.\n`);
+        db.close();
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge Fix${colors.reset} ${colors.dim}(${targetRunId})${colors.reset}`);
+      for (const description of plan.descriptions) console.log(`  ${colors.green}•${colors.reset} ${description}`);
+      const repair = await repairRun(deps, repoRoot, targetRunId);
+      db.close();
+      for (const line of repair.applied?.applied ?? []) console.log(`  ${colors.green}✔${colors.reset} ${line}`);
+      for (const line of repair.applied?.failed ?? []) console.log(`  ${colors.red}✖${colors.reset} ${line}`);
+      if ((repair.applied?.failed.length ?? 0) > 0) {
+        console.log(`\nNot continuing: fix the ✖ above, then run \`tf fix ${targetRunId}\` again.\n`);
+        process.exitCode = 1;
+        return;
+      }
+      if (options?.resume === false) {
+        console.log(`\nRepaired. Continue with: tf resume ${targetRunId}\n`);
+        return;
+      }
+      console.log('');
+      // A fresh command so the configuration just written is the one that is loaded.
+      await createCli().parseAsync(['resume', targetRunId], { from: 'user' });
     });
 
   // tf undo [run]

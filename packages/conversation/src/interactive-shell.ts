@@ -63,6 +63,8 @@ import {
   describeRunFailures,
   formatRunFailureLines,
   recommendNextStep,
+  planRunRepair,
+  repairRun,
   describeRunConfidence,
   formatRunConfidence,
   type RunConfidence,
@@ -161,8 +163,10 @@ export class InteractiveShell {
   private lastGoalDescription?: string;
   /** Intent settled when the plan was proposed (deterministic reading + planner model, stricter wins). */
   private settledIntent?: ExecutionIntentDecision;
-  /** A failed run whose recommended next step is safe to run on Enter (see recommendNextStep). */
-  private suggestedRetry?: string;
+  /** The slash command a bare Enter runs: the recommended next step of a failed run (see recommendNextStep). */
+  private suggestedAction?: string;
+  /** What the user asked for while a run was waiting on a repair; given to the agents once it continues. */
+  private pendingGuidance?: { runId: string; text: string };
   /** Output of an earlier run attached to the plan being proposed ("do item 1"). */
   private pendingPriorContext?: { runId: string; text: string; chars: number; createdAt: string };
   private isPaused = false;
@@ -591,14 +595,16 @@ export class InteractiveShell {
       result.status === 'failed'
         ? describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, result.runId)
         : [];
-    const failureLines = formatRunFailureLines(failures, result.runId);
-    const step = recommendNextStep(failures, result.runId, {
+    const spend = {
       spent: this.telemetry.getRunTokenTotal(result.runId),
       budget: this.config.execution.tokenBudget,
-    });
+    };
+    const failureLines = formatRunFailureLines(failures, result.runId, { spend, repoRoot: this.repoRoot });
+    const step = recommendNextStep(failures, result.runId, spend, this.repoRoot);
     if (step?.runnable) {
-      this.suggestedRetry = result.runId;
-      failureLines.push('Press Enter to do that now (or /retry).');
+      const fixing = step.command.startsWith('tf fix');
+      this.suggestedAction = `${fixing ? '/fix' : '/retry'} ${result.runId}`;
+      failureLines.push(`Press Enter to do that now (or ${fixing ? '/fix' : '/retry'}).`);
     }
     const summary = await formatRunSummary(
       {
@@ -738,9 +744,9 @@ export class InteractiveShell {
     const text = input.trim();
     if (!text) {
       // Enter alone accepts the one suggested next step, if there is one.
-      return this.suggestedRetry ? this.handleInput(`/retry ${this.suggestedRetry}`, abortSignal) : '';
+      return this.suggestedAction ? this.handleInput(this.suggestedAction, abortSignal) : '';
     }
-    if (!text.startsWith('/retry')) this.suggestedRetry = undefined;
+    if (!text.startsWith('/retry') && !text.startsWith('/fix')) this.suggestedAction = undefined;
 
     if (text === '/exit' || text === '/quit' || text === 'exit' || text === 'quit') {
       return 'Session closed.';
@@ -1183,6 +1189,47 @@ export class InteractiveShell {
         }
       }
 
+      case 'fix_run': {
+        const runs = new RunRepository(this.db);
+        const resolved = intent.runId ? resolveRunRef(runs, intent.runId) : undefined;
+        if (resolved && 'error' in resolved) return resolved.error;
+        const runId =
+          (resolved && 'runId' in resolved ? resolved.runId : undefined) ??
+          runs.listAll().find((r) => ['failed', 'cancelled'].includes(r.status))?.id;
+        if (!runId) return 'Nothing to fix: no failed run. See /runs.';
+
+        this.suggestedAction = undefined;
+        const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
+        if (plan.fixes.length === 0) {
+          return `${colors.dim}Nothing TaskForge can repair on its own for ${runId}. /inspect ${runId} shows why it stopped; /retry ${runId} continues it once the cause is fixed.${colors.reset}`;
+        }
+        this.viewport.writeUpper(
+          `\n  ${colors.brand}✦ ${colors.bold}TaskForge Fix${colors.reset}\n${plan.descriptions.map((d) => `  ${colors.green}•${colors.reset} ${d}`).join('\n')}\n`,
+        );
+        const repair = await repairRun({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
+        const applied = repair.applied;
+        // Keep this session's view of the config in step with the file just written.
+        if (applied?.linksAdded.length) {
+          this.config.execution.worktreeLinks = [
+            ...new Set([...(this.config.execution.worktreeLinks ?? []), ...applied.linksAdded]),
+          ];
+        }
+        if (applied?.envAdded.length) {
+          this.config.verification.passEnv = [
+            ...new Set([...(this.config.verification.passEnv ?? []), ...applied.envAdded]),
+          ];
+        }
+        const doneLines = (applied?.applied ?? []).map((l) => `  ${colors.green}✔${colors.reset} ${l}`);
+        const failedLines = (applied?.failed ?? []).map((l) => `  ${colors.red}✖${colors.reset} ${l}`);
+        this.viewport.writeUpper([...doneLines, ...failedLines].join('\n'));
+        if (failedLines.length > 0) {
+          return `${colors.yellow}Not continuing: fix the ✖ above, then /fix ${runId} again.${colors.reset}`;
+        }
+        const guidance = this.pendingGuidance?.runId === runId ? this.pendingGuidance.text : undefined;
+        this.pendingGuidance = undefined;
+        return this.continueRun(runId, guidance);
+      }
+
       case 'retry_run': {
         const runs = new RunRepository(this.db);
         const resolved = intent.runId ? resolveRunRef(runs, intent.runId) : undefined;
@@ -1191,56 +1238,7 @@ export class InteractiveShell {
           (resolved && 'runId' in resolved ? resolved.runId : undefined) ??
           runs.listAll().find((r) => ['failed', 'cancelled', 'running'].includes(r.status))?.id;
         if (!runId) return 'Nothing to retry: no failed, cancelled or interrupted runs. See /runs.';
-
-        const orchestrator = this.buildOrchestrator();
-        const notResumable = await orchestrator.checkResumable(runId);
-        if (notResumable) return notResumable;
-
-        this.suggestedRetry = undefined;
-        this.activeRunId = runId;
-        this.conversationState = 'EXECUTING';
-        const controller = new AbortController();
-        this.activeExecutionController = controller;
-        this.viewport.writeUpper(
-          `\n  ${colors.brand}✦ ${colors.bold}TaskForge Resume${colors.reset}\n  ${colors.green}✔${colors.reset} Continuing ${colors.bold}${runId}${colors.reset}: integrated tasks are kept, the rest runs again.\n`,
-        );
-        const finish = async (result: OrchestrationResult): Promise<string> => {
-          this.activeExecutionController = undefined;
-          this.activeRunId = result.runId;
-          this.conversationState =
-            result.status === 'completed' &&
-            this.deliveryService.getDelivery(result.runId)?.status === 'ready_to_apply'
-              ? 'DELIVERY_READY'
-              : 'IDLE';
-          return this.formatRunSummary(result);
-        };
-        const execution = orchestrator.resume(runId, {
-          abortSignal: controller.signal,
-          activityTracker: this.activityTracker,
-          onProgress: (msg) => this.viewport.writeUpper(theme.formatProgressMessage(msg)),
-        });
-        if (this.options.asyncExecution ?? this.viewport.isInteractive) {
-          execution
-            .then(async (result) => {
-              this.viewport.writeUpper(`\n${await finish(result)}\n`);
-              this.viewport.drawFooter('');
-            })
-            .catch((err) => {
-              this.activeExecutionController = undefined;
-              this.conversationState = 'IDLE';
-              if (controller.signal.aborted || err.message?.includes('database is not open')) return;
-              this.viewport.writeUpper(`\n  ${colors.red}✕ Resume error:${colors.reset} ${err.message}\n`);
-              this.viewport.drawFooter('');
-            });
-          return `  ${colors.dim}Running in background (Run: ${runId}). The REPL stays active: /tasks, /stream <task>.${colors.reset}\n`;
-        }
-        try {
-          return await finish(await execution);
-        } catch (err) {
-          this.activeExecutionController = undefined;
-          this.conversationState = 'IDLE';
-          return `${colors.red}✕ Resume error: ${(err as Error).message}${colors.reset}`;
-        }
+        return this.continueRun(runId);
       }
 
       case 'clear_context': {
@@ -1315,22 +1313,41 @@ export class InteractiveShell {
             }
           } else {
             const candidates = findPriorRunCandidates(deps, { ...limits, limit: 3 });
-            if (candidates.length > 0) {
+            const unfinished = await this.findUnfinishedRun(limits);
+            const offered = [
+              ...candidates.map((c) => ({
+                id: c.runId,
+                goal: c.goal,
+                createdAt: c.createdAt,
+                excerpt: c.text.slice(0, 400),
+                state: 'completed' as const,
+              })),
+              ...(unfinished
+                ? [{ id: unfinished.runId, goal: unfinished.goal, createdAt: unfinished.createdAt, excerpt: unfinished.summary, state: 'not_finished' as const }]
+                : []),
+            ].sort((x, y) => y.createdAt.localeCompare(x.createdAt));
+            if (offered.length > 0) {
               let chosen: string | null | undefined;
               if (this.planner instanceof SemanticPlanner && this.planner.canSelectEarlierRun()) {
                 chosen = await this.planner.selectEarlierRun(
                   intent.goal,
-                  candidates.map((c) => ({
-                    id: c.runId,
+                  offered.map((c) => ({
+                    id: c.id,
                     goal: c.goal,
                     age: describeAge(c.createdAt),
-                    excerpt: c.text.slice(0, 400),
+                    excerpt: c.excerpt,
+                    state: c.state,
                   })),
                 );
               }
               // No model, or it could not answer: a very short message is the
               // only signal that does not depend on the language.
-              if (chosen === undefined) chosen = isShortFollowUp(intent.goal) ? candidates[0].runId : null;
+              if (chosen === undefined) chosen = isShortFollowUp(intent.goal) ? offered[0].id : null;
+              if (unfinished && chosen === unfinished.runId) {
+                this.activeGoal = undefined;
+                this.lastGoalDescription = undefined;
+                return this.respondToUnfinishedRun(unfinished.runId, intent.goal);
+              }
               found = candidates.find((c) => c.runId === chosen);
             }
           }
@@ -1758,6 +1775,109 @@ export class InteractiveShell {
    * One-time, non-blocking notice for projects without .taskforge/config.yaml.
    * The file is optional; this only explains that it exists and how to create it.
    */
+  /** The newest failed or cancelled run that can still be continued, within the context window. */
+  private async findUnfinishedRun(limits: {
+    maxAgeHours?: number;
+    notBefore?: Date;
+    excludeRunId?: string;
+  }): Promise<{ runId: string; goal: string; createdAt: string; summary: string } | undefined> {
+    const maxAgeMs = (limits.maxAgeHours ?? 24) * 3_600_000;
+    const run = new RunRepository(this.db)
+      .listAll()
+      .find((r) => r.status === 'failed' || r.status === 'cancelled');
+    if (!run || run.id === limits.excludeRunId) return undefined;
+    const created = new Date(run.createdAt);
+    if (Date.now() - created.getTime() > maxAgeMs) return undefined;
+    if (limits.notBefore && created < limits.notBefore) return undefined;
+    if (await this.buildOrchestrator().checkResumable(run.id)) return undefined;
+
+    const lines = describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, run.id);
+    const summary = lines
+      .filter((l) => l.kind !== 'not_started')
+      .map((l) => (l.kind === 'budget' ? l.reason : `${l.title}: ${l.reason ?? 'stopped'}`))
+      .join(' | ')
+      .slice(0, 400);
+    const goalId = run.goalId;
+    const goal = goalId ? new GoalRepository(this.db).get(goalId)?.description : undefined;
+    return {
+      runId: run.id,
+      goal: (goal ?? '').split('\n').find((l) => l.trim())?.trim().slice(0, 200) ?? '',
+      createdAt: run.createdAt,
+      summary: `NOT FINISHED (${run.status}): ${summary || 'stopped before completing'}`,
+    };
+  }
+
+  /**
+   * The user's message was about a run that stopped. Continue it with the message
+   * as an instruction; if the run is blocked by something TaskForge can repair,
+   * offer that first (one Enter) and carry the instruction through.
+   */
+  private async respondToUnfinishedRun(runId: string, message: string): Promise<string> {
+    const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
+    if (plan.fixes.length === 0) return this.continueRun(runId, message);
+    this.pendingGuidance = { runId, text: message };
+    this.suggestedAction = `/fix ${runId}`;
+    return [
+      `${colors.brand}✦ ${colors.bold}${runId} stopped on the environment, not on your request${colors.reset}`,
+      ...plan.descriptions.map((d) => `  ${colors.green}•${colors.reset} ${d}`),
+      `  ${colors.dim}Press Enter and I will do that and then continue with your instruction.${colors.reset}`,
+    ].join('\n');
+  }
+
+  /** Continues an unfinished run (the REPL's `tf resume`), optionally with what the user just asked for. */
+  private async continueRun(runId: string, guidance?: string): Promise<string> {
+        const orchestrator = this.buildOrchestrator();
+        const notResumable = await orchestrator.checkResumable(runId);
+        if (notResumable) return notResumable;
+
+        this.suggestedAction = undefined;
+        this.activeRunId = runId;
+        this.conversationState = 'EXECUTING';
+        const controller = new AbortController();
+        this.activeExecutionController = controller;
+        this.viewport.writeUpper(
+          `\n  ${colors.brand}✦ ${colors.bold}TaskForge Resume${colors.reset}\n  ${colors.green}✔${colors.reset} Continuing ${colors.bold}${runId}${colors.reset}: integrated tasks are kept, the rest runs again.${guidance ? ` ${colors.dim}Your instruction goes to the agents: "${guidance.slice(0, 80)}${guidance.length > 80 ? '…' : ''}"${colors.reset}` : ''}\n`,
+        );
+        const finish = async (result: OrchestrationResult): Promise<string> => {
+          this.activeExecutionController = undefined;
+          this.activeRunId = result.runId;
+          this.conversationState =
+            result.status === 'completed' &&
+            this.deliveryService.getDelivery(result.runId)?.status === 'ready_to_apply'
+              ? 'DELIVERY_READY'
+              : 'IDLE';
+          return this.formatRunSummary(result);
+        };
+        const execution = orchestrator.resume(runId, {
+          abortSignal: controller.signal,
+          activityTracker: this.activityTracker,
+          guidance,
+          onProgress: (msg) => this.viewport.writeUpper(theme.formatProgressMessage(msg)),
+        });
+        if (this.options.asyncExecution ?? this.viewport.isInteractive) {
+          execution
+            .then(async (result) => {
+              this.viewport.writeUpper(`\n${await finish(result)}\n`);
+              this.viewport.drawFooter('');
+            })
+            .catch((err) => {
+              this.activeExecutionController = undefined;
+              this.conversationState = 'IDLE';
+              if (controller.signal.aborted || err.message?.includes('database is not open')) return;
+              this.viewport.writeUpper(`\n  ${colors.red}✕ Resume error:${colors.reset} ${err.message}\n`);
+              this.viewport.drawFooter('');
+            });
+          return `  ${colors.dim}Running in background (Run: ${runId}). The REPL stays active: /tasks, /stream <task>.${colors.reset}\n`;
+        }
+        try {
+          return await finish(await execution);
+        } catch (err) {
+          this.activeExecutionController = undefined;
+          this.conversationState = 'IDLE';
+          return `${colors.red}✕ Resume error: ${(err as Error).message}${colors.reset}`;
+        }
+  }
+
   /** The no-sandbox warning, once per machine, so it is seen even by someone who skips `tf setup`. */
   private securityNotice(): string {
     if (!shouldShowSecurityNotice()) return '';
@@ -1814,7 +1934,7 @@ export class InteractiveShell {
       for await (const line of rl) {
         const trimmed = line.trim();
         if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'exit' || trimmed === 'quit') break;
-        if (!trimmed && !this.suggestedRetry) continue;
+        if (!trimmed && !this.suggestedAction) continue;
         const reply = await this.handleInput(trimmed);
         if (reply) {
           outStream.write(`${reply}\n`);
@@ -2363,7 +2483,7 @@ export class InteractiveShell {
       }
 
       // A bare Enter only means something while a retry is being suggested.
-      if (!trimmed && !this.suggestedRetry) {
+      if (!trimmed && !this.suggestedAction) {
         continue;
       }
 
