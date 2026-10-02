@@ -304,12 +304,17 @@ export class OperatorIntentParser {
       return { type: 'create_pr' };
     }
 
-    // Approval / Rejection
+    // Approval / Rejection. "no ..." and "y ..." are also ordinary first words of
+    // a new request in other languages ("No modifiques nada...", "Y también..."),
+    // so a leading yes/no only counts as an answer when something is waiting for one.
+    const awaitingAnswer =
+      context?.conversationState === 'AWAITING_PLAN_APPROVAL' ||
+      Boolean(context?.hasActivePlan) ||
+      Boolean(context?.hasPendingInteractions);
     if (
       lower === 'yes' ||
       lower === 'y' ||
-      lower.startsWith('yes ') ||
-      lower.startsWith('y ') ||
+      (awaitingAnswer && (lower.startsWith('yes ') || lower.startsWith('y '))) ||
       lower.includes('approve plan') ||
       lower.includes('go ahead') ||
       lower.includes('proceed') ||
@@ -321,9 +326,7 @@ export class OperatorIntentParser {
     if (
       lower === 'no' ||
       lower === 'n' ||
-      lower.startsWith('no,') ||
-      lower.startsWith('no ') ||
-      lower.startsWith('n ') ||
+      (awaitingAnswer && (lower.startsWith('no,') || lower.startsWith('no ') || lower.startsWith('n '))) ||
       lower.includes('cancel plan') ||
       lower.includes('discard plan') ||
       lower.includes('abort plan') ||

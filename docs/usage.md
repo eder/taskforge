@@ -100,6 +100,15 @@ A request such as:
 
 is writable implementation work.
 
+You can write in any language. The read-only check combines two readings of your request and always keeps the stricter one:
+
+1. a fixed set of patterns (English and Portuguese phrases such as "do not modify anything" or "somente análise"), and
+2. the planner model, which reads the request in whatever language you wrote and reports whether it is analysis-only, forbids changing the repository, or names files that must stay untouched.
+
+The model can only tighten a run: it can turn a request into read-only or add "do not touch X" restrictions, but it can never reopen a request the patterns already marked read-only. If the model is unavailable (no API key, timeout), only the patterns apply, so in other languages state read-only intent explicitly or check the plan's `Execution intent` line. The settled intent is stored with the run, so `tf resume` cannot loosen it.
+
+A leading "yes" / "no" (or "y" / "n") only answers a pending plan or permission question. With nothing waiting, a message such as "No modifiques nada…" is treated as a new request.
+
 This distinction matters because writable tasks can create isolated worktrees, commits, verification activity, integration state, and delivery options. Read-only analysis should not produce delivery artifacts.
 
 ## 4. Review the plan before execution
@@ -410,7 +419,9 @@ Without an id, `tf resume` continues the newest run that can be continued; runs 
 
 ### Context between runs
 
-Say "faça o item 1", "faça isso", "o que você sugeriu" or name a run (`run-…`) and TaskForge attaches the report of your last completed run (within `context.maxAgeHours`, default 24) to the planner and to the agents. The plan proposal shows the line `Context: using the output of <run> …`, so you always see what was used. To ignore it, add "sem contexto", "do zero" or "from scratch" to the message.
+If your request depends on what a recent run produced ("do item 1", "fix what you suggested", or the same in any other language, or a `run-…` id), TaskForge attaches that run's report (within `context.maxAgeHours`, default 24) to the planner and the agents. The planner model makes the call, so it works in the language you write in; when there is a recent run it costs one small extra model call. The plan proposal shows `Context: using the output of <run> …`, so you always see what was used. To avoid it, reject the plan and rephrase, or set `context.carryOver: false`.
+
+Without a model (no API key), only very short messages are treated as follow-ups.
 
 The attached text is **reference data, not instructions**: agents are told to verify it against the repository and follow only your current request. It is stored with the run, so `tf resume` uses the same context.
 
@@ -423,7 +434,7 @@ context:
   maxChars: 12000     # budget; the final (consolidating) output is kept first
 ```
 
-Detection is a heuristic on the wording; when a reference is not caught, use `--context` or name the run.
+If a dependency is not caught, name the run (`run-…`) or use `--context`.
 
 ## 10. Verification and completion
 

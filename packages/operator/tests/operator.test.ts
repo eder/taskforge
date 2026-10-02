@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { OperatorAgent } from '../src/operator-agent.js';
+import { OperatorAgent, OperatorIntentParser } from '../src/operator-agent.js';
 
 describe('OperatorAgent Intent Layer', () => {
   const operator = new OperatorAgent();
@@ -148,5 +148,20 @@ describe('OperatorAgent Intent Layer', () => {
     expect(resp).toContain('COMPLETED');
     expect(resp).toContain('TASK-2');
     expect(resp).toContain('RUNNING');
+  });
+});
+
+describe('leading "no"/"y" in other languages', () => {
+  it('is a new request, not an answer, when nothing is waiting for one', () => {
+    const idle = { conversationState: 'IDLE' as const };
+    expect(OperatorIntentParser.parse('No modifiques nada del repositorio, dime qué falta', idle).type).toBe('submit_goal');
+    expect(OperatorIntentParser.parse('Y también añade pruebas para el módulo de reintentos', idle).type).toBe('submit_goal');
+  });
+
+  it('still answers a plan that is waiting for approval', () => {
+    const waiting = { conversationState: 'AWAITING_PLAN_APPROVAL' as const, hasActivePlan: true };
+    expect(OperatorIntentParser.parse('no, use a different approach', waiting).type).toBe('reject_plan');
+    expect(OperatorIntentParser.parse('yes', {}).type).toBe('approve_plan');
+    expect(OperatorIntentParser.parse('no', {}).type).toBe('reject_plan');
   });
 });

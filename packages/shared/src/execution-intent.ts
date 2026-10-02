@@ -266,3 +266,68 @@ export function detectExecutionIntent(goalDescription: string): ExecutionIntentD
         : 'Goal text contains or implies implementation work.',
   };
 }
+
+/**
+ * A model's reading of what the user asked for, in whatever language they wrote.
+ * The patterns above only know a few languages, so for everyone else they can
+ * miss "do not touch the repository". The model closes that gap, but it can only
+ * make a run MORE restrictive: see `mostRestrictiveIntent`.
+ */
+export interface ModelIntentJudgement {
+  /** The request only asks to analyse, explain, review or answer, or forbids changing the repository. */
+  readOnly: boolean;
+  /** Files or components the user says must not be changed while still asking for changes elsewhere. */
+  forbiddenTargets: string[];
+}
+
+export function decisionFromJudgement(judgement: ModelIntentJudgement): ExecutionIntentDecision {
+  if (judgement.readOnly) {
+    return {
+      intent: 'READ_ONLY_ANALYSIS',
+      mutationAllowed: false,
+      deliveryAllowed: false,
+      allowedScope: [],
+      forbiddenChanges: ['*'],
+      reason: 'The planner model read the request as analysis-only or forbidding repository changes.',
+    };
+  }
+  const targets = judgement.forbiddenTargets.map((t) => t.trim()).filter(Boolean);
+  return {
+    intent: 'IMPLEMENTATION',
+    mutationAllowed: true,
+    deliveryAllowed: true,
+    allowedScope: ['*'],
+    forbiddenChanges: targets,
+    reason:
+      targets.length > 0
+        ? `The planner model found scoped no-modification constraints: ${targets.join(', ')}.`
+        : 'The planner model read the request as implementation work.',
+  };
+}
+
+/**
+ * Combines two readings of the same request. The result is never more
+ * permissive than either: read-only wins, and scoped prohibitions are unioned.
+ * A missing second reading (no model, or it failed) leaves the first unchanged.
+ */
+export function mostRestrictiveIntent(
+  base: ExecutionIntentDecision,
+  other?: ExecutionIntentDecision,
+): ExecutionIntentDecision {
+  if (!other) return base;
+  if (!base.mutationAllowed) return base;
+  if (!other.mutationAllowed) return other;
+  const seen = new Set<string>();
+  const forbiddenChanges = [...base.forbiddenChanges, ...other.forbiddenChanges].filter((target) => {
+    const key = target.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (forbiddenChanges.length === base.forbiddenChanges.length) return base;
+  return {
+    ...base,
+    forbiddenChanges,
+    reason: `${base.reason} ${other.reason}`.trim(),
+  };
+}

@@ -16,6 +16,9 @@ import {
   AgentMessage,
   ActiveAgentState,
   detectExecutionIntent,
+  mostRestrictiveIntent,
+  decisionFromJudgement,
+  type ExecutionIntentDecision,
   TASKFORGE_VERSION,
 } from '@taskforge/shared';
 import {
@@ -56,7 +59,9 @@ import {
   allowedWritersForTask,
   describeRunFailures,
   formatRunFailureLines,
-  referencesPriorWork,
+  extractRunId,
+  isShortFollowUp,
+  findPriorRunCandidates,
   findPriorRunContext,
   renderPriorContext,
   describeAge,
@@ -142,6 +147,8 @@ export class InteractiveShell {
   private currentGraph?: TaskGraph;
   private activeGoal?: Goal;
   private lastGoalDescription?: string;
+  /** Intent settled when the plan was proposed (deterministic reading + planner model, stricter wins). */
+  private settledIntent?: ExecutionIntentDecision;
   /** Output of an earlier run attached to the plan being proposed ("do item 1"). */
   private pendingPriorContext?: { runId: string; text: string; chars: number; createdAt: string };
   private isPaused = false;
@@ -1068,33 +1075,63 @@ export class InteractiveShell {
         };
         this.activeGoal = goal;
 
-        // "do item 1" / "fix what you found" refer to the previous run's report.
-        // Deterministic detection; the planner and agents receive it as
-        // reference data and the user sees exactly what was attached.
+        // A request can lean on the previous run's report ("do item 1"). Which
+        // runs it could lean on is found here; whether it does is decided by the
+        // planner model, which reads any language. The planner and agents get the
+        // report as reference data and the user sees exactly what was attached.
         this.pendingPriorContext = undefined;
         let contextLine = '';
-        const priorRef = referencesPriorWork(intent.goal);
-        if ((this.config.context?.carryOver ?? true) && (priorRef.follow || priorRef.explicitRunId)) {
-          const found = findPriorRunContext(
-            { runRepo: new RunRepository(this.db), goalRepo: new GoalRepository(this.db) },
-            {
-              explicitRunId: priorRef.explicitRunId,
-              excludeRunId: this.activeRunId,
-              maxAgeHours: this.config.context?.maxAgeHours,
-              maxChars: this.config.context?.maxChars,
-            },
-          );
+        if (this.config.context?.carryOver ?? true) {
+          const deps = { runRepo: new RunRepository(this.db), goalRepo: new GoalRepository(this.db) };
+          const limits = {
+            excludeRunId: this.activeRunId,
+            maxAgeHours: this.config.context?.maxAgeHours,
+            maxChars: this.config.context?.maxChars,
+          };
+          const explicitRunId = extractRunId(intent.goal);
+          let found: ReturnType<typeof findPriorRunContext>;
+          if (explicitRunId) {
+            found = findPriorRunContext(deps, { ...limits, explicitRunId });
+            if (!found) {
+              contextLine = `  ${colors.yellow}Note:${colors.reset} ${colors.dim}${explicitRunId} has no report to use (see tf runs). Planning from your message alone.${colors.reset}`;
+            }
+          } else {
+            const candidates = findPriorRunCandidates(deps, { ...limits, limit: 3 });
+            if (candidates.length > 0) {
+              let chosen: string | null | undefined;
+              if (this.planner instanceof SemanticPlanner && this.planner.canSelectEarlierRun()) {
+                chosen = await this.planner.selectEarlierRun(
+                  intent.goal,
+                  candidates.map((c) => ({
+                    id: c.runId,
+                    goal: c.goal,
+                    age: describeAge(c.createdAt),
+                    excerpt: c.text.slice(0, 400),
+                  })),
+                );
+              }
+              // No model, or it could not answer: a very short message is the
+              // only signal that does not depend on the language.
+              if (chosen === undefined) chosen = isShortFollowUp(intent.goal) ? candidates[0].runId : null;
+              found = candidates.find((c) => c.runId === chosen);
+            }
+          }
           if (found) {
             const rendered = renderPriorContext(found);
             this.pendingPriorContext = { runId: found.runId, text: rendered, chars: found.chars, createdAt: found.createdAt };
             goal.context = rendered;
-            contextLine = `  ${colors.dim}Context:${colors.reset} using the output of ${colors.bold}${found.runId}${colors.reset} ${colors.dim}(${describeAge(found.createdAt)}, ${found.chars} chars${found.truncated ? ', shortened' : ''}) because your message refers to earlier work. Write "sem contexto" to ignore it.${colors.reset}`;
-          } else {
-            contextLine = `  ${colors.yellow}Note:${colors.reset} ${colors.dim}your message seems to refer to earlier work, but there is no recent completed run with a report to use (see tf runs). Planning from your message alone.${colors.reset}`;
+            contextLine = `  ${colors.dim}Context:${colors.reset} using the output of ${colors.bold}${found.runId}${colors.reset} ${colors.dim}(${describeAge(found.createdAt)}, ${found.chars} chars${found.truncated ? ', shortened' : ''}) because your request depends on it. Reject this plan and rephrase to start fresh, or set context.carryOver: false.${colors.reset}`;
           }
         }
 
-        const executionIntent = detectExecutionIntent(intent.goal);
+        let executionIntent = detectExecutionIntent(intent.goal);
+        if (this.planner instanceof SemanticPlanner) {
+          const judgement = await this.planner.judgeExecutionIntent(intent.goal);
+          if (judgement) {
+            executionIntent = mostRestrictiveIntent(executionIntent, decisionFromJudgement(judgement));
+          }
+        }
+        this.settledIntent = executionIntent;
         const proposedGraph = await this.planner.plan(goal);
         const negotiatedGraph = await this.negotiator.negotiateGraph(
           proposedGraph,
@@ -1352,8 +1389,9 @@ export class InteractiveShell {
         }
 
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
-        const currentExecutionIntent = detectExecutionIntent(
-          this.lastGoalDescription ?? this.activeGoal?.description ?? '',
+        const currentExecutionIntent = mostRestrictiveIntent(
+          detectExecutionIntent(this.lastGoalDescription ?? this.activeGoal?.description ?? ''),
+          this.settledIntent,
         );
         const isReadOnlyAutoRun = currentExecutionIntent.intent === 'READ_ONLY_ANALYSIS';
 
@@ -1401,6 +1439,7 @@ export class InteractiveShell {
             .run(goalDesc, {
               runId,
               priorContext,
+              executionIntent: currentExecutionIntent,
               preplannedGraph: graphToRun,
               fakeFallback: isFakeRequested,
               abortSignal: this.activeExecutionController.signal,
@@ -1450,6 +1489,7 @@ export class InteractiveShell {
             {
               runId,
               priorContext: foregroundContext,
+              executionIntent: currentExecutionIntent,
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
               abortSignal,
