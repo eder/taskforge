@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   AgentRuntimeEvent,
   AgentSession,
@@ -105,7 +106,7 @@ export class InteractionGateway {
 
         if (decision === 'allow') {
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: 'allow',
             source: 'policy',
@@ -117,7 +118,7 @@ export class InteractionGateway {
 
         if (decision === 'deny') {
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: 'deny',
             source: 'policy',
@@ -132,7 +133,7 @@ export class InteractionGateway {
           const fallback = this.config.headless.onUnknownPermission;
           if (fallback === 'allow') {
             await session.respond({
-              id: `resp-${Date.now()}`,
+              id: `resp-${randomUUID()}`,
               requestId: event.requestId,
               decision: 'allow',
               source: 'policy',
@@ -143,7 +144,7 @@ export class InteractionGateway {
           }
           // Default headless: deny without hanging
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: 'deny',
             source: 'policy',
@@ -190,7 +191,7 @@ export class InteractionGateway {
 
         if (routeResult.outcome === 'AUTO_RESOLVE' && routeResult.answer) {
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: 'answer',
             payload: routeResult.answer,
@@ -203,7 +204,7 @@ export class InteractionGateway {
 
         if (routeResult.outcome === 'POLICY_DENY') {
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: 'deny',
             payload: routeResult.reason,
@@ -216,7 +217,7 @@ export class InteractionGateway {
 
         if (routeResult.outcome === 'POLICY_ALLOW') {
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: 'allow',
             payload: routeResult.answer,
@@ -229,7 +230,7 @@ export class InteractionGateway {
 
         if (routeResult.outcome === 'BLOCK') {
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: 'cancel',
             payload: routeResult.reason,
@@ -244,7 +245,7 @@ export class InteractionGateway {
         if (isHeadless) {
           const action = this.config.headless.onHumanQuestion;
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: action === 'fail' ? 'cancel' : 'deny',
             payload: `Cannot ask human in headless mode (onHumanQuestion=${action})`,
@@ -282,7 +283,7 @@ export class InteractionGateway {
         if (isHeadless) {
           const action = this.config.headless.onConfirmationRequired;
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: action === 'block' ? 'deny' : 'cancel',
             payload: `Confirmation denied in headless mode`,
@@ -317,7 +318,7 @@ export class InteractionGateway {
         if (isHeadless) {
           const action = this.config.headless.onAuthenticationRequired;
           await session.respond({
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId: event.requestId,
             decision: action === 'fail' ? 'cancel' : 'deny',
             payload: `Authentication required but unavailable in headless mode`,
@@ -384,7 +385,7 @@ export class InteractionGateway {
           }
           const defaultDecision = this.config.interactions.onTimeout[timeoutKind];
           resolve({
-            id: `resp-timeout-${Date.now()}`,
+            id: `resp-timeout-${randomUUID()}`,
             requestId: request.id,
             decision: defaultDecision === 'allow' ? 'allow' : 'deny',
             payload: `Timed out after ${timeoutMs}ms`,
@@ -419,7 +420,7 @@ export class InteractionGateway {
         const req = this.interactionRepo.getRequest(requestId);
         if (req && req.status === 'pending') {
           const response: InteractionResponse = {
-            id: `resp-${Date.now()}`,
+            id: `resp-${randomUUID()}`,
             requestId,
             decision,
             payload,
@@ -456,7 +457,7 @@ export class InteractionGateway {
     this.pendingInteractions.delete(requestId);
 
     const response: InteractionResponse = {
-      id: `resp-${Date.now()}`,
+      id: `resp-${randomUUID()}`,
       requestId,
       decision,
       payload,
@@ -508,7 +509,7 @@ export class InteractionGateway {
     for (const [id, pending] of this.pendingInteractions.entries()) {
       if (pending.timer) clearTimeout(pending.timer);
       pending.resolve({
-        id: `resp-cancel-${Date.now()}`,
+        id: `resp-cancel-${randomUUID()}`,
         requestId: id,
         decision: 'cancel',
         payload: 'Interaction cancelled',

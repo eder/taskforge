@@ -648,6 +648,27 @@ Execution/orchestration statistics:
 /stats
 ```
 
+### How TaskForge is doing in this project
+
+```bash
+tf insights               # last 30 days
+tf insights --since 7     # last 7 days
+tf insights --json
+```
+
+```text
+Last 30 days: 14 runs
+  Outcomes: 8 completed, 4 failed, 2 abandoned
+  Finished successfully: 57% of the runs that ended
+  Needed tf resume: 5
+  What stopped work most:
+    3×  a check command that does not work for the project
+    2×  the token budget was reached
+  Tokens: 2,140,000 in total, about 214,000 per run (~$3.10)
+```
+
+It shows where to invest (a recurring stop cause is a config or environment fix, not a model problem) without anyone pasting logs. It is computed from this project's local database only; nothing is collected or sent.
+
 ### Capping what a run can spend
 
 At the end of every run TaskForge prints what it actually used, for example:
