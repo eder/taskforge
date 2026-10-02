@@ -117,6 +117,15 @@ function isTerminalProviderError(error: unknown): boolean {
   return status === 400 || status === 401 || status === 403 || status === 404 || status === 429;
 }
 
+/** One short line describing why the model plan was rejected or never arrived. */
+export function summarizePlannerFailure(errors: string[]): string | undefined {
+  const first = errors.find((e) => e && e.trim());
+  if (!first) return 'the model returned no usable plan';
+  const more = errors.length > 1 ? ` (+${errors.length - 1} more)` : '';
+  const text = first.replace(/sk-[A-Za-z0-9_-]{6,}/g, 'sk-***').replace(/\s+/g, ' ').trim();
+  return `${text.slice(0, 160)}${more}`;
+}
+
 export class SemanticPlanner implements Planner {
   private apiKey?: string;
   private model: string;
@@ -220,8 +229,8 @@ export class SemanticPlanner implements Planner {
     }
 
     // 1. Try semantic planning with model caller if configured
+    let lastErrors: string[] = [];
     if (this.customCaller || apiKey) {
-      let lastErrors: string[] = [];
 
       for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
         try {
@@ -272,9 +281,11 @@ export class SemanticPlanner implements Planner {
       });
       if (validation.valid && validation.graph) {
         const fallbackReason = apiKey || this.customCaller ? 'model_unresponsive_or_invalid' : undefined;
+        const fallbackDetail = fallbackReason ? summarizePlannerFailure(lastErrors) : undefined;
         const plannerProvenance: PlannerProvenance = {
           source: 'deterministic_decomposition',
           fallbackReason,
+          fallbackDetail,
           promptVersion: this.promptVersion,
           schemaVersion: this.schemaVersion,
         };
@@ -296,6 +307,7 @@ export class SemanticPlanner implements Planner {
     const plannerProvenance: PlannerProvenance = {
       source: 'heuristic_fallback',
       fallbackReason,
+      fallbackDetail: apiKey || this.customCaller ? summarizePlannerFailure(lastErrors) : undefined,
       model: this.model,
       promptVersion: this.promptVersion,
       schemaVersion: this.schemaVersion,
@@ -668,7 +680,19 @@ Output strictly according to the json_schema.`,
       });
 
       if (!response.ok) {
-        throw new Error(`OpenAI planner API failed: HTTP ${response.status}`);
+        // The provider's message says what was wrong (rejected schema, bad
+        // model, quota); a bare status gives the user nothing to act on.
+        const body = await Promise.resolve()
+          .then(() => response.text())
+          .catch(() => '');
+        let message = '';
+        try {
+          message = (JSON.parse(body) as { error?: { message?: string } }).error?.message ?? '';
+        } catch {
+          message = body;
+        }
+        message = message.replace(/sk-[A-Za-z0-9_-]{6,}/g, 'sk-***').replace(/\s+/g, ' ').trim().slice(0, 200);
+        throw new Error(`OpenAI planner API failed: HTTP ${response.status}${message ? `: ${message}` : ''}`);
       }
 
       const json = (await response.json()) as {

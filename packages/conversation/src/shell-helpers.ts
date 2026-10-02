@@ -62,11 +62,11 @@ export function plannerSourceLabel(
   }
 
   if (plannerMeta?.source === 'deterministic_decomposition') {
-    return `Deterministic decomposition${plannerMeta.fallbackReason ? ` (${plannerMeta.fallbackReason})` : ''}`;
+    return `Deterministic decomposition${plannerMeta.fallbackReason ? ` (${plannerMeta.fallbackReason}${plannerMeta.fallbackDetail ? `: ${plannerMeta.fallbackDetail}` : ''})` : ''}`;
   }
 
   if (plannerMeta?.source === 'heuristic_fallback') {
-    return `Heuristic fallback${plannerMeta.fallbackReason ? ` (${plannerMeta.fallbackReason})` : ''}`;
+    return `Heuristic fallback${plannerMeta.fallbackReason ? ` (${plannerMeta.fallbackReason}${plannerMeta.fallbackDetail ? `: ${plannerMeta.fallbackDetail}` : ''})` : ''}`;
   }
 
   if (graphMetadata?.source === 'semantic') {

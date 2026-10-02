@@ -97,3 +97,50 @@ export async function runCheckCommand(command: string, options: CheckOptions): P
     if (heartbeat) clearInterval(heartbeat);
   }
 }
+
+export interface ScriptCalibration {
+  passed: string[];
+  failed: Array<{ file: string; why: string }>;
+}
+
+/**
+ * Runs each script-style test file on its own and keeps the ones that pass.
+ * A suite like this usually mixes self-contained tests with scripts that need
+ * a database, a server or audio; running them all in one command would make
+ * verification fail forever for reasons unrelated to the change being checked.
+ */
+export async function calibrateScriptTests(options: {
+  repoRoot: string;
+  dir: string;
+  python: string;
+  files: string[];
+  timeoutSecondsPerFile: number;
+  signal?: AbortSignal;
+  onFile?: (file: string, outcome: 'passed' | 'failed', why?: string) => void;
+}): Promise<ScriptCalibration> {
+  const passed: string[] = [];
+  const failed: Array<{ file: string; why: string }> = [];
+  for (const file of options.files) {
+    if (options.signal?.aborted) break;
+    const command = `${options.dir ? `cd ${options.dir} && ` : ''}${options.python} "${file}"`;
+    const result = await runCheckCommand(command, {
+      cwd: options.repoRoot,
+      timeoutSeconds: options.timeoutSecondsPerFile,
+      signal: options.signal,
+    });
+    if (result.status === 'passed') {
+      passed.push(file);
+      options.onFile?.(file, 'passed');
+    } else if (result.status === 'cancelled') {
+      break;
+    } else {
+      const why =
+        result.status === 'timeout'
+          ? `timed out after ${options.timeoutSecondsPerFile}s`
+          : (result.tail[result.tail.length - 1] ?? `exit ${result.exitCode}`).slice(0, 100);
+      failed.push({ file, why });
+      options.onFile?.(file, 'failed', why);
+    }
+  }
+  return { passed, failed };
+}

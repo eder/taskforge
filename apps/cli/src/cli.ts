@@ -22,6 +22,8 @@ import {
   parseAgeSpec,
   detectProjectSetup,
   runCheckCommand,
+  calibrateScriptTests,
+  scriptLoopCommand,
   renderProjectConfig,
   writeProjectConfig,
   hasProjectConfig,
@@ -357,7 +359,6 @@ export function createCli(): Command {
       }
 
       const setup = detectProjectSetup(repoRoot);
-      const content = renderProjectConfig(setup);
 
       console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge project setup${colors.reset}`);
       console.log(
@@ -370,15 +371,57 @@ export function createCli(): Command {
           console.log(`  Detected: ${stack.label}${stack.autoDiscovered ? ' (TaskForge finds these checks itself)' : ''}`);
         }
       }
-      console.log(`\n  ${colors.dim}--- proposed ${PROJECT_CONFIG_RELATIVE_PATH} ---${colors.reset}`);
-      console.log(content.split('\n').map((l) => `  ${l}`).join('\n'));
-      console.log(`  ${colors.dim}--- end ---${colors.reset}\n`);
+      console.log('');
 
       if (options.check) {
-        const commands = setup.stacks.flatMap((stack) => stack.commands);
         const timeoutSeconds = Math.max(5, parseInt(options.checkTimeout ?? '120', 10) || 120);
-        if (commands.length === 0) console.log('  --check: no detected command to run.\n');
         const abort = installGracefulAbort('the check');
+
+        // Script-style suites: run each file on its own and keep only those that pass here.
+        for (const stack of setup.stacks.filter((st) => st.scriptTests)) {
+          const suite = stack.scriptTests!;
+          console.log(`  --check: running ${suite.files.length} test scripts one by one (${stack.label})`);
+          console.log(
+            `  ${colors.dim}(each stops after ${Math.min(timeoutSeconds, 60)}s; Ctrl-C to stop; only the ones that pass are kept)${colors.reset}`,
+          );
+          const calibration = await calibrateScriptTests({
+            repoRoot,
+            dir: suite.dir,
+            python: suite.python,
+            files: suite.files,
+            timeoutSecondsPerFile: Math.min(timeoutSeconds, 60),
+            signal: abort.signal,
+            onFile: (file, outcome, why) =>
+              console.log(
+                outcome === 'passed'
+                  ? `  ${colors.green}✔${colors.reset} ${file}`
+                  : `  ${colors.red}✖${colors.reset} ${file} ${colors.dim}${why ?? ''}${colors.reset}`,
+              ),
+          });
+          if (abort.signal.aborted) {
+            console.log(`  ${colors.yellow}■${colors.reset} stopped before finishing. Nothing was written.\n`);
+            process.exitCode = 130;
+            abort.dispose();
+            return;
+          }
+          suite.files = calibration.passed;
+          suite.excluded = calibration.failed;
+          stack.note =
+            'Calibrated by `tf init --check`: only the test scripts that passed in this environment are listed. ' +
+            'They run one by one (python test_x.py), not with pytest.';
+          stack.commands =
+            calibration.passed.length > 0
+              ? [scriptLoopCommand(suite.dir, suite.python, calibration.passed)]
+              : [];
+          console.log(
+            `  ${calibration.passed.length} passed, ${calibration.failed.length} left out (listed in the file as comments).\n`,
+          );
+        }
+
+        const commands = setup.stacks.filter((st) => !st.scriptTests).flatMap((stack) => stack.commands);
+        if (commands.length === 0 && !setup.stacks.some((st) => st.scriptTests)) {
+          console.log('  --check: no detected command to run.\n');
+        }
         for (const command of commands) {
           console.log(`  --check: running ${command}`);
           console.log(
@@ -421,6 +464,11 @@ export function createCli(): Command {
         }
         abort.dispose();
       }
+
+      const content = renderProjectConfig(setup);
+      console.log(`\n  ${colors.dim}--- proposed ${PROJECT_CONFIG_RELATIVE_PATH} ---${colors.reset}`);
+      console.log(content.split('\n').map((l) => `  ${l}`).join('\n'));
+      console.log(`  ${colors.dim}--- end ---${colors.reset}\n`);
 
       if (options.print) return;
 

@@ -211,7 +211,20 @@ export class VerificationRunner {
 
       if (runResult.exitCode !== 0 && expectation === 'pass') {
         overallPassed = false;
-        failureReason = `Check '${check.name}' failed with exit code ${runResult.exitCode}`;
+        // Say what failed, not just that something did: a bare exit code left
+        // the user (and the retrying agent) with nothing to act on.
+        const tail = `${runResult.stdout}\n${runResult.stderr}`
+          .split('\n')
+          .map((line) => line.trimEnd())
+          .filter(Boolean)
+          .slice(-6)
+          .join('\n')
+          .slice(-600);
+        failureReason =
+          `Check '${check.name}' failed with exit code ${runResult.exitCode}` +
+          (runResult.timedOut ? ' (timed out)' : '') +
+          `\nCommand: ${check.command.split('\n')[0].slice(0, 200)}` +
+          (tail ? `\nLast output:\n${tail}` : '');
         break; // stop on first required-to-pass verification failure
       }
     }
