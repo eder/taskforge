@@ -51,6 +51,7 @@ import {
 } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
+import { runSetup } from './setup.js';
 
 /**
  * Headless commands must survive Ctrl-C gracefully: the first SIGINT/SIGTERM
@@ -84,6 +85,10 @@ export function installGracefulAbort(label: string): { signal: AbortSignal; disp
   };
 }
 
+/** Shown by every command that needs a repository. */
+const NOT_A_GIT_REPO =
+  'This folder is not a git repository.\nNext: cd into your project, or run `git init` here, then try again. (`tf setup` walks through the first-time checks.)';
+
 /** Prints what a run actually spent, against the plan's estimate and the budget. */
 export function printRunSpend(db: TaskForgeDatabase, runId: string, budget?: number): void {
   try {
@@ -115,12 +120,13 @@ function printRunConfidence(db: TaskForgeDatabase, runId: string): 'verified' | 
   return confidence.headline;
 }
 
-/** Asks a yes/no question on the terminal; anything but y/yes is a no. */
-async function confirmOnTerminal(question: string): Promise<boolean> {
+/** Asks a yes/no question on the terminal. Unless `defaultYes`, anything but y/yes is a no. */
+async function confirmOnTerminal(question: string, defaultYes = false): Promise<boolean> {
   const readline = await import('node:readline/promises');
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = (await rl.question(question)).trim().toLowerCase();
+    if (defaultYes && answer === '') return true;
     return answer === 'y' || answer === 'yes';
   } finally {
     rl.close();
@@ -132,7 +138,7 @@ function parseBudgetOption(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = parseTokenCount(value);
   if (!parsed) {
-    console.error(`Error: --budget expects a number of tokens such as 500000, 500k or 1.5m (got "${value}").`);
+    console.error(`--budget expects a number of tokens such as 500000, 500k or 1.5m (got "${value}"). Example: --budget 500k`);
     process.exit(1);
   }
   return parsed;
@@ -347,6 +353,38 @@ export function createCli(): Command {
       console.log(
         `\n  ${colors.green}✔${colors.reset} ${colors.bold}Diagnostic complete.${colors.reset}\n`,
       );
+    });
+
+  // tf setup
+  program
+    .command('setup')
+    .description('Guided first-time setup: checks the environment, creates the project config and runs a small read-only test task')
+    .option('-y, --yes', 'Accept the defaults without asking (also runs the test task)', false)
+    .option('--no-smoke', 'Skip the small test task')
+    .action(async (options: { yes?: boolean; smoke?: boolean }) => {
+      const repoRoot = process.cwd();
+      const outcome = await runSetup({
+        interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+        yes: options.yes ?? false,
+        smoke: options.smoke !== false,
+        isGitRepo: () => new GitService(repoRoot).isGitRepo(),
+        hasConfig: () => hasProjectConfig(repoRoot),
+        readyAgents: async () => {
+          const availabilityDb = new TaskForgeDatabase(getGlobalStateDatabasePath());
+          try {
+            AgentQuotaTracker.getInstance().configureStore(new AgentAvailabilityRepository(availabilityDb));
+            const registry = new AgentRegistry(true, loadConfig().agents);
+            const reports = await AgentDetector.detect(registry.list());
+            return reports.filter((r) => r.ready).map((r) => r.id);
+          } finally {
+            availabilityDb.close();
+          }
+        },
+        ask: (question, defaultYes) => confirmOnTerminal(question, defaultYes),
+        runCommand: (args) => createCli().parseAsync(args, { from: 'user' }).then(() => undefined),
+        log: (line) => console.log(line),
+      });
+      if (outcome.status === 'needs_attention') process.exitCode = 1;
     });
 
   // tf health
@@ -597,7 +635,7 @@ export function createCli(): Command {
         const gitService = new GitService(repoRoot);
         const isGit = await gitService.isGitRepo();
         if (!isGit) {
-          console.error('Error: Must be run inside a Git repository.');
+          console.error(NOT_A_GIT_REPO);
           process.exit(1);
         }
 
@@ -751,7 +789,7 @@ export function createCli(): Command {
       const gitService = new GitService(repoRoot);
       const isGit = await gitService.isGitRepo();
       if (!isGit) {
-        console.error('Error: Must be run inside a Git repository.');
+        console.error(NOT_A_GIT_REPO);
         process.exit(1);
       }
 
@@ -776,8 +814,8 @@ export function createCli(): Command {
         if (!found) {
           console.error(
             options.context === 'last'
-              ? 'Error: no recent completed run with a report to use as context. See `tf runs`.'
-              : `Error: run ${options.context} not found or has no recorded output.`,
+              ? 'No recent completed run with a report to use as context. `tf runs` lists them; run an analysis first, or name a run: --context <number|id>.'
+              : `Run ${options.context} was not found or has no recorded output. Use \`tf runs\` to list runs, or --context last.`,
           );
           process.exit(1);
         }
@@ -877,7 +915,7 @@ export function createCli(): Command {
 
       const gitService = new GitService(repoRoot);
       if (!(await gitService.isGitRepo())) {
-        console.error('Error: Must be run inside a Git repository.');
+        console.error(NOT_A_GIT_REPO);
         process.exit(1);
       }
 
@@ -1013,7 +1051,7 @@ export function createCli(): Command {
 
       const targetRunId = runId ? resolveRunOrExit(db, runId) : runRepo.listAll()[0]?.id;
       if (!targetRunId) {
-        console.error('Error: No run found. Specify a run: tf pr create <run> (number, last or id)');
+        console.error('\nNo run found to open a pull request for. Run `tf runs` to see them, or name one: tf pr create <number|last|id>.\n');
         db.close();
         process.exit(1);
       }
@@ -1055,7 +1093,7 @@ export function createCli(): Command {
 
       const targetRunId = runId ? resolveRunOrExit(db, runId) : deliveryService.findLatestReady()?.runId;
       if (!targetRunId) {
-        console.error('Error: No run is ready to apply. Specify a run: tf apply <run> (number, last or id)');
+        console.error('\nNo run is ready to apply. `tf runs` shows which runs have changes waiting (they list an Apply line); or name one: tf apply <number|last|id>.\n');
         db.close();
         process.exit(1);
       }
@@ -1154,7 +1192,8 @@ export function createCli(): Command {
           console.log(`Integrated changes into branch: ${result.integrationBranch}`);
         }
       } catch (err) {
-        console.error(`Error importing issue: ${(err as Error).message}`);
+        console.error(`\nCould not import the issue: ${(err as Error).message}`);
+        console.error('Check that the GitHub CLI is signed in (`gh auth status`) and that you are inside the repository the issue belongs to.\n');
       } finally {
         db.close();
       }

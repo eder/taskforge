@@ -1751,7 +1751,7 @@ export class InteractiveShell {
       '',
       `  ${colors.dim}ℹ This project has no .taskforge/config.yaml. It is optional: TaskForge works with its defaults.${colors.reset}`,
       `  ${colors.dim}  It mainly tells TaskForge how to verify code changes (needed for non-Node projects).${colors.reset}`,
-      `  ${colors.dim}  Create one with \`tf init\` (it shows the file before writing), or ignore this. Shown once.${colors.reset}`,
+      `  ${colors.dim}  Create one with \`tf init\` (it shows the file before writing), or run \`tf setup\` for a guided first-time check. Shown once.${colors.reset}`,
       '',
     ].join('\n');
   }
