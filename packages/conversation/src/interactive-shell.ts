@@ -90,6 +90,7 @@ import {
   routerSourceLabel,
   findWordLeft,
   findWordRight,
+  summarizeGoal,
 } from './shell-helpers.js';
 import {
   formatActiveTasksView,
@@ -842,7 +843,9 @@ export class InteractiveShell {
         const runLines = runs.slice(0, 10).map((r) => {
           const goal = r.goalId ? goalRepo.get(r.goalId) : undefined;
           const statusBadge = theme.statusBadge(r.status);
-          const goalDesc = goal ? `\n    ${colors.dim}Goal:${colors.reset}   ${goal.description}` : '';
+          const goalDesc = goal
+            ? `\n    ${colors.dim}Goal:${colors.reset}   ${summarizeGoal(goal.description)}`
+            : '';
           const delivery = this.deliveryService.getDelivery(r.id);
           let deliveryBlock = '';
           if (delivery) {

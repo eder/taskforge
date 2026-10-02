@@ -36,7 +36,7 @@ import {
   integrationBranchName,
 } from '@taskforge/integration';
 import { DeterministicScheduler, RunOrchestrator } from '@taskforge/scheduler';
-import { InteractiveShell, TuiDashboard, theme, colors } from '@taskforge/conversation';
+import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
 
 /**
@@ -116,9 +116,9 @@ export function createCli(): Command {
       }
       console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge Runs History${colors.reset}`);
       console.log(`  ${colors.darkGray}${'─'.repeat(64)}${colors.reset}`);
+      const deliveryService = new DeliveryService(process.cwd(), new GitService(process.cwd()), runRepo);
       for (const r of runs.slice(0, 10)) {
         const goal = r.goalId ? goalRepo.get(r.goalId) : undefined;
-        const branch = integrationBranchName(r.id);
         const statusColor =
           r.status === 'completed'
             ? colors.green
@@ -129,10 +129,33 @@ export function createCli(): Command {
           `  ● ${colors.bold}${r.id}${colors.reset} [${statusColor}${r.status.toUpperCase()}${colors.reset}] ${colors.dim}(${r.createdAt.slice(0, 19).replace('T', ' ')})${colors.reset}`,
         );
         if (goal) {
-          console.log(`    ${colors.dim}Goal:${colors.reset}   ${goal.description}`);
+          console.log(`    ${colors.dim}Goal:${colors.reset}   ${summarizeGoal(goal.description)}`);
         }
-        console.log(`    ${colors.dim}Branch:${colors.reset} ${colors.cyan}${branch}${colors.reset}`);
-        console.log(`    ${colors.dim}Apply:${colors.reset}  ${colors.green}tf apply ${r.id}${colors.reset}\n`);
+        // Only runs that produced something to deliver have a branch and an
+        // apply step; failed or read-only runs do not.
+        const delivery = deliveryService.getDelivery(r.id);
+        if (delivery) {
+          console.log(`    ${colors.dim}Branch:${colors.reset} ${colors.cyan}${delivery.branch}${colors.reset}`);
+          if (delivery.status === 'applied') {
+            console.log(
+              `    ${colors.dim}Delivery:${colors.reset} ${colors.green}✔ applied${colors.reset} to ${delivery.targetBranch}${delivery.appliedCommit ? ` (${delivery.appliedCommit.slice(0, 7)})` : ''}`,
+            );
+          } else if (delivery.status === 'pr_created') {
+            console.log(`    ${colors.dim}Delivery:${colors.reset} ${colors.cyan}PR opened${colors.reset}${delivery.prUrl ? ` ${delivery.prUrl}` : ''}`);
+          } else if (delivery.status === 'discarded') {
+            console.log(`    ${colors.dim}Delivery:${colors.reset} ${colors.dim}discarded${colors.reset}`);
+          } else {
+            console.log(`    ${colors.dim}Apply:${colors.reset}  ${colors.green}tf apply ${r.id}${colors.reset}`);
+          }
+        } else if (r.status === 'failed' || r.status === 'cancelled' || r.status === 'running') {
+          console.log(`    ${colors.dim}Nothing to apply. To continue it: tf resume ${r.id}${colors.reset}`);
+        } else {
+          console.log(`    ${colors.dim}Nothing to apply (no changes to deliver).${colors.reset}`);
+        }
+        console.log('');
+      }
+      if (runs.length > 10) {
+        console.log(`  ${colors.dim}Showing the 10 most recent of ${runs.length} runs.${colors.reset}\n`);
       }
       console.log(`  ${colors.darkGray}${'─'.repeat(64)}${colors.reset}\n`);
       db.close();
