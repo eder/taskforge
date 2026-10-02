@@ -16,6 +16,7 @@ import {
   AgentMessage,
   ActiveAgentState,
   detectExecutionIntent,
+  TASKFORGE_VERSION,
 } from '@taskforge/shared';
 import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
 import {
@@ -64,6 +65,7 @@ import {
   TelemetryCollector,
   PerformanceEngine,
   UsageCalibrationEngine,
+  ExecutionUsageEstimator,
 } from '@taskforge/telemetry';
 import { InteractionGateway } from '@taskforge/execution';
 import { DeliveryService, GitHubWorkflowService } from '@taskforge/integration';
@@ -75,102 +77,24 @@ import { SlashMenu, SLASH_COMMANDS } from './slash-menu.js';
 import { LiveTicker } from './live-ticker.js';
 import { StreamViewer } from './stream-viewer.js';
 import { CockpitPanels } from './cockpit-panels.js';
+import {
+  formatApproxTokens,
+  sanitizeDisplayedRepositoryPaths,
+  plannerSourceLabel,
+  routerSourceLabel,
+  findWordLeft,
+  findWordRight,
+} from './shell-helpers.js';
+import {
+  formatActiveTasksView,
+  formatRunInspection,
+  formatRunDiff,
+  formatRunSummary,
+  formatUsageEstimate,
+} from './shell-formatters.js';
 
-function formatApproxTokens(value: number): string {
-  if (value < 1000) return value.toLocaleString();
-  const thousands = value / 1000;
-  return `${thousands >= 10 ? thousands.toFixed(0) : thousands.toFixed(1)}k`;
-}
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^$()|[\]\\{}]/g, (match) => `\\${match}`);
-}
-/**
- * Agent output should describe the user's repository, not TaskForge's internal
- * worktree implementation. Convert absolute repo/worktree paths to stable
- * repository-relative paths before rendering them.
- */
-export function sanitizeDisplayedRepositoryPaths(text: string, repoRoot: string): string {
-  const roots = new Set([
-    path.resolve(repoRoot),
-    path.resolve(repoRoot).replace(/\\/g, '/'),
-  ]);
-
-  let sanitized = text;
-  for (const root of roots) {
-    const escapedRoot = escapeRegExp(root);
-    const separator = '[\\\\/]';
-    const worktreePrefix = new RegExp(
-      escapedRoot +
-        separator +
-        '\\.taskforge' +
-        separator +
-        'worktrees' +
-        separator +
-        '[^\\s)\\]}>]+' +
-        separator +
-        '[^\\s)\\]}>]+' +
-        separator,
-      'g',
-    );
-    sanitized = sanitized.replace(worktreePrefix, '');
-    sanitized = sanitized.replace(new RegExp(escapedRoot + separator, 'g'), '');
-  }
-
-  return sanitized;
-}
-
-function plannerSourceLabel(
-  plannerMeta: PlannerProvenance | undefined,
-  graphMetadata: Record<string, unknown> | undefined,
-): string {
-  if (
-    plannerMeta?.source === 'deterministic_decomposition' &&
-    plannerMeta.fallbackReason === 'lightweight_read_only_fast_path'
-  ) {
-    return 'Deterministic fast path (lightweight read-only; model call skipped)';
-  }
-
-  if (plannerMeta?.source === 'semantic_model') {
-    const providerLabel = plannerMeta.provider === 'custom' ? 'Custom' : 'Semantic';
-    return `${providerLabel} / ${plannerMeta.model || 'gpt-5.6-luna'}`;
-  }
-
-  if (plannerMeta?.source === 'deterministic_decomposition') {
-    return `Deterministic decomposition${plannerMeta.fallbackReason ? ` (${plannerMeta.fallbackReason})` : ''}`;
-  }
-
-  if (plannerMeta?.source === 'heuristic_fallback') {
-    return `Heuristic fallback${plannerMeta.fallbackReason ? ` (${plannerMeta.fallbackReason})` : ''}`;
-  }
-
-  if (graphMetadata?.source === 'semantic') {
-    return `Semantic / ${String(graphMetadata.model ?? 'gpt-5.6-luna')}`;
-  }
-
-  return `Heuristic fallback${graphMetadata?.fallbackReason ? ` (${String(graphMetadata.fallbackReason)})` : ''}`;
-}
-
-function routerSourceLabel(
-  routing: RoutingDecision,
-  model: string,
-  lightweightFastPath: boolean,
-): string {
-  if (routing.source === 'openai') {
-    return `OpenAI / ${model || 'gpt-5.6-luna'}`;
-  }
-  if (routing.source === 'adaptive') {
-    return 'Adaptive structure / deterministic agent fit';
-  }
-  if (lightweightFastPath) {
-    return 'Deterministic routing (model call not required)';
-  }
-
-  const fallbackReason = routing.fallbackReason;
-  const fallbackDetail = routing.fallbackDetail;
-  return fallbackReason
-    ? `Static fallback (Reason: ${fallbackReason}${fallbackDetail ? `, ${fallbackDetail}` : ''})`
-    : 'Static / deterministic';
-}
+// Public API preserved for existing importers.
+export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
 
 export interface ShellOptions {
   repoRoot?: string;
@@ -182,22 +106,6 @@ export interface ShellOptions {
   streamBus?: AgentStreamBus;
   asyncExecution?: boolean;
   interactive?: boolean;
-}
-
-export function findWordLeft(text: string, pos: number): number {
-  if (pos <= 0) return 0;
-  let i = pos - 1;
-  while (i > 0 && /\s/.test(text[i])) i--;
-  while (i > 0 && !/\s/.test(text[i - 1])) i--;
-  return i;
-}
-
-export function findWordRight(text: string, pos: number): number {
-  if (pos >= text.length) return text.length;
-  let i = pos;
-  while (i < text.length && !/\s/.test(text[i])) i++;
-  while (i < text.length && /\s/.test(text[i])) i++;
-  return i;
 }
 
 export class InteractiveShell {
@@ -268,7 +176,7 @@ export class InteractiveShell {
     this.telemetry = new TelemetryCollector(this.db);
     this.usageCalibration = new UsageCalibrationEngine(this.db);
     this.operator = new OperatorAgent();
-    this.agentRegistry = new AgentRegistry();
+    this.agentRegistry = new AgentRegistry(true, this.config.agents);
     this.gitService = new GitService(this.repoRoot);
     const openaiApiKey = resolveOpenAIApiKey(this.config);
     this.planner = new SemanticPlanner({
@@ -537,39 +445,7 @@ export class InteractiveShell {
    * consistent with /stream and the ticker rather than a third data source.
    */
   private formatActiveTasksView(active: ActiveAgentState[], filterTaskId?: string): string {
-    const scoped = filterTaskId
-      ? active.filter((a) => a.taskId.toLowerCase() === filterTaskId.toLowerCase())
-      : active;
-    if (scoped.length === 0) {
-      return `No active agents for task ${filterTaskId}.`;
-    }
-
-    const byTask = new Map<string, ActiveAgentState[]>();
-    for (const a of scoped) {
-      const list = byTask.get(a.taskId) ?? [];
-      list.push(a);
-      byTask.set(a.taskId, list);
-    }
-
-    const lines: string[] = [`${colors.brand}✦ ${colors.bold}Active Tasks${colors.reset}`, ''];
-    for (const [taskId, assignments] of byTask) {
-      lines.push(`${colors.bold}${taskId}${colors.reset}  ${assignments[0].taskTitle}`, '');
-      for (const [idx, a] of assignments.entries()) {
-        const agentColor = LiveTicker.getAgentColor(a.agentId);
-        const duration = LiveTicker.formatDuration(a.startedAt);
-        const statusIcon = a.attentionRequired
-          ? `${colors.yellow}▲${colors.reset}`
-          : `${colors.green}●${colors.reset}`;
-        lines.push(
-          `  ${colors.dim}[${idx + 1}]${colors.reset} ${agentColor}${a.agentName}${colors.reset}`,
-          `      ${colors.dim}${a.role}${colors.reset}`,
-          `      ${statusIcon} Running · ${duration}`,
-          `      ${a.status}`,
-          '',
-        );
-      }
-    }
-    return lines.join('\n').trimEnd();
+    return formatActiveTasksView(active, filterTaskId);
   }
 
   /**
@@ -579,87 +455,39 @@ export class InteractiveShell {
    * actually happened" view once /stream's live agents are gone.
    */
   private formatRunInspection(runIdArg?: string): string {
-    const runId = runIdArg ?? this.activeRunId ?? new RunRepository(this.db).listAll()[0]?.id;
-    if (!runId) {
-      return 'No runs recorded yet.';
-    }
-
-    const goalRepo = new GoalRepository(this.db);
-    const audit = new AuditService(new RunRepository(this.db), goalRepo, this.taskRepo, this.eventRepo).reconstructRun(
-      runId,
+    return formatRunInspection(
+      {
+        activeRunId: this.activeRunId,
+        agentRegistry: this.agentRegistry,
+        assignmentRepo: this.assignmentRepo,
+        db: this.db,
+        deliveryService: this.deliveryService,
+        eventRepo: this.eventRepo,
+        taskRepo: this.taskRepo,
+      },
+      runIdArg,
     );
-    if (!audit) {
-      return `No run found with id ${runId}. Use /runs to see recorded runs.`;
+  }
+
+  /** Approximate token budget for the plan, shown before the user approves it. */
+  private planUsageEstimateLine(
+    tasks: import('@taskforge/core').Task[],
+    primaryTaskId: string,
+    teamSize: number,
+  ): string {
+    try {
+      const estimate = ExecutionUsageEstimator.estimateRun({
+        tasks,
+        originalUserRequest: this.lastGoalDescription,
+        assignmentCounts: { [primaryTaskId]: Math.max(1, teamSize) },
+        calibrationByTaskType: this.usageCalibration.getTaskTypeCalibrations(
+          tasks.map((task) => task.type),
+        ),
+      });
+      return formatUsageEstimate(estimate);
+    } catch {
+      return ''; // an estimate must never block plan approval
     }
-
-    const { run, goal, tasks, events } = audit;
-    const assignments = this.assignmentRepo.listByRun(runId);
-    const delivery = this.deliveryService.getDelivery(runId);
-
-    const lines: string[] = [
-      `${colors.brand}✦ ${colors.bold}RUN ${run.id}${colors.reset}`,
-      `  ${colors.dim}Status:${colors.reset} ${theme.statusBadge(run.status)}`,
-    ];
-    if (goal) {
-      lines.push(`  ${colors.dim}Goal:${colors.reset}   ${goal.description}`);
-    }
-    if (delivery) {
-      lines.push(`  ${colors.dim}Delivery:${colors.reset} ${delivery.status.toUpperCase()}`);
-    }
-    lines.push('');
-
-    const normalizationEvents = events.filter((e) => e.type === 'PLAN_INTENT_NORMALIZED');
-    const routingInvalidEvents = events.filter((e) => e.type === 'ROUTING_INVALID_FOR_TASK');
-    const mutationBlockedEvents = events.filter((e) => e.type === 'MUTATION_BLOCKED');
-    const reassignmentEvents = events.filter(
-      (e) => e.type === 'INVESTIGATOR_REASSIGNED' || e.type === 'INVESTIGATOR_FAILED',
-    );
-
-    for (const task of tasks) {
-      lines.push(`${colors.bold}${task.id}${colors.reset}  ${task.title}`);
-      lines.push(`  ${colors.dim}Type:${colors.reset} ${task.type}   ${theme.statusBadge(task.status)}`);
-
-      const taskNormalizations = normalizationEvents.filter((e) => e.taskId === task.id);
-      for (const e of taskNormalizations) {
-        const p = e.payload as { originalTaskType?: string; normalizedTaskType?: string; reason?: string };
-        lines.push(
-          `  ${colors.yellow}⚠ Intent normalized:${colors.reset} ${p.originalTaskType} → ${p.normalizedTaskType}`,
-        );
-      }
-      for (const e of routingInvalidEvents.filter((ev) => ev.taskId === task.id)) {
-        const p = e.payload as { reason?: string };
-        lines.push(`  ${colors.red}✕ Routing invalid:${colors.reset} ${p.reason ?? ''}`);
-      }
-      for (const e of mutationBlockedEvents.filter((ev) => ev.taskId === task.id)) {
-        const p = e.payload as { uncommittedFiles?: string[]; blockedCommit?: string };
-        const detail = p.blockedCommit
-          ? `reverted commit ${p.blockedCommit.slice(0, 7)}`
-          : `reverted ${p.uncommittedFiles?.length ?? 'an'} unauthorized change(s)`;
-        lines.push(`  ${colors.yellow}▲ Mutation blocked:${colors.reset} ${detail}`);
-      }
-      for (const e of reassignmentEvents.filter((ev) => ev.taskId === task.id)) {
-        const p = e.payload as { role?: string; failedAgentId?: string; replacementAgentId?: string };
-        if (e.type === 'INVESTIGATOR_REASSIGNED' && p.replacementAgentId) {
-          lines.push(`  ${colors.cyan}↻ Reassigned${colors.reset} ${p.role}: ${p.failedAgentId} → ${p.replacementAgentId}`);
-        } else if (e.type === 'INVESTIGATOR_FAILED') {
-          lines.push(`  ${colors.yellow}⚠ Provider unavailable${colors.reset} for ${p.role} (${p.failedAgentId})`);
-        }
-      }
-
-      const taskAssignments = assignments.filter((a) => a.taskId === task.id);
-      if (taskAssignments.length > 0) {
-        lines.push(`  ${colors.dim}Assignments${colors.reset}`);
-        for (const a of taskAssignments) {
-          const agentName = this.agentRegistry.get(a.agentId)?.name ?? a.agentId;
-          const badge = theme.statusBadge(a.status);
-          const reason = a.completionReason ? ` ${colors.dim}(${a.completionReason})${colors.reset}` : '';
-          lines.push(`    ${colors.dim}${a.id}${colors.reset}  ${agentName}  ${a.role}  ${badge}${reason}`);
-        }
-      }
-      lines.push('');
-    }
-
-    return lines.join('\n').trimEnd();
   }
 
   private resolveDeliveryRunId(explicit?: string): string | undefined {
@@ -673,242 +501,21 @@ export class InteractiveShell {
    * automatically -- that stays an explicit, separate escape hatch.
    */
   private async formatRunDiff(runId: string): Promise<string> {
-    const delivery = this.deliveryService.getDelivery(runId);
-    if (!delivery) {
-      return `Run ${runId} has no delivery information.`;
-    }
-
-    const stat = await this.deliveryService.diff(runId);
-    if (!stat.trim()) {
-      return `${colors.brand}✦ ${colors.bold}Run Diff${colors.reset}\n\n  No changes to show.`;
-    }
-
-    const summaryMatch = stat.match(
-      /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/,
+    return formatRunDiff(
+      { deliveryService: this.deliveryService, gitService: this.gitService, repoRoot: this.repoRoot },
+      runId,
     );
-    const filesChanged = summaryMatch?.[1] ?? '0';
-    const insertions = summaryMatch?.[2] ?? '0';
-    const deletions = summaryMatch?.[3] ?? '0';
-
-    let fileLines: string[] = [];
-    try {
-      const nameStatus = await this.gitService.exec(
-        ['diff', '--name-status', `${delivery.targetBranch}...${delivery.branch}`],
-        this.repoRoot,
-      );
-      fileLines = nameStatus
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((l) => {
-          const [status, ...rest] = l.split(/\s+/);
-          return `  ${status[0]} ${rest.join(' ')}`;
-        });
-    } catch {
-      // fall back to the --stat file list (no M/A/D prefix) if name-status fails
-      fileLines = stat
-        .split('\n')
-        .filter((l) => l.includes('|'))
-        .map((l) => `  ${l.split('|')[0].trim()}`);
-    }
-
-    return [
-      `${colors.brand}✦ ${colors.bold}Run Diff${colors.reset}`,
-      '',
-      `  ${colors.bold}${filesChanged}${colors.reset} file${filesChanged === '1' ? '' : 's'} changed`,
-      `  ${colors.green}+${insertions}${colors.reset}  ${colors.red}-${deletions}${colors.reset}`,
-      '',
-      ...fileLines,
-    ].join('\n');
   }
 
   private async formatRunSummary(result: OrchestrationResult): Promise<string> {
-    const statusColor =
-      result.status === 'completed'
-        ? colors.green
-        : result.status === 'cancelled'
-          ? colors.yellow
-          : colors.red;
-
-    const outputs = Object.entries(result.taskOutputs ?? {})
-      .filter(([, text]) => text && text.trim().length > 0)
-      .map(([taskId, text]) => {
-        const header =
-          result.status === 'completed'
-            ? `Explanation & Analysis [${taskId}]`
-            : `Last Attempt Output — NOT VERIFIED / NOT DELIVERED [${taskId}]`;
-        const sanitized = sanitizeDisplayedRepositoryPaths(
-          sanitizeTaskOutput(text.trim()),
-          this.repoRoot,
-        );
-        const highlighted = theme.renderMarkdown(sanitized);
-        const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
-        return `  ${colors.brand}✦ ${colors.bold}${header}${colors.reset}\n  ${divider}\n${highlighted}\n  ${divider}\n`;
-      })
-      .join('\n\n');
-
-    const outputPrefix = outputs
-      ? result.status === 'completed'
-        ? `${outputs}\n`
-        : `  ${colors.yellow}▲ Agent output below is evidence from a failed run. TaskForge did not verify or deliver it.${colors.reset}\n\n${outputs}\n`
-      : '';
-
-    const isSuccess = result.status === 'completed';
-    const isCancelled = result.status === 'cancelled';
-    // READ_ONLY_ANALYSIS runs get a distinct result screen: no delivery
-    // block is ever offered (mutation is disabled for the entire run, see
-    // RunOrchestrator's delivery gate), and success is framed as goal
-    // success ("did we produce a substantive answer with zero repository
-    // mutation?"), not "did we produce a mergeable change?".
-    const isReadOnly = result.executionIntent?.intent === 'READ_ONLY_ANALYSIS';
-    const hasSubstantiveOutput = Object.values(result.taskOutputs ?? {}).some(
-      (text) => text && text.trim().length > 0,
+    return formatRunSummary(
+      {
+        deliveryService: this.deliveryService,
+        repoRoot: this.repoRoot,
+        telemetry: this.telemetry,
+      },
+      result,
     );
-
-    const title = isReadOnly
-      ? isSuccess
-        ? hasSubstantiveOutput
-          ? 'Analysis complete'
-          : 'Analysis completed without a substantive answer'
-        : isCancelled
-          ? 'Analysis cancelled by user'
-          : 'Analysis encountered issues'
-      : isSuccess
-        ? 'Plan executed successfully!'
-        : isCancelled
-          ? 'Plan execution cancelled by user'
-          : 'Plan execution encountered issues';
-    const titleIcon =
-      isSuccess && (!isReadOnly || hasSubstantiveOutput)
-        ? `${colors.green}✔${colors.reset}`
-        : isCancelled
-          ? `${colors.yellow}⊘${colors.reset}`
-          : `${colors.red}✖${colors.reset}`;
-
-    const divider = `${colors.darkGray}${'─'.repeat(64)}${colors.reset}`;
-
-    const usageAccuracy = this.telemetry.getUsageAccuracy(result.runId);
-    const efficiency = this.telemetry.getOrchestrationEfficiency(result.runId);
-    const pct = (value: number) => `${(value * 100).toFixed(0)}%`;
-
-    const dimensionBadge = (status: 'healthy' | 'attention' | 'uncertain'): string =>
-      status === 'healthy'
-        ? `${colors.green}HEALTHY${colors.reset}`
-        : status === 'attention'
-          ? `${colors.yellow}NEEDS ATTENTION${colors.reset}`
-          : `${colors.yellow}UNCERTAIN${colors.reset}`;
-
-    const overallBadge =
-      efficiency.overallHealth === 'excellent'
-        ? `${colors.green}EXCELLENT${colors.reset}`
-        : efficiency.overallHealth === 'inefficient'
-          ? `${colors.red}INEFFICIENT${colors.reset}`
-          : efficiency.overallHealth === 'needs_attention'
-            ? `${colors.yellow}NEEDS ATTENTION${colors.reset}`
-            : `${colors.yellow}INCONCLUSIVE${colors.reset}`;
-
-    const staffingLabel =
-      efficiency.outcome === 'right_sized'
-        ? `${colors.green}RIGHT-SIZED${colors.reset}`
-        : efficiency.outcome === 'fan_out_justified'
-          ? `${colors.green}FAN-OUT JUSTIFIED${colors.reset}`
-          : efficiency.outcome === 'inefficient'
-            ? `${colors.red}INEFFICIENT${colors.reset}`
-            : `${colors.yellow}INCONCLUSIVE${colors.reset}`;
-
-    const exactTokens = (value: number) => Math.round(value).toLocaleString('en-US');
-    const usageBlock =
-      efficiency.providerReportedTokens > 0
-        ? [
-            `    ${colors.dim}Provider usage:${colors.reset}      ${usageAccuracy.observedAssignments} assignment(s)`,
-            `      ${colors.dim}Input:${colors.reset}            ${exactTokens(efficiency.providerInputTokens)} tokens`,
-            efficiency.cachedInputTokens > 0
-              ? `      ${colors.dim}Cached input:${colors.reset}     ${exactTokens(efficiency.cachedInputTokens)} tokens`
-              : '',
-            `      ${colors.dim}Output:${colors.reset}           ${exactTokens(efficiency.providerOutputTokens)} tokens`,
-            `      ${colors.dim}Total:${colors.reset}            ${exactTokens(efficiency.providerReportedTokens)} tokens`,
-          ]
-            .filter(Boolean)
-            .join('\n')
-        : '';
-
-    const efficiencyBlock = [
-      `    ${colors.dim}Overall:${colors.reset}            ${overallBadge}`,
-      `    ${colors.dim}Staffing:${colors.reset}           ${staffingLabel}`,
-      `    ${colors.dim}Quality:${colors.reset}            ${dimensionBadge(efficiency.qualityHealth)}`,
-      `    ${colors.dim}Recovery:${colors.reset}           ${dimensionBadge(efficiency.recoveryHealth)}`,
-      `    ${colors.dim}Assignments:${colors.reset}        ${efficiency.usefulAssignments} useful / ${efficiency.wastedAssignments} wasted across ${efficiency.uniqueAgents} agent(s)`,
-      `    ${colors.dim}Parallel overlap:${colors.reset}   ${(efficiency.observedParallelOverlapMs / 1000).toFixed(1)}s (${efficiency.parallelismFactor.toFixed(2)}×)`,
-      efficiency.providerReportedTokens > 0
-        ? `    ${colors.dim}Wasted tokens:${colors.reset}      ${formatApproxTokens(efficiency.wastedProviderTokens)} / ${formatApproxTokens(efficiency.providerReportedTokens)}`
-        : '',
-      `    ${colors.dim}First-pass quality:${colors.reset} ${(efficiency.firstPassRate * 100).toFixed(0)}% · rework ${efficiency.reworkCount} · gate rejects ${efficiency.completionGateRejections}`,
-      `    ${colors.dim}Why:${colors.reset}                ${efficiency.reasons[0] ?? 'No efficiency rationale available.'}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const delivery = isSuccess && !isReadOnly ? this.deliveryService.getDelivery(result.runId) : undefined;
-    let deliveryBlock = '';
-    let repositoryBlock = '';
-
-    if (isReadOnly) {
-      if (isSuccess) {
-        repositoryBlock = [
-          `    ${colors.dim}Repository:${colors.reset}`,
-          `      ${colors.green}✓${colors.reset} Read-only policy respected`,
-          `      ${colors.green}✓${colors.reset} Files changed: 0`,
-        ].join('\n');
-      }
-      // deliveryBlock intentionally stays empty: a READ_ONLY_ANALYSIS run is
-      // never offered /apply, /diff or /pr, regardless of scheduler status.
-    } else if (delivery?.status === 'ready_to_apply') {
-      let changedBlock = '';
-      try {
-        const diffStat = (await this.deliveryService.diff(result.runId)).trim();
-        if (diffStat) {
-          changedBlock = `\n${diffStat
-            .split('\n')
-            .map((l) => `      ${l}`)
-            .join('\n')}`;
-        }
-      } catch {
-        // best-effort; delivery block still renders without the diff stat
-      }
-      deliveryBlock = [
-        `    ${colors.dim}Branch:${colors.reset}             ${colors.cyan}${delivery.branch}${colors.reset}`,
-        `    ${colors.dim}Changed:${colors.reset}${changedBlock}`,
-        `    ${colors.dim}Delivery:${colors.reset}           ${colors.yellow}● READY TO APPLY${colors.reset}`,
-        '',
-        `    ${colors.dim}/apply${colors.reset}    apply to ${delivery.targetBranch}`,
-        `    ${colors.dim}/diff${colors.reset}     inspect changes`,
-        `    ${colors.dim}/pr${colors.reset}       create pull request`,
-      ].join('\n');
-    } else if (delivery?.status === 'applied') {
-      deliveryBlock = `    ${colors.dim}Delivery:${colors.reset}           ${colors.green}✔ applied to ${delivery.targetBranch}${colors.reset}${delivery.appliedCommit ? ` (${delivery.appliedCommit.slice(0, 7)})` : ''}`;
-    } else if (delivery?.status === 'pr_created') {
-      deliveryBlock = `    ${colors.dim}Delivery:${colors.reset}           ${colors.cyan}PR opened${colors.reset}${delivery.prUrl ? ` ${delivery.prUrl}` : ''}`;
-    }
-
-    return [
-      outputPrefix,
-      `  ${colors.brand}✦ ${colors.bold}${isReadOnly ? 'Analysis Summary' : 'Run Summary'}${colors.reset}`,
-      `  ${divider}`,
-      `  ${titleIcon} ${colors.bold}${title}${colors.reset}`,
-      '',
-      `    ${colors.dim}Status:${colors.reset}             ${statusColor}${colors.bold}${result.status.toUpperCase()}${colors.reset}`,
-      `    ${colors.dim}Tasks completed:${colors.reset}    ${colors.bold}${result.tasksCompleted}${colors.reset}, failed: ${result.tasksFailed}`,
-      repositoryBlock,
-      usageBlock,
-      efficiencyBlock,
-      deliveryBlock,
-      result.error
-        ? `    ${colors.dim}Error:${colors.reset}              ${colors.red}${result.error}${colors.reset}`
-        : '',
-      `    ${colors.dim}Total time:${colors.reset}         ${colors.yellow}${(result.durationMs / 1000).toFixed(1)}s${colors.reset}`,
-      `  ${divider}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
   }
 
   async renderBanner(): Promise<string> {
@@ -958,10 +565,11 @@ export class InteractiveShell {
       routerStatus = `${colors.gray}● static fallback${colors.reset}`;
     }
 
+    const versionLabel = `v${TASKFORGE_VERSION}`;
     const lines = [
       '',
       ` ${colors.brand}╭─────────────────────────────────────────────────────────────────╮${colors.reset}`,
-      ` ${colors.brand}│${colors.reset}  ${colors.brand}${colors.bold}✦ TaskForge Control Plane${colors.reset}                              ${colors.dim}v0.1.0${colors.reset}  ${colors.brand}│${colors.reset}`,
+      ` ${colors.brand}│${colors.reset}  ${colors.brand}${colors.bold}✦ TaskForge Control Plane${colors.reset}${' '.repeat(Math.max(1, 36 - versionLabel.length))}${colors.dim}${versionLabel}${colors.reset}  ${colors.brand}│${colors.reset}`,
       ` ${colors.brand}│${colors.reset}  ${colors.dim}Autonomous multi-agent coordination & git-worktree engine${colors.reset}      ${colors.brand}│${colors.reset}`,
       ` ${colors.brand}╰─────────────────────────────────────────────────────────────────╯${colors.reset}`,
       '',
@@ -1336,10 +944,12 @@ export class InteractiveShell {
           return 'No run is ready for a pull request. Use /runs to see past runs.';
         }
         const delivery = this.deliveryService.getDelivery(targetRunId);
+        const headBranch = await this.deliveryService.prepareDeliveryBranch(targetRunId);
         const result = await this.githubWorkflowService.createPullRequest({
           runId: targetRunId,
           targetBranch: delivery?.targetBranch,
           repoRoot: this.repoRoot,
+          headBranch,
         });
         if (result.success && result.prUrl) {
           this.deliveryService.markPrCreated(targetRunId, result.prUrl);
@@ -1534,6 +1144,7 @@ export class InteractiveShell {
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
+          this.planUsageEstimateLine(tasks, primaryTask.id, selected.length),
           `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
         ].join('\n');
       }
@@ -1620,6 +1231,7 @@ export class InteractiveShell {
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
+          this.planUsageEstimateLine(tasks, primaryTask.id, selected.length),
           `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute the revised plan?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
         ].join('\n');
       }
@@ -1843,8 +1455,11 @@ export class InteractiveShell {
   }
 
   async start(): Promise<void> {
-    const worktreeManager = new WorktreeManager(this.repoRoot);
-    await worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
+    // Startup housekeeping must be safe next to another live TaskForge session
+    // in the same repository: only artifacts untouched for 12h are removed.
+    // An explicit /clean still removes everything.
+    const worktreeManager = new WorktreeManager(this.repoRoot, this.config.execution.worktreesDir);
+    await worktreeManager.pruneStale({ olderThanMs: 12 * 3_600_000 }).catch(() => {});
 
     const gitStatus = await this.gitService.getStatus().catch(() => ({
       currentBranch: 'main',
@@ -1988,7 +1603,9 @@ export class InteractiveShell {
       } catch {
         /* ignore */
       }
-      worktreeManager.cleanOrphanedWorktreesAndBranches().catch(() => {});
+      // Another TaskForge session may be live in this repository: never wipe
+      // everything on exit, only stale artifacts.
+      worktreeManager.pruneStale({ olderThanMs: 12 * 3_600_000 }).catch(() => {});
     };
 
     const onKeypress = (str: string | undefined, key: readline.Key | undefined) => {
