@@ -4,7 +4,13 @@ import { GitService } from '@taskforge/workspace';
 import { slugifyGoal } from '@taskforge/git-workflow';
 import { EventRepository, RunRepository } from '@taskforge/persistence';
 
-export type DeliveryStatus = 'pending' | 'ready_to_apply' | 'applied' | 'pr_created' | 'discarded';
+export type DeliveryStatus =
+  | 'pending'
+  | 'ready_to_apply'
+  | 'applied'
+  | 'pr_created'
+  | 'discarded'
+  | 'reverted';
 
 export interface DeliveryMetadata {
   status: DeliveryStatus;
@@ -13,6 +19,9 @@ export interface DeliveryMetadata {
   baseCommit: string;
   appliedAt?: string;
   appliedCommit?: string;
+  /** Set by undo(): the commit that reverses appliedCommit. */
+  revertCommit?: string;
+  revertedAt?: string;
   prUrl?: string;
   /** Human-readable branch the PR is opened from (see prepareDeliveryBranch). */
   deliveryBranch?: string;
@@ -56,6 +65,15 @@ export class DeliveryService {
       if (delivery?.status === 'ready_to_apply') {
         return { runId: run.id, delivery };
       }
+    }
+    return undefined;
+  }
+
+  /** The most recently applied run that has not been undone. */
+  findLatestApplied(): { runId: string; delivery: DeliveryMetadata } | undefined {
+    for (const run of this.runRepo.listAll()) {
+      const delivery = parseDelivery(run.metadataJson);
+      if (delivery?.status === 'applied' && delivery.appliedCommit) return { runId: run.id, delivery };
     }
     return undefined;
   }
@@ -236,6 +254,80 @@ export class DeliveryService {
     });
 
     return { commit, alreadyApplied: false };
+  }
+
+  /**
+   * Reverses an applied run with a new commit (`git revert`), so nothing is
+   * rewritten or lost and it is safe even if the change was already pushed.
+   * Refuses when the working tree is dirty or the run was not applied, and
+   * leaves the repository untouched if the revert would conflict with work
+   * done since. To bring the change back, revert the returned commit.
+   */
+  async undo(runId: string): Promise<{ revertCommit: string; appliedCommit: string }> {
+    const delivery = this.requireDelivery(runId);
+    if (delivery.status === 'reverted') {
+      throw new DeliveryError(`Run ${runId} was already undone (by ${delivery.revertCommit?.slice(0, 7) ?? 'a revert commit'})`, { runId });
+    }
+    const applied = delivery.appliedCommit;
+    if (delivery.status !== 'applied' || !applied) {
+      throw new DeliveryError(`Run ${runId} was not applied, so there is nothing to undo`, { runId });
+    }
+
+    const git = this.gitService;
+    const status = await git.getStatus(this.repoRoot, ['.taskforge']);
+    if (status.uncommittedFiles.length > 0) {
+      throw new DeliveryError('Working tree is not clean; commit or stash your changes first', { runId });
+    }
+    try {
+      await git.exec(['merge-base', '--is-ancestor', applied, delivery.targetBranch], this.repoRoot);
+    } catch {
+      throw new DeliveryError(
+        `${applied.slice(0, 7)} is not on ${delivery.targetBranch} any more (history was rewritten?), so it cannot be reverted automatically`,
+        { runId },
+      );
+    }
+
+    const parents = (await git.exec(['rev-list', '--parents', '-n', '1', applied], this.repoRoot))
+      .trim()
+      .split(/\s+/)
+      .slice(1);
+    const mainline = parents.length > 1 ? ['-m', '1'] : [];
+
+    const originalBranch = status.currentBranch;
+    const needsCheckout = originalBranch !== delivery.targetBranch;
+    let revertCommit: string;
+    try {
+      if (needsCheckout) await git.checkout(delivery.targetBranch, this.repoRoot);
+      try {
+        await git.exec(['revert', ...mainline, '--no-edit', applied], this.repoRoot);
+      } catch (err) {
+        await git.exec(['revert', '--abort'], this.repoRoot).catch(() => undefined);
+        throw new DeliveryError(
+          `Reverting ${applied.slice(0, 7)} would conflict with changes made since. Nothing was changed; resolve it by hand with: git revert ${mainline.join(' ')} ${applied.slice(0, 7)}`.replace(/\s+/g, ' '),
+          { runId, cause: (err as Error).message },
+        );
+      }
+      revertCommit = (await git.exec(['rev-parse', 'HEAD'], this.repoRoot)).trim();
+    } finally {
+      if (needsCheckout) await git.checkout(originalBranch, this.repoRoot).catch(() => undefined);
+    }
+
+    this.runRepo.mergeMetadata(runId, {
+      delivery: {
+        ...delivery,
+        status: 'reverted' as DeliveryStatus,
+        revertedAt: new Date().toISOString(),
+        revertCommit,
+      },
+    });
+    this.eventRepo?.append({
+      id: `evt-${randomUUID()}`,
+      runId,
+      type: 'DELIVERY_REVERTED',
+      payload: { appliedCommit: applied, revertCommit, targetBranch: delivery.targetBranch },
+      timestamp: new Date(),
+    });
+    return { revertCommit, appliedCommit: applied };
   }
 
   async diff(runId: string): Promise<string> {

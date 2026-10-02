@@ -207,7 +207,7 @@ describe('InteractiveShell (REPL)', () => {
     // Check /apply command refuses to touch the target branch while the
     // working tree has uncommitted changes (the test's own sqlite db file
     // lives inside the repo root and keeps changing as the shell runs)
-    const applyReply = await shell.handleInput('/apply');
+    const applyReply = await shell.handleInput('/apply --yes');
     expect(applyReply).toContain('Could not apply');
     expect(applyReply).toContain('not clean');
 

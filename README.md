@@ -274,6 +274,7 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/cost` | Show token usage and cost telemetry |
 | `/stats` | Show execution and orchestration efficiency metrics |
 | `/diff` | Inspect changes from a completed run; accepts an optional run id |
+| `/undo` | Undo the last applied run with a revert commit; nothing is rewritten |
 | `/apply` | Apply a completed run to its target branch |
 | `/pr` | Create a pull request for a completed run |
 | `/discard` | Keep the integration branch without applying delivery |

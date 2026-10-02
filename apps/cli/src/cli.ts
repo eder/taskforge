@@ -46,6 +46,8 @@ import {
   findPriorRunContext,
   renderPriorContext,
   resolveRunRef,
+  describeRunConfidence,
+  formatRunConfidence,
 } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
@@ -88,6 +90,40 @@ export function printRunSpend(db: TaskForgeDatabase, runId: string, budget?: num
     console.log(`${colors.dim}${new TelemetryCollector(db).formatSpendLine(runId, budget)}${colors.reset}`);
   } catch {
     // Spend reporting is informational and must never change the outcome.
+  }
+}
+
+/** Prints how a run's changes were (not) checked and returns the headline. */
+function printRunConfidence(db: TaskForgeDatabase, runId: string): 'verified' | 'partly_verified' | 'unverified' | 'not_applicable' {
+  const confidence = describeRunConfidence(
+    {
+      taskRepo: new TaskRepository(db),
+      verificationRepo: new VerificationRepository(db),
+      eventRepo: new EventRepository(db),
+    },
+    runId,
+  );
+  const goalId = new RunRepository(db).get(runId)?.goalId;
+  const goal = goalId ? new GoalRepository(db).get(goalId)?.description : undefined;
+  console.log('');
+  for (const line of formatRunConfidence(confidence, goal)) {
+    const t = line.trimStart();
+    const color = t.startsWith('✔') ? colors.green : t.startsWith('⚠') || line.startsWith('Not verified') || line.startsWith('Partly') ? colors.yellow : '';
+    console.log(color ? `${color}${line}${colors.reset}` : line.endsWith(':') ? `${colors.bold}${line}${colors.reset}` : line);
+  }
+  console.log('');
+  return confidence.headline;
+}
+
+/** Asks a yes/no question on the terminal; anything but y/yes is a no. */
+async function confirmOnTerminal(question: string): Promise<boolean> {
+  const readline = await import('node:readline/promises');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(question)).trim().toLowerCase();
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
   }
 }
 
@@ -203,6 +239,8 @@ export function createCli(): Command {
             );
           } else if (delivery.status === 'pr_created') {
             console.log(`    ${colors.dim}Delivery:${colors.reset} ${colors.cyan}PR opened${colors.reset}${delivery.prUrl ? ` ${delivery.prUrl}` : ''}`);
+          } else if (delivery.status === 'reverted') {
+            console.log(`    ${colors.dim}Delivery:${colors.reset} ${colors.yellow}↩ undone${colors.reset} (reverted by ${delivery.revertCommit?.slice(0, 7) ?? 'a revert commit'})`);
           } else if (delivery.status === 'discarded') {
             console.log(`    ${colors.dim}Delivery:${colors.reset} ${colors.dim}discarded${colors.reset}`);
           } else {
@@ -1006,7 +1044,8 @@ export function createCli(): Command {
   program
     .command('apply [run]')
     .description('Apply a completed run\'s changes to its target branch')
-    .action(async (runId?: string) => {
+    .option('-y, --yes', 'Apply without asking even if the changes were not fully verified', false)
+    .action(async (runId?: string, options?: { yes?: boolean }) => {
       const repoRoot = process.cwd();
       const config = loadConfig();
       const db = new TaskForgeDatabase(config.execution.databasePath);
@@ -1021,6 +1060,22 @@ export function createCli(): Command {
         process.exit(1);
       }
 
+      if (deliveryService.getDelivery(targetRunId)?.status === 'ready_to_apply') {
+        const headline = printRunConfidence(db, targetRunId);
+        const unchecked = headline === 'unverified' || headline === 'partly_verified';
+        if (unchecked && !options?.yes) {
+          if (process.stdin.isTTY && process.stdout.isTTY) {
+            if (!(await confirmOnTerminal('Apply anyway? Type y to apply, anything else to stop: '))) {
+              console.log(`\nNot applied. Review it with: tf inspect ${targetRunId}   ·   apply later with: tf apply ${targetRunId} --yes\n`);
+              db.close();
+              return;
+            }
+          } else {
+            console.error('Warning: applying changes that were not fully verified (no terminal to ask; pass --yes to silence this).');
+          }
+        }
+      }
+
       try {
         const result = await deliveryService.apply(targetRunId);
         if (result.alreadyApplied) {
@@ -1031,6 +1086,35 @@ export function createCli(): Command {
       } catch (err) {
         console.error(`\n✖ Could not apply ${targetRunId}: ${(err as Error).message}\n`);
         process.exit(1);
+      } finally {
+        db.close();
+      }
+    });
+
+  // tf undo [run]
+  program
+    .command('undo [run]')
+    .description('Undo an applied run with a revert commit (nothing is rewritten); defaults to the last applied run')
+    .action(async (runRef?: string) => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const runRepo = new RunRepository(db);
+      const deliveryService = new DeliveryService(repoRoot, new GitService(repoRoot), runRepo, new EventRepository(db));
+
+      const targetRunId = runRef ? resolveRunOrExit(db, runRef) : deliveryService.findLatestApplied()?.runId;
+      if (!targetRunId) {
+        console.error('\nNo applied run to undo. Use `tf runs` to see delivery status.\n');
+        db.close();
+        process.exit(1);
+      }
+      try {
+        const result = await deliveryService.undo(targetRunId);
+        console.log(`\n✔ Undid ${targetRunId}: its changes were reverted with commit ${result.revertCommit.slice(0, 7)}.`);
+        console.log(`  Nothing was rewritten or lost. To bring the change back: git revert ${result.revertCommit.slice(0, 7)}\n`);
+      } catch (err) {
+        console.error(`\n✖ Could not undo ${targetRunId}: ${(err as Error).message}\n`);
+        process.exitCode = 1;
       } finally {
         db.close();
       }

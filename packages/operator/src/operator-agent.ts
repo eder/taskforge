@@ -37,7 +37,8 @@ export type OperatorIntent =
   | { type: 'deny_interaction'; requestId?: string; reason?: string }
   | { type: 'inspect_pending_interactions' }
   | { type: 'inspect_runs' }
-  | { type: 'apply_run'; runId?: string }
+  | { type: 'apply_run'; runId?: string; confirmed?: boolean }
+  | { type: 'undo_run'; runId?: string }
   | { type: 'diff_run'; runId?: string }
   | { type: 'create_pr'; runId?: string }
   | { type: 'discard_run'; runId?: string }
@@ -133,8 +134,12 @@ export class OperatorIntentParser {
     if (text.startsWith('/pending')) return { type: 'inspect_pending_interactions' };
 
     if (text.startsWith('/apply')) {
-      const parts = text.split(/\s+/);
-      return { type: 'apply_run', runId: parts[1] };
+      const parts = text.split(/\s+/).slice(1);
+      const confirmed = parts.includes('--yes') || parts.includes('-y');
+      return { type: 'apply_run', runId: parts.find((p) => !p.startsWith('-')), confirmed };
+    }
+    if (text === '/undo' || text.startsWith('/undo ')) {
+      return { type: 'undo_run', runId: text.split(/\s+/)[1] };
     }
     if (text.startsWith('/diff')) {
       const parts = text.split(/\s+/);

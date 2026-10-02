@@ -8,6 +8,9 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- **Plain-language account before applying.** `/diff` now ends with *What it does* and *How it was checked* (which checks passed per task, independent reviewers). A task that "passed" with no checks executed is reported as **not verified**, never as green. `describeRunConfidence()` / `formatRunConfidence()`.
+- **Apply asks when nothing was checked.** `/apply` on a run that is not fully verified shows that account and needs `--yes`; `tf apply` asks `Apply anyway?` on a terminal (`--yes` skips; without a terminal it warns and proceeds). The end-of-run summary says whether the changes were checked.
+- **`tf undo [run]` / `/undo`** reverses the last applied run with a revert commit (nothing rewritten, safe after pushing), refuses on a dirty tree, and changes nothing if later work conflicts. New delivery status `reverted`, event `DELIVERY_REVERTED`, shown in `tf runs`.
 - **One recommended next step.** A run that did not complete now ends with a single `Next:` command chosen from the recorded cause (broken check command → `tf init --check`; environment → fix, then `tf resume`; policy → `tf inspect`; budget → `tf resume --budget …`; failed work → `tf resume`) plus a short `Also:` line, instead of a menu. `recommendNextStep()`.
 - **REPL `/retry [run]`** continues a failed, cancelled or interrupted run (the REPL equivalent of `tf resume`), and a bare Enter accepts the suggestion when the recommended step is a plain resume. Steps that need a fix first or spend more are never one-key.
 - **Transient verification failures are retried once.** If the checks fail because of a lock, a dropped connection or a timeout, they run again after a short wait; nothing is skipped to make them pass and both attempts are recorded (`VERIFY_RETRIED_TRANSIENT`).
