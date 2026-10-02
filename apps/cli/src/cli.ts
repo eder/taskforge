@@ -607,18 +607,42 @@ export function createCli(): Command {
       }
 
       const db = new TaskForgeDatabase(config.execution.databasePath);
-      const targetRunId =
-        runId ??
-        new RunRepository(db)
-          .listAll()
-          .find((r) => r.status === 'failed' || r.status === 'cancelled' || r.status === 'running')?.id;
+      const orchestrator = new RunOrchestrator({ repoRoot, config, gitService, database: db });
+
+      let targetRunId = runId;
       if (!targetRunId) {
-        console.error('Error: No resumable run found. Specify a run-id: tf resume <run-id>');
-        db.close();
-        process.exit(1);
+        // Without an id, continue the newest run that can actually be resumed.
+        // Older runs (for example from before resume checkpoints existed) are
+        // skipped, and listed so the user knows why.
+        const candidates = new RunRepository(db)
+          .listAll()
+          .filter((r) => r.status === 'failed' || r.status === 'cancelled' || r.status === 'running');
+        const skipped: Array<{ id: string; reason: string }> = [];
+        for (const candidate of candidates) {
+          const reason = await orchestrator.checkResumable(candidate.id);
+          if (!reason) {
+            targetRunId = candidate.id;
+            break;
+          }
+          skipped.push({ id: candidate.id, reason });
+        }
+        if (!targetRunId) {
+          console.error(
+            candidates.length === 0
+              ? '\nNothing to resume: no failed, cancelled or interrupted runs. Use `tf runs` to see all runs.\n'
+              : `\nNothing to resume: ${candidates.length} failed/cancelled run(s) were found but none can be continued:`,
+          );
+          for (const { id, reason } of skipped.slice(0, 5)) console.error(`  - ${reason.startsWith(`Run ${id}`) ? reason : `${id}: ${reason}`}`);
+          if (skipped.length > 5) console.error(`  ... and ${skipped.length - 5} more`);
+          if (skipped.length > 0) console.error('\nStart a new run instead, or use `tf runs` to inspect them.\n');
+          db.close();
+          process.exit(1);
+        }
+        if (skipped.length > 0) {
+          console.log(`[TaskForge] Skipped ${skipped.length} run(s) that cannot be resumed (run 'tf resume <id>' for the reason); resuming ${targetRunId}.`);
+        }
       }
 
-      const orchestrator = new RunOrchestrator({ repoRoot, config, gitService, database: db });
       const abort = installGracefulAbort('the run');
       try {
         const result = await orchestrator.resume(targetRunId, {

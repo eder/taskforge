@@ -430,8 +430,11 @@ export class RunOrchestrator {
    * and re-executed with a fresh recovery budget. Planning and negotiation are
    * not repeated — the persisted task graph is authoritative.
    */
-  async resume(runId: string, options: RunOptions = {}): Promise<OrchestrationResult> {
-    const startTime = Date.now();
+  /**
+   * Read-only: loads everything `resume` needs and validates that the run can
+   * be resumed, throwing an actionable error when it cannot.
+   */
+  private async prepareResume(runId: string) {
     const run = this.runRepo.get(runId);
     if (!run) throw new Error(`Run ${runId} not found.`);
     if (run.status === 'completed') {
@@ -448,14 +451,6 @@ export class RunOrchestrator {
 
     const integrationBranch = this.integrationService.getBranchName(runId);
     const branchExists = await this.gitService.branchExists(integrationBranch);
-    if (!branchExists) {
-      // The integration worktree of a deleted run branch still holds the old,
-      // already-applied commits; reusing it would make redone tasks conflict.
-      await this.worktreeManager
-        .removeWorktree(`integration-${runId}`, 'main-worker', true, true)
-        .catch(() => {});
-    }
-
     let baseCommit: string | undefined = metadata.baseCommit;
     if (!baseCommit && branchExists) {
       // Runs created before checkpoints were recorded: recover the base from the run branch.
@@ -464,7 +459,11 @@ export class RunOrchestrator {
         .then((out) => out.trim())
         .catch(() => undefined);
     }
-    if (!baseCommit) throw new Error(`Run ${runId} has no recorded base commit; cannot resume.`);
+    if (!baseCommit) {
+      throw new Error(
+        `Run ${runId} was created before TaskForge recorded resume checkpoints (no base commit) and its run branch no longer exists, so it cannot be resumed. Start a new run instead.`,
+      );
+    }
     const baseBranch: string = metadata.baseBranch ?? 'main';
 
     // A task whose commit lives on the run branch is only done while that branch
@@ -509,6 +508,57 @@ export class RunOrchestrator {
     if (pending.length === 0) {
       throw new Error(`Run ${runId} has no pending tasks; nothing to resume.`);
     }
+
+    return {
+      run,
+      goalDescription,
+      metadata,
+      baseCommit,
+      baseBranch,
+      integrationBranch,
+      branchExists,
+      tasks,
+      pending,
+    };
+  }
+
+  /**
+   * Why a run cannot be resumed, or undefined when it can. Lets callers (such
+   * as `tf resume` without an id) skip runs that cannot be continued instead
+   * of failing on the first one they happen to find.
+   */
+  async checkResumable(runId: string): Promise<string | undefined> {
+    try {
+      await this.prepareResume(runId);
+      return undefined;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }
+
+  async resume(runId: string, options: RunOptions = {}): Promise<OrchestrationResult> {
+    const startTime = Date.now();
+    const {
+      run,
+      goalDescription,
+      metadata,
+      baseCommit,
+      baseBranch,
+      integrationBranch,
+      branchExists,
+      tasks,
+      pending,
+    } = await this.prepareResume(runId);
+
+    if (!branchExists) {
+      // The integration worktree of a deleted run branch still holds the old,
+      // already-applied commits; reusing it would make redone tasks conflict.
+      await this.worktreeManager
+        .removeWorktree(`integration-${runId}`, 'main-worker', true, true)
+        .catch(() => {});
+    }
+
+    const commitTaskIds: string[] | undefined = metadata.commitTaskIds;
     for (const task of pending) this.taskRepo.updateStatus(task.id, 'accepted');
 
     const graph = new TaskGraph(tasks);

@@ -27,6 +27,7 @@ All workspace packages are released in lockstep under a single version.
 - Hermetic test setup (`tests/setup/hermetic.ts`): tests no longer depend on installed agent CLIs, exported API keys, or `~/.taskforge`.
 
 ### Fixed
+- `tf resume` without an id picked the newest failed/cancelled run even when it could not be resumed (for example a run from before resume checkpoints existed) and stopped with "no recorded base commit". It now skips runs that cannot be continued, resumes the newest one that can, and, when none can, lists each run with the reason (or says there is nothing to resume). The explicit-id error now explains the cause and what to do.
 - The "No verification checks were executed" block message now says that TaskForge only discovers Node checks and names the file, key and `tf init`, instead of the vague "provide verification configuration".
 - A change that only touches documentation (`.md`, `.txt`, `.rst`, ... or LICENSE/README-style files) is no longer BLOCKED for lack of verification commands, per task and in the final integration check. Anything that touches code or config still fails closed, and explicitly configured verification commands still run and must pass.
 - **Antigravity (`agy`) output was always empty.** The adapter only recognised `{"type":"result"}`, but `agy` emits `{"event":"result","result":{"response":...}}`, so every Antigravity assignment returned no report (checked against a real captured run). The result event, its nested status, and the per-step `text_delta` fallback are now parsed.
