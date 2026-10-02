@@ -1143,6 +1143,7 @@ function buildGovernedCtx(
     baseCommit,
     repoRoot: ctx.repoRoot,
     originalUserRequest: ctx.originalUserRequest,
+    priorContext: ctx.priorContext,
     config: ctx.config,
     task,
     assignment,

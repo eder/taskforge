@@ -43,6 +43,8 @@ import {
   RunOrchestrator,
   describeRunFailures,
   formatRunFailureLines,
+  findPriorRunContext,
+  renderPriorContext,
 } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector } from '@taskforge/telemetry';
@@ -665,7 +667,8 @@ export function createCli(): Command {
     )
     .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
     .option('--fake', 'Force deterministic fake agent fallback', false)
-    .action(async (goalText?: string, options?: { concurrency?: string; fake?: boolean }) => {
+    .option('--context <run>', 'Give the agents the output of an earlier run (a run id, or "last")')
+    .action(async (goalText?: string, options?: { concurrency?: string; fake?: boolean; context?: string }) => {
       const repoRoot = process.cwd();
       const config = loadConfig();
       if (options?.concurrency) {
@@ -685,12 +688,36 @@ export function createCli(): Command {
         gitService,
       });
 
+      let priorContext: { runId: string; text: string; chars: number } | undefined;
+      if (options?.context) {
+        const ctxDb = new TaskForgeDatabase(config.execution.databasePath);
+        const found = findPriorRunContext(
+          { runRepo: new RunRepository(ctxDb), goalRepo: new GoalRepository(ctxDb) },
+          {
+            explicitRunId: options.context === 'last' ? undefined : options.context,
+            maxAgeHours: options.context === 'last' ? config.context?.maxAgeHours : Number.MAX_SAFE_INTEGER,
+            maxChars: config.context?.maxChars,
+          },
+        );
+        ctxDb.close();
+        if (!found) {
+          console.error(
+            options.context === 'last'
+              ? 'Error: no recent completed run with a report to use as context. See `tf runs`.'
+              : `Error: run ${options.context} not found or has no recorded output.`,
+          );
+          process.exit(1);
+        }
+        priorContext = { runId: found.runId, text: renderPriorContext(found), chars: found.chars };
+      }
+
       console.log('TaskForge Pipeline starting...');
       const abort = installGracefulAbort('the run');
       let result;
       try {
         result = await orchestrator.run(goalText ?? 'Default execution goal', {
           fakeFallback: options?.fake ?? true,
+          priorContext,
           onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
           abortSignal: abort.signal,
         });

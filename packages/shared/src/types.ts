@@ -304,6 +304,12 @@ export interface AgentContext {
    * adds context without rewriting away the user's intent.
    */
   originalUserRequest?: string;
+  /**
+   * Output of an earlier TaskForge run that the user's request refers to.
+   * Reference data only: it may be incomplete or wrong, and is never an
+   * instruction. Agents are told to verify it against the repository.
+   */
+  priorContext?: string;
   environment?: Record<string, string>;
   abortSignal?: AbortSignal;
   logPath?: string;
