@@ -6,6 +6,8 @@ export interface RunFailureLine {
   /** 'failed' / 'blocked' ended on their own; 'not_started' never ran. */
   kind: 'failed' | 'blocked' | 'not_started';
   reason?: string;
+  /** Branch holding the agents' work for this task, if it was kept. */
+  keptBranch?: string;
   /** For not_started tasks: the failed/blocked tasks they were waiting for. */
   waitingOn?: string[];
 }
@@ -25,6 +27,14 @@ function firstLine(value: unknown): string | undefined {
   return t ? t.replace(/\s+/g, ' ') : undefined;
 }
 
+/** First line of output after a "Last output:" marker, if the text has one. */
+function outputLine(value: string): string | undefined {
+  const lines = value.split('\n').map((l) => l.trim());
+  const marker = lines.findIndex((l) => l.toLowerCase().startsWith('last output'));
+  const line = marker >= 0 ? lines.slice(marker + 1).find((l) => l.length > 0) : undefined;
+  return line ? line.replace(/\s+/g, ' ').slice(0, 160) : undefined;
+}
+
 /** Best human-readable reason a single event can give for a task ending badly. */
 function reasonFromEvent(event: ReasonEvent): string | undefined {
   const p = event.payload;
@@ -33,11 +43,17 @@ function reasonFromEvent(event: ReasonEvent): string | undefined {
       return text(p.reason);
     case 'TASK_RECOVERY_BLOCKED':
     case 'TASK_RECOVERY_SCHEDULED': {
-      const reason = text(p.reason);
-      const evidence = firstLine(p.evidence);
-      return [reason, evidence && evidence !== reason ? `(${evidence})` : undefined]
-        .filter(Boolean)
-        .join(' ');
+      const reasonText = typeof p.reason === 'string' ? p.reason : '';
+      const headline = firstLine(reasonText);
+      // A failed check carries "Command: ..." and "Last output:" lines; show the
+      // headline plus the first line of output, not the whole block.
+      const output = outputLine(reasonText) ?? outputLine(typeof p.evidence === 'string' ? p.evidence : '');
+      const detail = output && output !== headline ? ` — ${output}` : '';
+      const prefix =
+        p.failureClass === 'verification_configuration'
+          ? 'The verification command does not work for this project: '
+          : '';
+      return headline ? `${prefix}${headline}${detail}` : firstLine(p.evidence);
     }
     case 'COMPLETION_GATE_REJECTED': {
       const evidence = p.evidence as { explanation?: string } | undefined;
@@ -90,11 +106,13 @@ export function describeRunFailures(
         .map((e) => ({ type: e.type, payload: e.payload ?? {}, timestamp: new Date(e.timestamp) }))
         .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       const reason = mine.map(reasonFromEvent).find((r) => r);
+      const kept = mine.find((e) => e.type === 'TASK_CANDIDATE_PRESERVED');
       lines.push({
         taskId: task.id,
         title: task.title,
         kind: task.status === 'blocked' ? 'blocked' : 'failed',
         reason,
+        keptBranch: typeof kept?.payload.branch === 'string' ? kept.payload.branch : undefined,
       });
     }
   }
@@ -122,8 +140,15 @@ export function formatRunFailureLines(lines: RunFailureLine[], runId: string): s
       out.push(
         `      ${line.reason ?? `no reason was recorded; run "tf inspect ${runId}" for the full history`}`,
       );
+      if (line.keptBranch) {
+        out.push(`      the agents' work is kept on branch ${line.keptBranch} (nothing was lost)`);
+      }
     }
   }
-  out.push(`Next: tf resume ${runId}   ·   tf inspect ${runId}`);
+  out.push(
+    lines.some((l) => l.keptBranch)
+      ? `Next: fix the cause, then "tf resume ${runId}" re-checks the kept work without calling agents (add --fresh to start over)   ·   tf inspect ${runId}`
+      : `Next: tf resume ${runId}   ·   tf inspect ${runId}`,
+  );
   return out;
 }

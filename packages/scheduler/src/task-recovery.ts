@@ -22,6 +22,31 @@ export interface RecoveryIncident {
   candidateCommit?: string;
 }
 
+/**
+ * Work an agent produced that did not reach the run branch. It is kept on a
+ * named branch so it is never stranded, and `tf resume` reuses it: when the
+ * blocker was configuration, environment or policy (not the quality of the
+ * work), only the checks run again, with no agent call.
+ */
+export interface PreservedCandidate {
+  commit: string;
+  branch: string;
+  phase: string;
+  failureClass: RecoveryFailureClass;
+  reason: string;
+  evidence?: string;
+  agentId?: string;
+}
+
+/** Blockers that say nothing about the work itself. */
+export function candidateNeedsNoAgent(candidate: PreservedCandidate): boolean {
+  return (
+    candidate.failureClass === 'verification_configuration' ||
+    candidate.failureClass === 'environment' ||
+    candidate.failureClass === 'policy'
+  );
+}
+
 export type RecoveryAction = 'retry_same_agent' | 'reassign' | 'block';
 
 export interface RecoveryDecision {
@@ -104,9 +129,28 @@ export function classifyCompletionFailure(
   return looksLikeEnvironmentFailure(text) ? 'environment' : 'code_or_test';
 }
 
+/**
+ * Output that says the verification command itself is unsuitable for this
+ * project (wrong runner, missing plugin, bad arguments), as opposed to the
+ * change failing a check. Retrying the agent cannot fix these.
+ */
+const VERIFICATION_TOOL_MISUSE = [
+  'not natively supported', // pytest without an asyncio plugin
+  'no tests ran',
+  'no tests collected',
+  'unrecognized arguments',
+  'file or directory not found',
+  'no module named pytest',
+  'with exit code 127', // command not found
+  'with exit code 126', // not executable
+];
+
 export function classifyVerificationFailure(reason?: string, evidence?: string): RecoveryFailureClass {
   const text = `${reason ?? ''}\n${evidence ?? ''}`.toLowerCase();
-  if (text.includes('no verification checks were executed')) {
+  if (
+    text.includes('no verification checks were executed') ||
+    VERIFICATION_TOOL_MISUSE.some((pattern) => text.includes(pattern))
+  ) {
     return 'verification_configuration';
   }
   if (looksLikeEnvironmentFailure(text)) {

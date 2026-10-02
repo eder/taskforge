@@ -720,7 +720,8 @@ export function createCli(): Command {
     )
     .option('-c, --concurrency <number>', 'Maximum parallel tasks', '3')
     .option('--fake', 'Force deterministic fake agent fallback', false)
-    .action(async (runId?: string, options?: { concurrency?: string; fake?: boolean }) => {
+    .option('--fresh', 'Discard work kept from blocked tasks and start those tasks over', false)
+    .action(async (runId?: string, options?: { concurrency?: string; fake?: boolean; fresh?: boolean }) => {
       const repoRoot = process.cwd();
       const config = loadConfig();
       if (options?.concurrency) {
@@ -774,6 +775,7 @@ export function createCli(): Command {
       try {
         const result = await orchestrator.resume(targetRunId, {
           fakeFallback: options?.fake ?? false,
+          freshStart: options?.fresh ?? false,
           onProgress: (msg) => console.log(`[TaskForge] ${msg}`),
           abortSignal: abort.signal,
         });

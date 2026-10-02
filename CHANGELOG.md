@@ -8,6 +8,7 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- **Blocked work is kept and reused.** When a task is blocked after agents produced a change, the change is kept on `taskforge/candidate/<run>/<task>` (and recorded in the run), the report names the branch, and `tf resume` reuses it: if the blocker was verification configuration, the environment or a policy, only the checks run again with **no agent call**; if the work itself was wrong, the agent continues from the kept commit with the recorded evidence. `tf resume --fresh` discards it. Previously the work was left on an unreferenced commit and resuming restarted the task from scratch (the run that exposed this cost 843k tokens and could not be finished).
 - `tf init [--print] [--check] [--yes] [--force]`: proposes a project `.taskforge/config.yaml` from what it detects (Node, Python and its virtualenv, Go, Rust, Swift, Makefile), shows it, and only writes after confirmation; never overwrites. `--check` runs each detected command once and reports whether it works.
 - Starting `tf` in a project without a config prints a one-time notice that the file is optional and how to create it (`TASKFORGE_NO_HINTS=1` disables it); `tf doctor` shows whether a project config exists.
 - Docs: "Do I need `.taskforge/config.yaml`?" in `docs/usage.md`.
@@ -27,6 +28,8 @@ All workspace packages are released in lockstep under a single version.
 - Hermetic test setup (`tests/setup/hermetic.ts`): tests no longer depend on installed agent CLIs, exported API keys, or `~/.taskforge`.
 
 ### Fixed
+- A verification command that does not suit the project (pytest without an asyncio plugin, "no tests ran", "file or directory not found", exit code 126/127, unrecognized arguments) is now classified as a verification-configuration problem instead of a code failure, so it blocks immediately without retrying agents.
+- The "Why the run did not complete" report summarizes a failed check (headline plus first output line) instead of dumping the command and output on one line, and says when the agents' work was kept.
 - **`tf init` proposed `pytest` for projects whose tests are scripts** (`python test_x.py`, e.g. asyncio scripts), which fails immediately, so the first code task was BLOCKED by verification. It now recognizes script-style suites and proposes a loop over the scripts; `tf init --check` runs each script on its own (per-file limit) and keeps only those that pass in this environment, listing the others as comments with the reason (typically they need a database, server or audio). The multi-line command is written as a YAML block.
 - A failed verification check reported only `Check 'explicit-1' failed with exit code 2`. It now includes the command and the last lines of output (and "timed out" when applicable), in the progress line, the run summary and the retry evidence given to the agent.
 - When the model planner was not used, the plan said only `Deterministic decomposition (model_unresponsive_or_invalid)`. It now adds the cause (HTTP status and the provider's message, timeout, or why the plan was rejected).

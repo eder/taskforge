@@ -63,6 +63,7 @@ import {
 } from './deterministic-scheduler.js';
 import { executeExecutionTeam } from './execution-team.js';
 import { applyTaskIdRemap, planTaskIdRemap } from './task-id-allocation.js';
+import type { PreservedCandidate } from './task-recovery.js';
 import { allowedWritersForTask } from './task-policy.js';
 import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
 import {
@@ -105,6 +106,8 @@ export interface RunOptions {
   abortSignal?: AbortSignal;
   activityTracker?: AgentActivityTracker;
   streamBus?: AgentStreamBus;
+  /** resume only: ignore work kept from blocked tasks and start those tasks over. */
+  freshStart?: boolean;
 }
 
 export interface OrchestrationResult {
@@ -559,6 +562,24 @@ export class RunOrchestrator {
     }
 
     const commitTaskIds: string[] | undefined = metadata.commitTaskIds;
+
+    // Work kept from blocked tasks (see PreservedCandidate). Only commits that
+    // still exist in this repository are usable.
+    const candidates: Record<string, PreservedCandidate> = {};
+    if (!options.freshStart) {
+      const kept = (metadata.candidates ?? {}) as Record<string, PreservedCandidate>;
+      for (const task of pending) {
+        const candidate = kept[task.id];
+        if (!candidate?.commit) continue;
+        const exists = await this.gitService
+          .execGit(['cat-file', '-e', `${candidate.commit}^{commit}`])
+          .then(
+            () => true,
+            () => false,
+          );
+        if (exists) candidates[task.id] = candidate;
+      }
+    }
     for (const task of pending) this.taskRepo.updateStatus(task.id, 'accepted');
 
     const graph = new TaskGraph(tasks);
@@ -574,6 +595,12 @@ export class RunOrchestrator {
       payload: { integratedTasks: integratedIds, pendingTasks: pending.map((t) => t.id) },
       timestamp: new Date(),
     });
+    const kept = Object.keys(candidates);
+    if (kept.length > 0) {
+      options.onProgress?.(
+        `Work from an earlier attempt is kept for ${kept.join(', ')}; it is reused instead of starting over (use "tf resume --fresh" to discard it).`,
+      );
+    }
     options.onProgress?.(
       `Resuming run ${runId}: ${integratedIds.length} task(s) already integrated${integratedIds.length ? ` (${integratedIds.join(', ')})` : ''}, ${pending.length} to execute (${pending.map((t) => t.id).join(', ')})`,
     );
@@ -593,6 +620,7 @@ export class RunOrchestrator {
         taskOutputs: (metadata.taskOutputs as Record<string, string> | undefined) ?? {},
         hasIntegratedCommits,
         commitTaskIds,
+        candidates,
       },
     });
   }

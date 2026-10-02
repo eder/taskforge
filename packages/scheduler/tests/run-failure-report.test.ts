@@ -65,6 +65,38 @@ describe('describeRunFailures', () => {
   });
 });
 
+describe('a failed check is summarized, not dumped', () => {
+  it('shows the headline and the first output line, and flags a broken verification command', () => {
+    const { db, addTask, addEvent, deps } = setup();
+    addTask('T1', 'blocked');
+    addEvent('T1', 'TASK_RECOVERY_BLOCKED', {
+      failureClass: 'verification_configuration',
+      reason: "Check 'explicit-1' failed with exit code 2\nCommand: pytest -q\nLast output:\nFAILED t.py::t - async def functions are not natively supported.\n139 failed",
+    });
+    const reason = describeRunFailures(deps, 'run-1')[0].reason!;
+    expect(reason).toBe(
+      "The verification command does not work for this project: Check 'explicit-1' failed with exit code 2 — FAILED t.py::t - async def functions are not natively supported.",
+    );
+    expect(reason).not.toContain('Command:');
+    db.close();
+  });
+});
+
+describe('kept work in the failure report', () => {
+  it('names the branch holding the work and the no-agent resume path', () => {
+    const { db, addTask, addEvent, deps } = setup();
+    addTask('T1', 'blocked');
+    addEvent('T1', 'TASK_FAILED', { reason: 'Verification failed: exit code 2' });
+    addEvent('T1', 'TASK_CANDIDATE_PRESERVED', { branch: 'taskforge/candidate/123/T1', commit: 'abc' });
+    const lines = describeRunFailures(deps, 'run-1');
+    expect(lines[0].keptBranch).toBe('taskforge/candidate/123/T1');
+    const text = formatRunFailureLines(lines, 'run-1').join('\n');
+    expect(text).toContain("work is kept on branch taskforge/candidate/123/T1");
+    expect(text).toContain('re-checks the kept work without calling agents');
+    db.close();
+  });
+});
+
 describe('formatRunFailureLines', () => {
   it('is empty when there is nothing to explain, and always ends with the next step', () => {
     expect(formatRunFailureLines([], 'run-1')).toEqual([]);
