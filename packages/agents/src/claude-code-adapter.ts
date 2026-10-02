@@ -19,7 +19,9 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
     const defaultArgs =
       options.defaultArgs && options.defaultArgs.length > 0
         ? options.defaultArgs
-        : ['--output-format=stream-json', '--verbose', '-p'];
+        // TaskForge never resumes a provider session, so do not leave one on disk per
+        // assignment (hundreds of stray sessions pile up in ~/.claude/projects otherwise).
+        : ['--output-format=stream-json', '--verbose', '--no-session-persistence', '-p'];
     super({
       ...options,
       defaultArgs,

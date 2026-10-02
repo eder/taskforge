@@ -8,6 +8,18 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- **`tf insights [--since <days>] [--json]`**: completion rate, outcomes, how many runs needed `tf resume` or were undone, the most frequent causes that stopped work, and tokens/cost per run, computed from the project's local history only (nothing is sent anywhere).
+
+- **`tf setup`**: one guided first-time command. It runs the environment checks (`tf doctor`), proposes and verifies the project config (`tf init --check`, written only after confirmation) and runs a small read-only test task capped at 60k tokens, asking before each step. `--yes` accepts the defaults, `--no-smoke` skips the test task; without a terminal it asks nothing and changes nothing. The one-time "no config" notice now points to it.
+- Error messages end with the next action: not a git repository (`cd` or `git init`), nothing ready to apply or open a PR for (`tf runs`, name a run), issue import failures (`gh auth status`), unreadable `--budget`/`--context` values.
+- **Plain-language account before applying.** `/diff` now ends with *What it does* and *How it was checked* (which checks passed per task, independent reviewers). A task that "passed" with no checks executed is reported as **not verified**, never as green. `describeRunConfidence()` / `formatRunConfidence()`.
+- **Apply asks when nothing was checked.** `/apply` on a run that is not fully verified shows that account and needs `--yes`; `tf apply` asks `Apply anyway?` on a terminal (`--yes` skips; without a terminal it warns and proceeds). The end-of-run summary says whether the changes were checked.
+- **`tf undo [run]` / `/undo`** reverses the last applied run with a revert commit (nothing rewritten, safe after pushing), refuses on a dirty tree, and changes nothing if later work conflicts. New delivery status `reverted`, event `DELIVERY_REVERTED`, shown in `tf runs`.
+- **One recommended next step.** A run that did not complete now ends with a single `Next:` command chosen from the recorded cause (broken check command → `tf init --check`; environment → fix, then `tf resume`; policy → `tf inspect`; budget → `tf resume --budget …`; failed work → `tf resume`) plus a short `Also:` line, instead of a menu. `recommendNextStep()`.
+- **REPL `/retry [run]`** continues a failed, cancelled or interrupted run (the REPL equivalent of `tf resume`), and a bare Enter accepts the suggestion when the recommended step is a plain resume. Steps that need a fix first or spend more are never one-key.
+- **Transient verification failures are retried once.** If the checks fail because of a lock, a dropped connection or a timeout, they run again after a short wait; nothing is skipped to make them pass and both attempts are recorded (`VERIFY_RETRIED_TRANSIENT`).
+- **Token budget.** `execution.tokenBudget` (or `tf run --budget 500k`, `tf resume --budget 1.5m`) caps what a run may spend, counting all its attempts. At 80% it warns; at 100% it stops starting new tasks, lets running ones finish, and ends as a resumable run that says "Stopped at the token budget" and prints the `tf resume … --budget` command (`TOKEN_BUDGET_REACHED` event). It can overshoot by what was in flight.
+- **Actual spend after every run**, in the CLI and the REPL summary: tokens used, approximate cost, share of the budget, the plan's estimate and the task that used most. It says so when the agents reported no usage.
 - **Name a run without copying its id.** `last`, the number from `tf runs` (`2`, `#2`) or a unique end/start of the id work in `tf resume|apply|inspect|abandon|cost|pr create` and in the REPL's `/diff`, `/apply`, `/pr`, `/inspect`. `tf runs` now numbers its rows. An ambiguous fragment is refused with the matching ids.
 - **Sessions.** Opening `tf` prints which run it continues from. `/clear` (and `tf --new`) starts fresh: earlier runs stop being offered as context and a plan waiting for approval is discarded; nothing is deleted. The boundary is stored in a new `session_state` table.
 - REPL `/resume` is now `/unpause` (the old name still works) so it is not confused with `tf resume`.
@@ -35,6 +47,7 @@ All workspace packages are released in lockstep under a single version.
 - Hermetic test setup (`tests/setup/hermetic.ts`): tests no longer depend on installed agent CLIs, exported API keys, or `~/.taskforge`.
 
 ### Fixed
+- Two interaction responses created in the same millisecond collided on their primary key (`resp-<timestamp>` ids), which could fail an approval and made a cockpit test fail intermittently. Response ids are now unique.
 - A leading "no ..." / "y ..." / "yes ..." answered a plan that did not exist: "No modifiques nada del repositorio" (Spanish) discarded the plan instead of starting a request. These prefixes now count as an answer only while a plan or permission question is pending; exact "yes"/"no" are unchanged.
 - **`tf` run from a sub-folder used a new, empty `.taskforge/`.** Config, database, runs and worktrees were all relative to the current directory, so `tf resume` in `repo/server` answered "Nothing to resume" (it was looking at an empty database), ignored `repo/.taskforge/config.yaml`, and left a stray `.taskforge/` inside the sub-folder. The CLI now works from the project root (nearest enclosing git repository, or an existing `.taskforge/`, never the home directory) and says so on stderr when that differs from the current directory. `TASKFORGE_PROJECT_ROOT` overrides it.
 - Completion-gate rejections were shown as bare codes (`NO_CHANGES_PRODUCED`). They are now plain sentences ("The agent finished without changing any file, but this task requires a change. The work may already exist ..."), including for runs recorded earlier.
@@ -75,6 +88,7 @@ All workspace packages are released in lockstep under a single version.
 - Agents received every provider's credentials plus TaskForge's own router key and `SSH_AUTH_SOCK`. Each agent now gets only its provider's variables (**breaking** for setups that relied on an agent using SSH agent forwarding; use `passEnv`).
 
 ### Changed
+- Agent sessions are no longer left on disk: the Claude adapter passes `--no-session-persistence` and the Codex adapter `--ephemeral`, since TaskForge never resumes provider sessions (hundreds of stray sessions had piled up in `~/.claude/projects`). Override `defaultArgs` for an agent in `.taskforge/config.yaml` if you want them kept.
 - `agents.<id>.enabled: false` is now honored for every harness.
 - Large modules were split without API changes: `@taskforge/persistence` repositories, `@taskforge/agents` adapters, and the REPL's pure helpers/formatters.
 - The CLI and REPL banner read the version from a single source (`TASKFORGE_VERSION`).

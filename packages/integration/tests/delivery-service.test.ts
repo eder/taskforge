@@ -203,4 +203,69 @@ describe('DeliveryService', () => {
       db.close();
     });
   });
+
+  describe('undo', () => {
+    async function applied(runId: string, file: string) {
+      const { db, runRepo, service } = makeService();
+      runRepo.create(runId);
+      const branch = await createIntegrationBranch(runId, file, 'content\n');
+      service.markReady(runId, branch, 'main', baseCommit);
+      const result = await service.apply(runId);
+      return { db, service, result };
+    }
+
+    it('reverses an applied run with a new commit and keeps history', async () => {
+      const { db, service, result } = await applied('run-undo-ok', 'undo-me.txt');
+      expect(fs.existsSync(path.join(testRepoRoot, 'undo-me.txt'))).toBe(true);
+
+      const undone = await service.undo('run-undo-ok');
+
+      expect(undone.appliedCommit).toBe(result.commit);
+      expect(fs.existsSync(path.join(testRepoRoot, 'undo-me.txt'))).toBe(false);
+      expect(service.getDelivery('run-undo-ok')?.status).toBe('reverted');
+      expect(service.getDelivery('run-undo-ok')?.revertCommit).toBe(undone.revertCommit);
+      // The applied merge is still in history: nothing was rewritten.
+      await gitService.exec(['merge-base', '--is-ancestor', result.commit, 'main'], testRepoRoot);
+      db.close();
+    });
+
+    it('refuses to undo twice, a run that was never applied, or with a dirty working tree', async () => {
+      const { db, service } = await applied('run-undo-guards', 'guard.txt');
+      fs.writeFileSync(path.join(testRepoRoot, 'dirty.txt'), 'wip');
+      await expect(service.undo('run-undo-guards')).rejects.toThrow(/not clean/);
+      fs.rmSync(path.join(testRepoRoot, 'dirty.txt'));
+
+      await service.undo('run-undo-guards');
+      await expect(service.undo('run-undo-guards')).rejects.toThrow(/already undone/);
+
+      const { runRepo } = { runRepo: new RunRepository(db) };
+      runRepo.create('run-unapplied');
+      const branch = await createIntegrationBranch('run-unapplied', 'u.txt', 'x\n');
+      service.markReady('run-unapplied', branch, 'main', baseCommit);
+      await expect(service.undo('run-unapplied')).rejects.toThrow(/nothing to undo/);
+      db.close();
+    });
+
+    it('leaves the repository untouched when later work conflicts with the revert', async () => {
+      const { db, service } = await applied('run-undo-conflict', 'shared-edit.txt');
+      fs.writeFileSync(path.join(testRepoRoot, 'shared-edit.txt'), 'someone edited this later\n');
+      await gitService.stageAndCommit('later edit', testRepoRoot);
+      const head = (await gitService.exec(['rev-parse', 'HEAD'], testRepoRoot)).trim();
+
+      await expect(service.undo('run-undo-conflict')).rejects.toThrow(/would conflict/);
+
+      expect((await gitService.exec(['rev-parse', 'HEAD'], testRepoRoot)).trim()).toBe(head);
+      expect((await gitService.getStatus(testRepoRoot)).uncommittedFiles).toEqual([]);
+      expect(service.getDelivery('run-undo-conflict')?.status).toBe('applied');
+      db.close();
+    });
+
+    it('finds the newest applied run that is not undone', async () => {
+      const { db, service } = await applied('run-find-1', 'f1.txt');
+      expect(service.findLatestApplied()?.runId).toBe('run-find-1');
+      await service.undo('run-find-1');
+      expect(service.findLatestApplied()).toBeUndefined();
+      db.close();
+    });
+  });
 });

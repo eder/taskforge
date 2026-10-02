@@ -67,6 +67,10 @@ export interface SchedulerResumeState {
 
 export interface SchedulerContext {
   runId: string;
+  /** Stop starting tasks once this many tokens were spent (see execution.tokenBudget). */
+  tokenBudget?: number;
+  /** Provider-reported tokens spent in this run so far; paired with tokenBudget. */
+  tokensSpent?: () => number;
   baseCommit: string;
   repoRoot: string;
   /** Verbatim request that started the run. */
@@ -794,6 +798,8 @@ export class DeterministicScheduler {
 
     // Main scheduling loop
     const runningPromises = new Map<string, Promise<void>>();
+    let budgetStop: { spent: number; budget: number } | undefined;
+    let budgetWarned = false;
 
     while (!graph.isAllCompleted() && !graph.hasFailuresOrBlocks()) {
       if (abortSignal?.aborted) {
@@ -804,6 +810,34 @@ export class DeterministicScheduler {
           tasksCompleted: graph.getAllTasks().filter((t) => t.status === 'integrated').length,
           tasksFailed: 0,
         };
+      }
+
+      // Token budget: checked between task starts. Work already running is not
+      // killed (that would leave half-finished changes), so a run can overshoot
+      // by what was in flight; nothing new is started past the cap.
+      if (this.ctx.tokenBudget && this.ctx.tokensSpent) {
+        const spent = this.ctx.tokensSpent();
+        const budget = this.ctx.tokenBudget;
+        if (spent >= budget) {
+          budgetStop = { spent, budget };
+          eventRepo.append({
+            id: `evt-${randomUUID()}`,
+            runId,
+            type: 'TOKEN_BUDGET_REACHED',
+            payload: { spent, budget },
+            timestamp: new Date(),
+          });
+          this.ctx.onProgress?.(
+            `Token budget reached: ${spent.toLocaleString('en-US')} of ${budget.toLocaleString('en-US')} tokens. Not starting new tasks; finishing the ones already running.`,
+          );
+          break;
+        }
+        if (!budgetWarned && spent >= budget * 0.8) {
+          budgetWarned = true;
+          this.ctx.onProgress?.(
+            `Token usage at ${Math.round((spent / budget) * 100)}% of the ${budget.toLocaleString('en-US')} budget.`,
+          );
+        }
       }
 
       const runnableTasks = graph.getRunnableTasks();
@@ -896,7 +930,9 @@ export class DeterministicScheduler {
     } else if (status === 'completed' && !this.hasIntegratedCommits) {
       integrationBranch = undefined;
     } else {
-      errorMessage = `Tasks not all integrated: completed=${tasksCompleted}, failed=${tasksFailed}, allCompleted=${graph.isAllCompleted()}`;
+      errorMessage = budgetStop
+        ? `Token budget reached (${budgetStop.spent.toLocaleString('en-US')} of ${budgetStop.budget.toLocaleString('en-US')} tokens); the remaining tasks were not started.`
+        : `Tasks not all integrated: completed=${tasksCompleted}, failed=${tasksFailed}, allCompleted=${graph.isAllCompleted()}`;
     }
 
     runRepo.updateStatus(runId, status);

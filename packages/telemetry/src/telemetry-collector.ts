@@ -82,6 +82,36 @@ export class TelemetryCollector {
     };
   }
 
+  /** Provider-reported tokens spent so far in a run (all attempts). */
+  getRunTokenTotal(runId: string): number {
+    return this.costRepo.getTotalCostByRun(runId).totalTokens;
+  }
+
+  /**
+   * One line for the end of a run: what it actually used, against the plan's
+   * estimate and the budget, and where most of it went. Only usage the agents
+   * reported is counted, and the line says so when there was none.
+   */
+  formatSpendLine(runId: string, budget?: number): string {
+    const report = this.getCostReport(runId);
+    if (report.breakdown.length === 0) {
+      return 'Tokens: no usage was reported by the agents, so the cost of this run is unknown.';
+    }
+    const fmt = (n: number) => n.toLocaleString('en-US');
+    const parts = [`Tokens used: ${fmt(report.totalTokens)} (~$${report.totalCostUsd.toFixed(2)})`];
+    if (budget) parts.push(`${Math.round((report.totalTokens / budget) * 100)}% of the ${fmt(budget)} budget`);
+    if (report.totalPlannedEstimatedTokens > 0) {
+      parts.push(`the plan estimated ~${fmt(report.totalPlannedEstimatedTokens)}`);
+    }
+    const byTask = new Map<string, number>();
+    for (const b of report.breakdown) byTask.set(b.taskId, (byTask.get(b.taskId) ?? 0) + b.totalTokens);
+    const [topTask, topTokens] = [...byTask.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (byTask.size > 1) {
+      parts.push(`most went to ${topTask} (${fmt(topTokens)}, ${Math.round((topTokens / report.totalTokens) * 100)}%)`);
+    }
+    return parts.join(' · ');
+  }
+
   recordRunMetrics(metrics: {
     runId: string;
     durationMs: number;

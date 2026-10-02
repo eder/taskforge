@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   AgentMessage,
   AgentRuntimeEvent,
@@ -74,7 +75,7 @@ export class FakeAgentSession implements AgentSession {
     this.eventWaiters = [];
     for (const [reqId, resolver] of this.responseResolvers.entries()) {
       resolver({
-        id: `resp-cancel-${Date.now()}`,
+        id: `resp-cancel-${randomUUID()}`,
         requestId: reqId,
         decision: 'cancel',
         source: 'policy',
@@ -93,7 +94,7 @@ export class FakeAgentSession implements AgentSession {
     this.eventWaiters = [];
     for (const [reqId, resolver] of this.responseResolvers.entries()) {
       resolver({
-        id: `resp-cancel-${Date.now()}`,
+        id: `resp-cancel-${randomUUID()}`,
         requestId: reqId,
         decision: 'cancel',
         source: 'policy',

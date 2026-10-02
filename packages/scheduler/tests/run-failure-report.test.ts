@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { TaskForgeDatabase, RunRepository, TaskRepository, EventRepository } from '@taskforge/persistence';
-import { describeRunFailures, formatRunFailureLines } from '../src/run-failure-report.js';
+import {
+  describeRunFailures,
+  formatRunFailureLines,
+  recommendNextStep,
+  type RunFailureLine,
+} from '../src/run-failure-report.js';
 
 function setup() {
   const db = new TaskForgeDatabase(':memory:');
@@ -105,7 +110,7 @@ describe('kept work in the failure report', () => {
     expect(lines[0].keptBranch).toBe('taskforge/candidate/123/T1');
     const text = formatRunFailureLines(lines, 'run-1').join('\n');
     expect(text).toContain("work is kept on branch taskforge/candidate/123/T1");
-    expect(text).toContain('re-checks the kept work without calling agents');
+    expect(text).toContain('continues from its kept work');
     db.close();
   });
 });
@@ -114,8 +119,50 @@ describe('formatRunFailureLines', () => {
   it('is empty when there is nothing to explain, and always ends with the next step', () => {
     expect(formatRunFailureLines([], 'run-1')).toEqual([]);
     const text = formatRunFailureLines([{ taskId: 'T1', title: 'x', kind: 'failed', reason: 'boom' }], 'run-9');
-    expect(text[text.length - 1]).toBe(
-      'Next: tf resume run-9   ·   tf abandon run-9 (if no longer needed)   ·   tf inspect run-9',
-    );
+    expect(text.some((l) => l.startsWith('Next: tf resume run-9'))).toBe(true);
+    expect(text[text.length - 1]).toBe('Also: tf abandon run-9 (if no longer needed)   ·   tf inspect run-9');
+  });
+});
+
+describe('recommendNextStep', () => {
+  const line = (over: Partial<RunFailureLine>): RunFailureLine => ({ taskId: 'T1', title: 'x', kind: 'blocked', ...over });
+
+  it('is nothing when there is nothing to explain', () => {
+    expect(recommendNextStep([], 'run-1')).toBeUndefined();
+  });
+
+  it('points a broken check command at tf init --check, and is not offered as a one-key action', () => {
+    const step = recommendNextStep([line({ failureClass: 'verification_configuration' })], 'run-1')!;
+    expect(step.command).toBe('tf init --check');
+    expect(step.runnable).toBe(false);
+    expect(step.alternatives).toContain('tf resume run-1');
+  });
+
+  it('asks for the environment fix before resuming', () => {
+    const step = recommendNextStep([line({ failureClass: 'environment' })], 'run-1')!;
+    expect(step.command).toBe('tf resume run-1');
+    expect(step.runnable).toBe(false);
+  });
+
+  it('suggests a higher budget after a budget stop, never one-key', () => {
+    const step = recommendNextStep(
+      [{ taskId: '', title: '', kind: 'budget', budget: { spent: 620_000, budget: 500_000 } }],
+      'run-1',
+    )!;
+    expect(step.command).toBe('tf resume run-1 --budget 1000000');
+    expect(step.runnable).toBe(false);
+  });
+
+  it('suggests resuming a code failure, runnable with one key, and mentions --fresh when work was kept', () => {
+    const plain = recommendNextStep([line({ kind: 'failed' })], 'run-1')!;
+    expect(plain).toMatchObject({ command: 'tf resume run-1', runnable: true });
+    const kept = recommendNextStep([line({ kind: 'failed', keptBranch: 'taskforge/candidate/1/T1' })], 'run-1')!;
+    expect(kept.alternatives.join(' ')).toContain('--fresh');
+  });
+
+  it('gives one command, not a menu, in the formatted output', () => {
+    const text = formatRunFailureLines([line({ failureClass: 'verification_configuration' })], 'run-1');
+    expect(text.filter((l) => l.startsWith('Next:'))).toHaveLength(1);
+    expect(text.join('\n')).toContain('Next: tf init --check');
   });
 });

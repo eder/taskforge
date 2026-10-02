@@ -279,7 +279,11 @@ describe('Agents - FakeAgent and Registry', () => {
     const regAgy = registry.get('agy');
 
     expect((regClaude as any).options.defaultArgs).toContain('--output-format=stream-json');
-    expect((regCodex as any).options.defaultArgs).toEqual(['exec', '--json']);
+    expect((regCodex as any).options.defaultArgs).toEqual(['exec', '--json', '--ephemeral']);
+    expect((regClaude as any).options.defaultArgs).toContain('--no-session-persistence');
+    // The flag must come before -p, which takes the prompt that follows it.
+    const claudeArgs = (regClaude as any).options.defaultArgs as string[];
+    expect(claudeArgs.indexOf('--no-session-persistence')).toBeLessThan(claudeArgs.indexOf('-p'));
     expect((regAgy as any).options.defaultArgs).toEqual(['--output-format', 'stream-json', '-p']);
   });
 

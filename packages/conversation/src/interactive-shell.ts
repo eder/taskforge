@@ -59,6 +59,10 @@ import {
   allowedWritersForTask,
   describeRunFailures,
   formatRunFailureLines,
+  recommendNextStep,
+  describeRunConfidence,
+  formatRunConfidence,
+  type RunConfidence,
   extractRunId,
   resolveRunRef,
   isShortFollowUp,
@@ -73,6 +77,7 @@ import {
   InteractionRepository,
   RunRepository,
   SessionRepository,
+  VerificationRepository,
   GoalRepository,
   EventRepository,
   TaskRepository,
@@ -153,6 +158,8 @@ export class InteractiveShell {
   private lastGoalDescription?: string;
   /** Intent settled when the plan was proposed (deterministic reading + planner model, stricter wins). */
   private settledIntent?: ExecutionIntentDecision;
+  /** A failed run whose recommended next step is safe to run on Enter (see recommendNextStep). */
+  private suggestedRetry?: string;
   /** Output of an earlier run attached to the plan being proposed ("do item 1"). */
   private pendingPriorContext?: { runId: string; text: string; chars: number; createdAt: string };
   private isPaused = false;
@@ -532,29 +539,92 @@ export class InteractiveShell {
    * automatically -- that stays an explicit, separate escape hatch.
    */
   private async formatRunDiff(runId: string): Promise<string> {
-    return formatRunDiff(
+    const diff = await formatRunDiff(
       { deliveryService: this.deliveryService, gitService: this.gitService, repoRoot: this.repoRoot },
       runId,
     );
+    if (!this.deliveryService.getDelivery(runId)) return diff;
+    const { confidence, goal } = this.confidenceFor(runId);
+    return `${diff}\n\n${this.styleConfidence(confidence, goal)}`;
+  }
+
+  /** What was checked for a run, and the goal it served, for the diff view and the apply gate. */
+  private confidenceFor(runId: string): { confidence: RunConfidence; goal?: string } {
+    const confidence = describeRunConfidence(
+      {
+        taskRepo: this.taskRepo,
+        verificationRepo: new VerificationRepository(this.db),
+        eventRepo: this.eventRepo,
+      },
+      runId,
+    );
+    const goalId = new RunRepository(this.db).get(runId)?.goalId;
+    const goal = goalId ? new GoalRepository(this.db).get(goalId)?.description : undefined;
+    return { confidence, goal };
+  }
+
+  private styleConfidence(confidence: RunConfidence, goal?: string): string {
+    return formatRunConfidence(confidence, goal)
+      .map((line) => {
+        if (line.trimStart().startsWith('✔')) return `${colors.green}${line}${colors.reset}`;
+        if (line.trimStart().startsWith('⚠') || line.startsWith('Not verified') || line.startsWith('Partly')) {
+          return `${colors.yellow}${line}${colors.reset}`;
+        }
+        return line.endsWith(':') ? `${colors.bold}${line}${colors.reset}` : line;
+      })
+      .join('\n');
   }
 
   private async formatRunSummary(result: OrchestrationResult): Promise<string> {
-    const failureLines =
+    const failures =
       result.status === 'failed'
-        ? formatRunFailureLines(
-            describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, result.runId),
-            result.runId,
-          )
+        ? describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, result.runId)
         : [];
-    return formatRunSummary(
+    const failureLines = formatRunFailureLines(failures, result.runId);
+    const step = recommendNextStep(failures, result.runId);
+    if (step?.runnable) {
+      this.suggestedRetry = result.runId;
+      failureLines.push('Press Enter to do that now (or /retry).');
+    }
+    const summary = await formatRunSummary(
       {
         failureLines,
         deliveryService: this.deliveryService,
         repoRoot: this.repoRoot,
         telemetry: this.telemetry,
+        tokenBudget: this.config.execution.tokenBudget,
       },
       result,
     );
+    if (result.status !== 'completed' || !this.deliveryService.getDelivery(result.runId)) return summary;
+    const { headline } = this.confidenceFor(result.runId).confidence;
+    const checks =
+      headline === 'verified'
+        ? `${colors.green}✔ Checked: automated checks passed${colors.reset}`
+        : headline === 'not_applicable'
+          ? ''
+          : `${colors.yellow}⚠ ${headline === 'unverified' ? 'Not verified: no automated checks ran' : 'Partly verified'}${colors.reset}${colors.dim} (the plain-language summary is in /diff ${result.runId})${colors.reset}`;
+    return checks ? `${summary}\n  ${checks}` : summary;
+  }
+
+  private buildOrchestrator(): RunOrchestrator {
+    return new RunOrchestrator({
+      repoRoot: this.repoRoot,
+      config: this.config,
+      database: this.db,
+      availabilityDatabase: this.availabilityDb,
+      agentRegistry: this.agentRegistry,
+      planner: this.planner,
+      negotiator: this.negotiator,
+      router: this.router,
+      agentSelector: this.agentSelector,
+      gitService: this.gitService,
+      interactionGateway: this.interactionGateway,
+      activityTracker: this.activityTracker,
+      streamBus: this.streamBus,
+      sessionRegistry: this.sessionRegistry,
+      telemetryCollector: this.telemetry,
+    });
   }
 
   /** One line saying what the session continues from, so history is visible without asking. */
@@ -652,7 +722,11 @@ export class InteractiveShell {
 
   async handleInput(input: string, abortSignal?: AbortSignal): Promise<string> {
     const text = input.trim();
-    if (!text) return '';
+    if (!text) {
+      // Enter alone accepts the one suggested next step, if there is one.
+      return this.suggestedRetry ? this.handleInput(`/retry ${this.suggestedRetry}`, abortSignal) : '';
+    }
+    if (!text.startsWith('/retry')) this.suggestedRetry = undefined;
 
     if (text === '/exit' || text === '/quit' || text === 'exit' || text === 'quit') {
       return 'Session closed.';
@@ -922,6 +996,20 @@ export class InteractiveShell {
         if (!delivery) {
           return `Run ${targetRunId} has no delivery information.`;
         }
+        // A change nobody checked is not applied on a bare /apply: show how it was
+        // (not) verified and ask for an explicit --yes.
+        if (delivery.status === 'ready_to_apply' && !intent.confirmed) {
+          const { confidence, goal } = this.confidenceFor(targetRunId);
+          if (confidence.headline === 'unverified' || confidence.headline === 'partly_verified') {
+            return [
+              `${colors.brand}✦ ${colors.bold}Before applying ${targetRunId}${colors.reset}`,
+              '',
+              this.styleConfidence(confidence, goal),
+              '',
+              `${colors.dim}Review it with /diff ${targetRunId}. To apply anyway: /apply ${targetRunId} --yes${colors.reset}`,
+            ].join('\n');
+          }
+        }
         const before = await this.gitService.getStatus().catch(() => undefined);
         // Capture the file list BEFORE applying: once merged, targetBranch
         // already contains everything from the integration branch, so a
@@ -1063,6 +1151,82 @@ export class InteractiveShell {
       case 'pause_execution': {
         this.isPaused = true;
         return this.operator.formatResponse(intent, {});
+      }
+
+      case 'undo_run': {
+        const target = intent.runId
+          ? this.resolveDeliveryRunId(intent.runId)
+          : this.deliveryService.findLatestApplied()?.runId;
+        if (!target) return 'No applied run to undo. Use /runs to see delivery status.';
+        try {
+          const result = await this.deliveryService.undo(target);
+          return [
+            `${colors.green}✔${colors.reset} Undid ${colors.bold}${target}${colors.reset}: its changes were reverted with commit ${result.revertCommit.slice(0, 7)}.`,
+            `${colors.dim}Nothing was rewritten or lost. To bring the change back: git revert ${result.revertCommit.slice(0, 7)}${colors.reset}`,
+          ].join('\n');
+        } catch (err) {
+          return `${colors.red}✖ Could not undo ${target}:${colors.reset} ${(err as Error).message}`;
+        }
+      }
+
+      case 'retry_run': {
+        const runs = new RunRepository(this.db);
+        const resolved = intent.runId ? resolveRunRef(runs, intent.runId) : undefined;
+        if (resolved && 'error' in resolved) return resolved.error;
+        const runId =
+          (resolved && 'runId' in resolved ? resolved.runId : undefined) ??
+          runs.listAll().find((r) => ['failed', 'cancelled', 'running'].includes(r.status))?.id;
+        if (!runId) return 'Nothing to retry: no failed, cancelled or interrupted runs. See /runs.';
+
+        const orchestrator = this.buildOrchestrator();
+        const notResumable = await orchestrator.checkResumable(runId);
+        if (notResumable) return notResumable;
+
+        this.suggestedRetry = undefined;
+        this.activeRunId = runId;
+        this.conversationState = 'EXECUTING';
+        const controller = new AbortController();
+        this.activeExecutionController = controller;
+        this.viewport.writeUpper(
+          `\n  ${colors.brand}✦ ${colors.bold}TaskForge Resume${colors.reset}\n  ${colors.green}✔${colors.reset} Continuing ${colors.bold}${runId}${colors.reset}: integrated tasks are kept, the rest runs again.\n`,
+        );
+        const finish = async (result: OrchestrationResult): Promise<string> => {
+          this.activeExecutionController = undefined;
+          this.activeRunId = result.runId;
+          this.conversationState =
+            result.status === 'completed' &&
+            this.deliveryService.getDelivery(result.runId)?.status === 'ready_to_apply'
+              ? 'DELIVERY_READY'
+              : 'IDLE';
+          return this.formatRunSummary(result);
+        };
+        const execution = orchestrator.resume(runId, {
+          abortSignal: controller.signal,
+          activityTracker: this.activityTracker,
+          onProgress: (msg) => this.viewport.writeUpper(theme.formatProgressMessage(msg)),
+        });
+        if (this.options.asyncExecution ?? this.viewport.isInteractive) {
+          execution
+            .then(async (result) => {
+              this.viewport.writeUpper(`\n${await finish(result)}\n`);
+              this.viewport.drawFooter('');
+            })
+            .catch((err) => {
+              this.activeExecutionController = undefined;
+              this.conversationState = 'IDLE';
+              if (controller.signal.aborted || err.message?.includes('database is not open')) return;
+              this.viewport.writeUpper(`\n  ${colors.red}✕ Resume error:${colors.reset} ${err.message}\n`);
+              this.viewport.drawFooter('');
+            });
+          return `  ${colors.dim}Running in background (Run: ${runId}). The REPL stays active: /tasks, /stream <task>.${colors.reset}\n`;
+        }
+        try {
+          return await finish(await execution);
+        } catch (err) {
+          this.activeExecutionController = undefined;
+          this.conversationState = 'IDLE';
+          return `${colors.red}✕ Resume error: ${(err as Error).message}${colors.reset}`;
+        }
       }
 
       case 'clear_context': {
@@ -1441,23 +1605,7 @@ export class InteractiveShell {
         this.viewport.writeUpper(approvedMsg);
         this.viewport.drawFooter('⚡ Executing plan...');
 
-        const orchestrator = new RunOrchestrator({
-          repoRoot: this.repoRoot,
-          config: this.config,
-          database: this.db,
-          availabilityDatabase: this.availabilityDb,
-          agentRegistry: this.agentRegistry,
-          planner: this.planner,
-          negotiator: this.negotiator,
-          router: this.router,
-          agentSelector: this.agentSelector,
-          gitService: this.gitService,
-          interactionGateway: this.interactionGateway,
-          activityTracker: this.activityTracker,
-          streamBus: this.streamBus,
-          sessionRegistry: this.sessionRegistry,
-          telemetryCollector: this.telemetry,
-        });
+        const orchestrator = this.buildOrchestrator();
 
         const isBackground =
           this.options.asyncExecution ??
@@ -1603,7 +1751,7 @@ export class InteractiveShell {
       '',
       `  ${colors.dim}ℹ This project has no .taskforge/config.yaml. It is optional: TaskForge works with its defaults.${colors.reset}`,
       `  ${colors.dim}  It mainly tells TaskForge how to verify code changes (needed for non-Node projects).${colors.reset}`,
-      `  ${colors.dim}  Create one with \`tf init\` (it shows the file before writing), or ignore this. Shown once.${colors.reset}`,
+      `  ${colors.dim}  Create one with \`tf init\` (it shows the file before writing), or run \`tf setup\` for a guided first-time check. Shown once.${colors.reset}`,
       '',
     ].join('\n');
   }
@@ -1638,7 +1786,7 @@ export class InteractiveShell {
       for await (const line of rl) {
         const trimmed = line.trim();
         if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'exit' || trimmed === 'quit') break;
-        if (!trimmed) continue;
+        if (!trimmed && !this.suggestedRetry) continue;
         const reply = await this.handleInput(trimmed);
         if (reply) {
           outStream.write(`${reply}\n`);
@@ -2186,7 +2334,8 @@ export class InteractiveShell {
         break;
       }
 
-      if (!trimmed) {
+      // A bare Enter only means something while a retry is being suggested.
+      if (!trimmed && !this.suggestedRetry) {
         continue;
       }
 

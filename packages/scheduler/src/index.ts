@@ -12,3 +12,4 @@ export * from './task-id-allocation.js';
 export * from './run-failure-report.js';
 export * from './run-context.js';
 export * from './run-ref.js';
+export * from './run-confidence.js';

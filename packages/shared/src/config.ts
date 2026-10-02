@@ -97,6 +97,13 @@ export const TaskForgeConfigSchema = z.object({
        * "packages/*\/node_modules". Use [] to disable.
        */
       worktreeLinks: z.array(z.string().min(1)).default(['node_modules', 'packages/*/node_modules', 'apps/*/node_modules']),
+      /**
+       * Maximum provider-reported tokens a run may spend (all attempts of the
+       * run, including after `tf resume`). No new task is started once it is
+       * reached; tasks already running finish, so a run can overshoot by what
+       * was in flight. Unset = no cap.
+       */
+      tokenBudget: z.number().int().positive().optional(),
       autoPruneOlderThan: z
         .string()
         .regex(/^\d+[smhdw]$/, 'Use a number plus s, m, h, d or w (e.g. 7d)')

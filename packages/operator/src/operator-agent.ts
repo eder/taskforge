@@ -25,6 +25,7 @@ export type OperatorIntent =
     }
   | { type: 'add_constraint'; constraint: string; readOnlyScope?: string }
   | { type: 'clear_context' }
+  | { type: 'retry_run'; runId?: string }
   | { type: 'approve_plan' }
   | { type: 'reject_plan'; feedback?: string }
   | { type: 'revise_plan'; revision: PlanRevision }
@@ -36,7 +37,8 @@ export type OperatorIntent =
   | { type: 'deny_interaction'; requestId?: string; reason?: string }
   | { type: 'inspect_pending_interactions' }
   | { type: 'inspect_runs' }
-  | { type: 'apply_run'; runId?: string }
+  | { type: 'apply_run'; runId?: string; confirmed?: boolean }
+  | { type: 'undo_run'; runId?: string }
   | { type: 'diff_run'; runId?: string }
   | { type: 'create_pr'; runId?: string }
   | { type: 'discard_run'; runId?: string }
@@ -125,12 +127,19 @@ export class OperatorIntentParser {
       return { type: 'inspect_dashboard' };
     if (text.startsWith('/pause')) return { type: 'pause_execution' };
     if (text.startsWith('/unpause') || text.startsWith('/resume')) return { type: 'resume_execution' };
+    if (text === '/retry' || text.startsWith('/retry ')) {
+      return { type: 'retry_run', runId: text.split(/\s+/)[1] };
+    }
     if (text === '/clear' || text.startsWith('/clear ')) return { type: 'clear_context' };
     if (text.startsWith('/pending')) return { type: 'inspect_pending_interactions' };
 
     if (text.startsWith('/apply')) {
-      const parts = text.split(/\s+/);
-      return { type: 'apply_run', runId: parts[1] };
+      const parts = text.split(/\s+/).slice(1);
+      const confirmed = parts.includes('--yes') || parts.includes('-y');
+      return { type: 'apply_run', runId: parts.find((p) => !p.startsWith('-')), confirmed };
+    }
+    if (text === '/undo' || text.startsWith('/undo ')) {
+      return { type: 'undo_run', runId: text.split(/\s+/)[1] };
     }
     if (text.startsWith('/diff')) {
       const parts = text.split(/\s+/);

@@ -35,7 +35,22 @@ pnpm build
 npm link apps/cli
 ```
 
-Check the environment:
+The fastest way to get going in a project is one guided command:
+
+```bash
+cd /path/to/your-project
+tf setup
+```
+
+It runs three steps and asks before each one that costs time or writes a file:
+
+1. **Environment**: `tf doctor` (git, database, ready agents). It stops with the exact fix if the folder is not a git repository, and tells you what to install if no agent is ready.
+2. **Project config**: `tf init --check`, which proposes `.taskforge/config.yaml`, runs the detected test commands once to confirm they work, shows the file, and writes it only after you confirm.
+3. **Test task**: a small read-only task ("describe this project"), capped at 60k tokens, that proves an agent can work here. It changes nothing.
+
+`tf setup --yes` accepts the defaults (including the test task); `--no-smoke` skips the test task. Without a terminal and without `--yes` it asks nothing and changes nothing.
+
+You can also run the pieces yourself. Check the environment:
 
 ```bash
 tf doctor
@@ -342,6 +357,31 @@ Recovery context can include:
 
 This is intended to make retry behavior diagnostic rather than repetitive.
 
+### What TaskForge repairs by itself, and what it does not
+
+- **Code or test failures** (attempts 1 and 2 above): the agent repairs its own work with the evidence, then another agent tries.
+- **Transient machine failures during verification** (a lock held by another process, a dropped connection, a timeout): the same checks run once more after a short wait. Nothing is skipped or weakened to make a check pass; both attempts stay in the record (`VERIFY_RETRIED_TRANSIENT`).
+- **Problems that need you**: a check command that does not work for the project, a broken environment, a policy. TaskForge never skips verification to get past them. It keeps the agent's work, names the cause, and recommends one action.
+
+### One recommended next step
+
+When a run does not complete, the report ends with a single recommendation, not a menu:
+
+```text
+Next: tf init --check   — a check command does not work for this project, so no change can be verified; fix it, then "tf resume run-…" re-checks the kept work without calling agents
+Also: tf resume run-…   ·   tf inspect run-…
+```
+
+| Situation | Recommended |
+|---|---|
+| a check command does not work for the project | `tf init --check`, then `tf resume` |
+| the environment cannot run the checks | fix it, then `tf resume` |
+| a policy stopped the run | `tf inspect` |
+| stopped at the token budget | `tf resume <run> --budget <more>` |
+| the work itself failed after retries | `tf resume` (the agent continues from its kept work) |
+
+In the REPL, when the recommendation is `tf resume` and nothing needs fixing first, the summary says *Press Enter to do that now*: a bare Enter (or `/retry`, optionally with a run such as `/retry 2`) continues the run. Typing anything else drops the suggestion. Spending more (a higher budget) and anything that needs your fix first are never one-key actions.
+
 You can inspect task/run state with:
 
 ```text
@@ -502,11 +542,33 @@ or for a previous run:
 /diff run-<id>
 ```
 
+`/diff` starts with the files changed and ends with a plain-language account of the change:
+
+```text
+What it does: Add retry with backoff to the sync client
+How it was checked:
+  ✔ TASK-01  Add retry: test, lint passed
+  ⚠ TASK-02  Update docs: no automated checks ran (a documentation-only change, or no check commands are configured)
+Partly verified: read the diff of the tasks marked ⚠ before applying.
+```
+
+"Passed" is only reported as verified when checks actually ran. A run whose tasks passed with nothing executed is shown as **not verified**, so a green result is never mistaken for evidence.
+
 Apply the completed run to its target branch:
 
 ```text
 /apply
 ```
+
+If the changes were not fully verified, `/apply` shows the account above and stops; `/apply --yes` applies anyway. `tf apply` does the same: it prints the account, and on a terminal asks `Apply anyway?` (anything but `y` stops; `--yes` skips the question; without a terminal it warns and proceeds so automation keeps working). Fully verified runs apply without asking.
+
+Changed your mind? Undo the last applied run:
+
+```text
+/undo          # or: tf undo [run]
+```
+
+Undo adds a revert commit (`git revert -m 1` of the merge TaskForge made). Nothing is rewritten, so it is safe even after you pushed, and the change can be brought back by reverting that revert (the command prints it). It refuses when the working tree is dirty, and if later work conflicts with the revert it changes nothing and tells you the `git revert` to run by hand. `tf runs` shows undone runs as `↩ undone`.
 
 Create a GitHub pull request:
 
@@ -585,6 +647,51 @@ Execution/orchestration statistics:
 ```text
 /stats
 ```
+
+### How TaskForge is doing in this project
+
+```bash
+tf insights               # last 30 days
+tf insights --since 7     # last 7 days
+tf insights --json
+```
+
+```text
+Last 30 days: 14 runs
+  Outcomes: 8 completed, 4 failed, 2 abandoned
+  Finished successfully: 57% of the runs that ended
+  Needed tf resume: 5
+  What stopped work most:
+    3×  a check command that does not work for the project
+    2×  the token budget was reached
+  Tokens: 2,140,000 in total, about 214,000 per run (~$3.10)
+```
+
+It shows where to invest (a recurring stop cause is a config or environment fix, not a model problem) without anyone pasting logs. It is computed from this project's local database only; nothing is collected or sent.
+
+### Capping what a run can spend
+
+At the end of every run TaskForge prints what it actually used, for example:
+
+```text
+Tokens used: 312,400 (~$1.20) · 62% of the 500,000 budget · the plan estimated ~120,000 · most went to TASK-02 (180,000, 58%)
+```
+
+Only usage reported by the agents is counted; when an agent reports none, the line says the cost is unknown.
+
+Set a ceiling per run in `.taskforge/config.yaml`, or per command:
+
+```yaml
+execution:
+  tokenBudget: 500000   # tokens per run, all attempts included
+```
+
+```bash
+tf run "…" --budget 500k
+tf resume last --budget 1.5m     # new total cap; what was already spent counts
+```
+
+At 80% TaskForge warns. At 100% it **stops starting new tasks**, lets the ones already running finish (killing them would leave half-done changes, so a run can overshoot by what was in flight), and ends as a resumable run with "Stopped at the token budget" and the exact `tf resume … --budget` command. Nothing is lost.
 
 TaskForge treats provider token usage as telemetry. It should not label a run efficient or inefficient based only on absolute token volume; orchestration efficiency requires evidence such as failed assignments, unnecessary fan-out, rework, or cancelled work.
 
@@ -705,6 +812,7 @@ execution:
   databasePath: .taskforge/taskforge.db
   runsDir: .taskforge/runs
   # autoPruneOlderThan: 7d   # opt-in cleanup of stale worktrees/branches at run start
+  # tokenBudget: 500000       # stop starting new tasks after this many tokens per run
 
 collaboration:
   maxAgentsPerTask: 3
