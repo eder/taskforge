@@ -101,9 +101,10 @@ export const TaskForgeConfigSchema = z.object({
        * Maximum provider-reported tokens a run may spend (all attempts of the
        * run, including after `tf resume`). No new task is started once it is
        * reached; tasks already running finish, so a run can overshoot by what
-       * was in flight. Unset = no cap.
+       * was in flight. 0 = no cap. The default is generous on purpose: it only
+       * stops a runaway run, so a new user never has unlimited spend by accident.
        */
-      tokenBudget: z.number().int().positive().optional(),
+      tokenBudget: z.number().int().min(0).default(2_000_000),
       autoPruneOlderThan: z
         .string()
         .regex(/^\d+[smhdw]$/, 'Use a number plus s, m, h, d or w (e.g. 7d)')

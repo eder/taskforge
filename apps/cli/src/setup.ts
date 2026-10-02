@@ -4,7 +4,11 @@
  * doctor, init and a test run are three separate things. Every side effect is
  * injected, so the flow is testable without a terminal, agents or a repository.
  */
+import { SECURITY_NOTICE } from '@taskforge/shared';
+
 export interface SetupDeps {
+  /** Called once the security notice was printed (so the first-launch notice is not repeated). */
+  noticeShown?(): void;
   /** A person is at a terminal and can answer questions. */
   interactive: boolean;
   /** Accept the defaults without asking (also runs the test task). */
@@ -38,6 +42,11 @@ export const SETUP_SMOKE_BUDGET = '60k';
 export async function runSetup(deps: SetupDeps): Promise<SetupOutcome> {
   const steps: SetupOutcome['steps'] = [];
   const { log } = deps;
+
+  log('Before you start:');
+  for (const line of SECURITY_NOTICE) log(`  • ${line}`);
+  log('');
+  deps.noticeShown?.();
 
   log('TaskForge setup: 3 steps (environment, project config, a small test task).\n');
 

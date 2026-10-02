@@ -152,6 +152,14 @@ describe('execution.tokenBudget', () => {
     db.close();
   });
 
+  it('a budget of 0 means no cap', async () => {
+    const { db, agent, orchestrator } = build();
+    const result = await orchestrator.run('Analyse the area', { preplannedGraph: graph(), tokenBudget: 0 });
+    expect(result.status).toBe('completed');
+    expect(agent.calls).toBe(2);
+    db.close();
+  });
+
   it('does nothing without a budget', async () => {
     const { db, agent, orchestrator } = build();
     const result = await orchestrator.run('Analyse the area', { preplannedGraph: graph() });

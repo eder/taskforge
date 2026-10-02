@@ -53,11 +53,21 @@ jobs:
       - run: pnpm test
 
       - name: Dry-run publish (packs every package, publishes nothing)
-        run: pnpm -r publish --dry-run --no-git-checks --access public
+        run: pnpm -r publish --dry-run --no-git-checks --access public --tag beta
+
+      # 0.x and prerelease versions are published under the `beta` tag so that a plain
+      # `npm install` never picks up an experimental release; stable versions use `latest`.
+      - name: Choose npm dist-tag
+        id: disttag
+        run: |
+          VERSION=$(node -p "require('./apps/cli/package.json').version")
+          case "$VERSION" in 0.*|*-*) TAG=beta ;; *) TAG=latest ;; esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION with npm tag: $TAG"
 
       - name: Publish to npm
         if: startsWith(github.ref, 'refs/tags/') && inputs.dry-run != true
-        run: pnpm -r publish --no-git-checks --access public --provenance
+        run: pnpm -r publish --no-git-checks --access public --provenance --tag ${{ steps.disttag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

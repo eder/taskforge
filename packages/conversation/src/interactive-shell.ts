@@ -20,6 +20,9 @@ import {
   decisionFromJudgement,
   type ExecutionIntentDecision,
   TASKFORGE_VERSION,
+  SECURITY_NOTICE,
+  shouldShowSecurityNotice,
+  markSecurityNoticeShown,
 } from '@taskforge/shared';
 import {
   GitService,
@@ -1744,6 +1747,19 @@ export class InteractiveShell {
    * One-time, non-blocking notice for projects without .taskforge/config.yaml.
    * The file is optional; this only explains that it exists and how to create it.
    */
+  /** The no-sandbox warning, once per machine, so it is seen even by someone who skips `tf setup`. */
+  private securityNotice(): string {
+    if (!shouldShowSecurityNotice()) return '';
+    markSecurityNoticeShown();
+    return [
+      '',
+      `  ${colors.yellow}⚠ Before you start${colors.reset}`,
+      ...SECURITY_NOTICE.map((line) => `  ${colors.dim}• ${line}${colors.reset}`),
+      `  ${colors.dim}(Shown once. \`tf setup\` walks through the first-time checks.)${colors.reset}`,
+      '',
+    ].join('\n');
+  }
+
   private configHint(): string {
     if (!shouldShowConfigHint(this.repoRoot)) return '';
     markConfigHintShown(this.repoRoot);
@@ -1770,7 +1786,8 @@ export class InteractiveShell {
     this.viewport.updateContext(repoName, gitStatus.currentBranch);
 
     if (this.options.freshSession) new SessionRepository(this.db).clearContext();
-    const banner = (await this.renderBanner()) + this.configHint() + this.continuationHint();
+    const banner =
+      (await this.renderBanner()) + this.securityNotice() + this.configHint() + this.continuationHint();
     const inStream = this.options.input ?? process.stdin;
     const outStream = this.options.output ?? process.stdout;
 
