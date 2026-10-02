@@ -597,10 +597,11 @@ To create one, run `tf init` in the project. It detects what it can (Node, Pytho
 tf init            # show the proposal, ask, then write
 tf init --print    # only show it
 tf init --check    # also run each detected command once and report whether it works
+tf init --check --check-timeout 300   # allow slower commands (default 120s)
 tf init --yes      # write without asking (scripts/CI)
 ```
 
-Use `--check` for projects whose tests do not run the way the detector guesses (for example test files that are run one by one as scripts instead of with `pytest`). Edit the file freely afterwards.
+`--check` shows the command's first output lines live, prints a heartbeat every 10s, stops the command after the time limit (default 120s), can be stopped with Ctrl-C, and closes stdin so a command waiting for input cannot hang. When a command fails it shows the last lines and, for common causes (asyncio script-style tests run under `pytest`, a missing virtualenv or dependency, tests that need a running service), a specific tip. Use it for projects whose tests do not run the way the detector guesses (for example test files that are run one by one as scripts instead of with `pytest`). Edit the file freely afterwards.
 
 When you start `tf` in a project without the file, it prints a short notice (once per project) explaining all of this. You can ignore it: nothing else changes. Set `TASKFORGE_NO_HINTS=1` to never see it. `tf doctor` also shows whether the project has a config.
 

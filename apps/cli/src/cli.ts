@@ -21,6 +21,7 @@ import {
   RepositoryAnalyzer,
   parseAgeSpec,
   detectProjectSetup,
+  runCheckCommand,
   renderProjectConfig,
   writeProjectConfig,
   hasProjectConfig,
@@ -322,8 +323,9 @@ export function createCli(): Command {
     .option('-y, --yes', 'Write without asking for confirmation', false)
     .option('--print', 'Only print the proposed file; write nothing', false)
     .option('--check', 'Run each detected command once and report whether it works', false)
+    .option('--check-timeout <seconds>', 'With --check: stop a command after this many seconds', '120')
     .option('--force', 'Overwrite an existing config', false)
-    .action(async (options: { yes?: boolean; print?: boolean; check?: boolean; force?: boolean }) => {
+    .action(async (options: { yes?: boolean; print?: boolean; check?: boolean; checkTimeout?: string; force?: boolean }) => {
       const repoRoot = process.cwd();
 
       if (hasProjectConfig(repoRoot) && !options.force) {
@@ -353,24 +355,50 @@ export function createCli(): Command {
 
       if (options.check) {
         const commands = setup.stacks.flatMap((stack) => stack.commands);
+        const timeoutSeconds = Math.max(5, parseInt(options.checkTimeout ?? '120', 10) || 120);
         if (commands.length === 0) console.log('  --check: no detected command to run.\n');
+        const abort = installGracefulAbort('the check');
         for (const command of commands) {
           console.log(`  --check: running ${command}`);
-          const res = await ProcessRunner.run({
-            command: 'sh',
-            args: ['-c', command],
+          console.log(
+            `  ${colors.dim}(runs the command once in this project; stops after ${timeoutSeconds}s; Ctrl-C to stop it now)${colors.reset}`,
+          );
+          let shown = 0;
+          const result = await runCheckCommand(command, {
             cwd: repoRoot,
-            timeoutMs: 10 * 60_000,
-            envPolicy: verificationEnvPolicy(),
+            timeoutSeconds,
+            signal: abort.signal,
+            onOutput: (chunk) => {
+              // Show the first lines live so it is clear something is happening.
+              for (const line of chunk.split('\n').filter((l) => l.trim())) {
+                if (shown < 12) console.log(`  ${colors.dim}│ ${line.slice(0, 160)}${colors.reset}`);
+                else if (shown === 12) console.log(`  ${colors.dim}│ ... (more output hidden; the last lines are shown at the end)${colors.reset}`);
+                shown++;
+              }
+            },
+            onHeartbeat: (seconds) =>
+              console.log(`  ${colors.dim}… still running (${seconds}s)${colors.reset}`),
           });
-          if (res.exitCode === 0) {
-            console.log(`  ${colors.green}✔${colors.reset} works (exit 0)\n`);
+          const seconds = (result.durationMs / 1000).toFixed(1);
+          if (result.status === 'passed') {
+            console.log(`  ${colors.green}✔${colors.reset} works (exit 0, ${seconds}s)\n`);
+          } else if (result.status === 'cancelled') {
+            console.log(`  ${colors.yellow}■${colors.reset} stopped before finishing. Nothing was written.\n`);
+            process.exitCode = 130;
+            break;
           } else {
-            const tail = (res.stdout + res.stderr).trim().split('\n').slice(-4).join('\n    ');
-            console.log(`  ${colors.red}✖${colors.reset} failed (exit ${res.exitCode}). Fix the command before relying on it:\n    ${tail}\n`);
+            const why =
+              result.status === 'timeout'
+                ? `timed out after ${timeoutSeconds}s (it may be waiting for a service, a database or input)`
+                : `failed (exit ${result.exitCode}, ${seconds}s)`;
+            console.log(`  ${colors.red}✖${colors.reset} ${why}. Fix the command before relying on it:`);
+            for (const line of result.tail) console.log(`    ${line.slice(0, 160)}`);
+            if (result.tip) console.log(`\n  ${colors.yellow}Tip:${colors.reset} ${result.tip}`);
+            console.log('');
             process.exitCode = 2;
           }
         }
+        abort.dispose();
       }
 
       if (options.print) return;

@@ -3,3 +3,4 @@ export * from './worktree-manager.js';
 export * from './repository-analyzer.js';
 export * from './project-instructions.js';
 export * from './project-setup.js';
+export * from './project-check.js';
