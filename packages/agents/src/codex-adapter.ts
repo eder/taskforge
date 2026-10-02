@@ -19,7 +19,8 @@ export class CodexAdapter extends BaseCliAdapter {
     const defaultArgs =
       options.defaultArgs && options.defaultArgs.length > 0
         ? options.defaultArgs
-        : ['exec', '--json'];
+        // See the Claude adapter: TaskForge never resumes provider sessions.
+        : ['exec', '--json', '--ephemeral'];
     super({
       ...options,
       defaultArgs,

@@ -50,7 +50,7 @@ import {
   formatRunConfidence,
 } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
-import { TelemetryCollector } from '@taskforge/telemetry';
+import { TelemetryCollector, computeInsights, formatInsights } from '@taskforge/telemetry';
 import { runSetup } from './setup.js';
 
 /**
@@ -1197,6 +1197,27 @@ export function createCli(): Command {
       } finally {
         db.close();
       }
+    });
+
+  // tf insights
+  program
+    .command('insights')
+    .description("How TaskForge is doing in this project: completion rate, what stops work, cost (local history only)")
+    .option('--since <days>', 'Look back this many days', '30')
+    .option('--json', 'Output the report as JSON', false)
+    .action((options: { since?: string; json?: boolean }) => {
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const days = Math.max(1, parseInt(options.since ?? '30', 10) || 30);
+      const report = computeInsights(db, { sinceDays: days });
+      db.close();
+      if (options.json) {
+        console.log(JSON.stringify(report, null, 2));
+        return;
+      }
+      console.log('');
+      formatInsights(report).forEach((line, i) => console.log(i === 0 ? `${colors.bold}${line}${colors.reset}` : line));
+      console.log('');
     });
 
   // tf cost [run-id]
