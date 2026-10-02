@@ -364,7 +364,7 @@ export class DeterministicScheduler {
       this.ctx.taskRepo.updateStatus(task.id, 'blocked');
       const blockReason =
         failureClass === 'verification_configuration'
-          ? 'verification is not configured for this task scope'
+          ? 'verification is not configured for this task scope (add verification.commands to .taskforge/config.yaml; run "tf init" to generate it)'
           : failureClass === 'environment'
             ? 'the execution environment cannot satisfy the required verification'
             : failureClass === 'policy'
@@ -1038,7 +1038,7 @@ export class DeterministicScheduler {
             : task.reworkCount;
           this.ctx.onProgress?.(
             failureClass === 'verification_configuration'
-              ? `[${task.id}] Collaborative task BLOCKED: verification is not configured for this scope.`
+              ? `[${task.id}] Collaborative task BLOCKED: verification is not configured for this scope (add verification.commands to .taskforge/config.yaml; run "tf init" to generate it).`
               : `[${task.id}] Collaborative verification failed: ${verResult.failureReason} (rework ${rework}/${config.verification.maxReworkCycles})`,
           );
           graph.updateTaskStatus(task.id, 'failed');

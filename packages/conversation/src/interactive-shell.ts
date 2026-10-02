@@ -18,7 +18,13 @@ import {
   detectExecutionIntent,
   TASKFORGE_VERSION,
 } from '@taskforge/shared';
-import { GitService, RepositoryAnalyzer, WorktreeManager } from '@taskforge/workspace';
+import {
+  GitService,
+  RepositoryAnalyzer,
+  WorktreeManager,
+  shouldShowConfigHint,
+  markConfigHintShown,
+} from '@taskforge/workspace';
 import {
   AgentRegistry,
   AgentDetector,
@@ -1454,6 +1460,22 @@ export class InteractiveShell {
     }
   }
 
+  /**
+   * One-time, non-blocking notice for projects without .taskforge/config.yaml.
+   * The file is optional; this only explains that it exists and how to create it.
+   */
+  private configHint(): string {
+    if (!shouldShowConfigHint(this.repoRoot)) return '';
+    markConfigHintShown(this.repoRoot);
+    return [
+      '',
+      `  ${colors.dim}ℹ This project has no .taskforge/config.yaml. It is optional: TaskForge works with its defaults.${colors.reset}`,
+      `  ${colors.dim}  It mainly tells TaskForge how to verify code changes (needed for non-Node projects).${colors.reset}`,
+      `  ${colors.dim}  Create one with \`tf init\` (it shows the file before writing), or ignore this. Shown once.${colors.reset}`,
+      '',
+    ].join('\n');
+  }
+
   async start(): Promise<void> {
     // Startup housekeeping must be safe next to another live TaskForge session
     // in the same repository: only artifacts untouched for 12h are removed.
@@ -1467,7 +1489,7 @@ export class InteractiveShell {
     const repoName = path.basename(this.repoRoot);
     this.viewport.updateContext(repoName, gitStatus.currentBranch);
 
-    const banner = await this.renderBanner();
+    const banner = (await this.renderBanner()) + this.configHint();
     const inStream = this.options.input ?? process.stdin;
     const outStream = this.options.output ?? process.stdout;
 

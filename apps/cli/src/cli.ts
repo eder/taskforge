@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { Command } from 'commander';
 import { loadConfig, getGlobalStateDatabasePath, TASKFORGE_VERSION } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
@@ -19,10 +20,15 @@ import {
   WorktreeManager,
   RepositoryAnalyzer,
   parseAgeSpec,
+  detectProjectSetup,
+  renderProjectConfig,
+  writeProjectConfig,
+  hasProjectConfig,
+  PROJECT_CONFIG_RELATIVE_PATH,
 } from '@taskforge/workspace';
 import { AgentRegistry, AgentDetector, FakeAgent, AgentQuotaTracker } from '@taskforge/agents';
 import { TaskGraph, Task } from '@taskforge/core';
-import { VerificationRunner } from '@taskforge/verification';
+import { VerificationRunner, verificationEnvPolicy } from '@taskforge/verification';
 import {
   IntegrationService,
   GitHubWorkflowService,
@@ -177,6 +183,13 @@ export function createCli(): Command {
         );
       }
 
+      // 3b. Optional project config
+      console.log(
+        hasProjectConfig(repoRoot)
+          ? `  ${colors.bold}Project Config:${colors.reset}     ${colors.green}✔ ${PROJECT_CONFIG_RELATIVE_PATH}${colors.reset}`
+          : `  ${colors.bold}Project Config:${colors.reset}     ${colors.dim}none (optional; defaults in use). Run \`tf init\` to create one.${colors.reset}`,
+      );
+
       // 4. Repository Analyzer
       try {
         const analyzer = new RepositoryAnalyzer(repoRoot, gitService);
@@ -278,6 +291,92 @@ export function createCli(): Command {
       console.log(`Cleaned up ${paths.length} transient worktrees.`);
     },
     );
+
+  // tf init
+  program
+    .command('init')
+    .description('Create an optional .taskforge/config.yaml for this project (shows it before writing)')
+    .option('-y, --yes', 'Write without asking for confirmation', false)
+    .option('--print', 'Only print the proposed file; write nothing', false)
+    .option('--check', 'Run each detected command once and report whether it works', false)
+    .option('--force', 'Overwrite an existing config', false)
+    .action(async (options: { yes?: boolean; print?: boolean; check?: boolean; force?: boolean }) => {
+      const repoRoot = process.cwd();
+
+      if (hasProjectConfig(repoRoot) && !options.force) {
+        console.log(
+          `\n  ${PROJECT_CONFIG_RELATIVE_PATH} already exists. Edit it directly, or run \`tf init --force\` to replace it.\n`,
+        );
+        return;
+      }
+
+      const setup = detectProjectSetup(repoRoot);
+      const content = renderProjectConfig(setup);
+
+      console.log(`\n  ${colors.brand}✦ ${colors.bold}TaskForge project setup${colors.reset}`);
+      console.log(
+        `  ${colors.dim}${PROJECT_CONFIG_RELATIVE_PATH} is optional: TaskForge works with its defaults. It mainly tells TaskForge how to verify code changes in this project.${colors.reset}\n`,
+      );
+      if (setup.stacks.length === 0) {
+        console.log('  Detected: nothing recognizable (the file will contain commented examples).');
+      } else {
+        for (const stack of setup.stacks) {
+          console.log(`  Detected: ${stack.label}${stack.autoDiscovered ? ' (TaskForge finds these checks itself)' : ''}`);
+        }
+      }
+      console.log(`\n  ${colors.dim}--- proposed ${PROJECT_CONFIG_RELATIVE_PATH} ---${colors.reset}`);
+      console.log(content.split('\n').map((l) => `  ${l}`).join('\n'));
+      console.log(`  ${colors.dim}--- end ---${colors.reset}\n`);
+
+      if (options.check) {
+        const commands = setup.stacks.flatMap((stack) => stack.commands);
+        if (commands.length === 0) console.log('  --check: no detected command to run.\n');
+        for (const command of commands) {
+          console.log(`  --check: running ${command}`);
+          const res = await ProcessRunner.run({
+            command: 'sh',
+            args: ['-c', command],
+            cwd: repoRoot,
+            timeoutMs: 10 * 60_000,
+            envPolicy: verificationEnvPolicy(),
+          });
+          if (res.exitCode === 0) {
+            console.log(`  ${colors.green}✔${colors.reset} works (exit 0)\n`);
+          } else {
+            const tail = (res.stdout + res.stderr).trim().split('\n').slice(-4).join('\n    ');
+            console.log(`  ${colors.red}✖${colors.reset} failed (exit ${res.exitCode}). Fix the command before relying on it:\n    ${tail}\n`);
+            process.exitCode = 2;
+          }
+        }
+      }
+
+      if (options.print) return;
+
+      let confirmed = Boolean(options.yes);
+      if (!confirmed) {
+        if (!process.stdin.isTTY) {
+          console.log('  Not writing: no terminal to ask for confirmation. Re-run with --yes to write it.\n');
+          process.exitCode = 1;
+          return;
+        }
+        const rl = (await import('node:readline/promises')).createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        const answer = (await rl.question(`  Write ${PROJECT_CONFIG_RELATIVE_PATH}? [Y/n] `)).trim().toLowerCase();
+        rl.close();
+        confirmed = answer === '' || answer === 'y' || answer === 'yes';
+      }
+      if (!confirmed) {
+        console.log('\n  Nothing written. TaskForge will keep using its defaults.\n');
+        return;
+      }
+
+      const written = writeProjectConfig(repoRoot, content, options.force);
+      await new GitService(repoRoot).ensureLocalExclude('.taskforge/');
+      console.log(`\n  ${colors.green}✔${colors.reset} Wrote ${path.relative(repoRoot, written)}`);
+      console.log('  Review it, then run `tf doctor` to check your setup.\n');
+    });
 
   // tf exec [goal]
   program
