@@ -71,7 +71,7 @@ You
 TaskForge
  │
  ├─ reads repository context and project instructions
- ├─ classifies the execution intent
+ ├─ classifies the execution intent (patterns + planner model, any language; stricter wins)
  ├─ builds a task graph
  ├─ selects the minimum useful agent team
  ├─ creates isolated Git worktrees

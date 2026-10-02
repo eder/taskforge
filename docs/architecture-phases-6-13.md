@@ -37,7 +37,7 @@ flowchart TD
 | Package                    | Role & Responsibility                                                                                                                                                                                                                                  | Spec Reference         |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------- |
 | `@taskforge/conversation`  | Interactive CLI REPL (`tf`), terminal banner with repository health, clean/modified status, detected agents, router status, and ECC detection.                                                                                                         | Section 6, 24          |
-| `@taskforge/operator`      | Natural language intent parser (Portuguese and English) and slash commands (`/tasks`, `/agents`, `/plan`, `/pause`, `/resume`, `/reassign`, `/constraint`). Formats responses without executing code directly.                                         | Section 4, 5           |
+| `@taskforge/operator`      | Natural language command parser (Portuguese and English phrases; other languages fall through to the planner as goals) and slash commands (`/tasks`, `/agents`, `/plan`, `/pause`, `/resume`, `/reassign`, `/constraint`). Formats responses without executing code directly.                                         | Section 4, 5           |
 | `@taskforge/planner`       | `HeuristicPlanner` breaking goals into DAGs with strict `TaskContract` (allowedScope, forbiddenChanges, acceptanceCriteria, dependencies). Propagates goal constraints to all subtasks.                                                                | Section 7, 28          |
 | `@taskforge/negotiation`   | Worker Preflight protocol: evaluates contracts before execution. Handles `accept`, `challenge`, `need_dependency`, `recommend_merge`, updating the `TaskGraph` deterministically and auditing to `preflight_results`.                                  | Section 8              |
 | `@taskforge/router`        | Routing decisions with strict JSON Schema via OpenAI Structured Outputs (`OpenAIRoutingProvider`) with resilient fallback to deterministic heuristics (`StaticRoutingProvider`). Classifies roles neutrally without vendor bias.                       | Section 9, 29          |
@@ -76,7 +76,7 @@ flowchart TD
 
 ### Phase 7: Operator Agent Intent Layer
 
-- Interprets user input via rule-based semantic NLP with zero hallucination.
+- Interprets user input via rule-based command parsing (English and Portuguese phrases plus slash commands). Anything it does not recognise becomes a goal for the planner, which reads any language. Execution intent is the exception to "rules only": the deterministic reading is combined with a planner-model reading and the stricter result wins (`mostRestrictiveIntent` in `@taskforge/shared`), so non-English requests are still held read-only. A leading yes/no is an answer only while a plan or permission question is pending.
 - Supported operations:
   - **Inspection**: `/tasks`, `/agents`, `/plan`, `/cost`, "como estão as tarefas?", "quais agentes estão disponíveis?".
   - **Runtime Control**: `/pause`, `/resume`, "pausar a execução", "retomar a execução".

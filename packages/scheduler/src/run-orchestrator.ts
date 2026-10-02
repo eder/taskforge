@@ -7,6 +7,8 @@ import {
   CollaborationProposal,
   generateRunId,
   detectExecutionIntent,
+  mostRestrictiveIntent,
+  decisionFromJudgement,
   ExecutionIntentDecision,
   getGlobalStateDatabasePath,
   AgentStreamBus,
@@ -97,6 +99,12 @@ export interface OrchestratorOptions {
   telemetryCollector?: TelemetryCollector;
 }
 
+function hasIntentJudge(
+  planner: unknown,
+): planner is { judgeExecutionIntent(request: string): Promise<import('@taskforge/shared').ModelIntentJudgement | undefined> } {
+  return typeof (planner as { judgeExecutionIntent?: unknown })?.judgeExecutionIntent === 'function';
+}
+
 export interface RunOptions {
   runId?: string;
   baseCommit?: string;
@@ -110,6 +118,12 @@ export interface RunOptions {
   freshStart?: boolean;
   /** Rendered output of an earlier run the request refers to (see run-context.ts). */
   priorContext?: { runId: string; text: string; chars: number };
+  /**
+   * The intent already settled for this request (the shell decides it before
+   * showing the plan). It is combined with the deterministic reading and can
+   * only make the run more restrictive.
+   */
+  executionIntent?: ExecutionIntentDecision;
 }
 
 export interface OrchestrationResult {
@@ -325,6 +339,21 @@ export class RunOrchestrator {
       createdAt: new Date(goalRecord.createdAt),
     };
 
+    // Execution intent is authoritative and must be known before planning.
+    // Planning is an advisory interpretation layer; it is never allowed to
+    // silently upgrade a read-only user request into implementation work.
+    // The deterministic patterns know a few languages; the planner model reads
+    // the rest. The two readings are combined and the stricter one wins.
+    let executionIntent: ExecutionIntentDecision = detectExecutionIntent(goalDescription);
+    if (options.executionIntent) {
+      executionIntent = mostRestrictiveIntent(executionIntent, options.executionIntent);
+    } else if (hasIntentJudge(this.planner)) {
+      const judgement = await this.planner.judgeExecutionIntent(goalDescription);
+      if (judgement) {
+        executionIntent = mostRestrictiveIntent(executionIntent, decisionFromJudgement(judgement));
+      }
+    }
+
     // 2. Create Run Record. Persist everything `resume()` needs to rebuild the
     // run later without re-planning (base commit, goal text, base branch).
     this.runRepo.create(runId, goal.id, {
@@ -333,6 +362,8 @@ export class RunOrchestrator {
       baseBranch,
       // Kept so a later `tf resume` gives the agents the same context.
       ...(options.priorContext ? { priorContext: options.priorContext } : {}),
+      // Kept so a resume cannot loosen what the model-assisted reading tightened.
+      executionIntent,
     });
     if (options.priorContext) {
       this.eventRepo.append({
@@ -347,10 +378,7 @@ export class RunOrchestrator {
       );
     }
 
-    // 3. Execution intent is authoritative and must be known before planning.
-    // Planning is an advisory interpretation layer; it is never allowed to
-    // silently upgrade a read-only user request into implementation work.
-    const executionIntent: ExecutionIntentDecision = detectExecutionIntent(goalDescription);
+    // 3. Report the intent settled above.
     options.onProgress?.(
       `Execution intent: ${executionIntent.intent} (mutation ${executionIntent.mutationAllowed ? 'allowed' : 'disabled'})`,
     );
@@ -649,7 +677,10 @@ export class RunOrchestrator {
       graph,
       baseCommit,
       baseBranch,
-      executionIntent: detectExecutionIntent(goalDescription),
+      executionIntent: mostRestrictiveIntent(
+        detectExecutionIntent(goalDescription),
+        metadata.executionIntent as ExecutionIntentDecision | undefined,
+      ),
       options,
       startTime,
       resumeState: {

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   detectExecutionIntent,
   isLightweightReadOnlyRequest,
+  mostRestrictiveIntent,
+  decisionFromJudgement,
 } from '../src/execution-intent.js';
 
 describe('detectExecutionIntent', () => {
@@ -213,5 +215,36 @@ describe('detectExecutionIntent', () => {
   it('never allows delivery for a READ_ONLY_ANALYSIS decision', () => {
     const decision = detectExecutionIntent('read only evaluation of the current design');
     expect(decision.deliveryAllowed).toBe(false);
+  });
+});
+
+describe('model-assisted intent never loosens the deterministic reading', () => {
+  const impl = detectExecutionIntent('implement the retry loop');
+  const readOnly = detectExecutionIntent('Do not modify anything, just explain');
+
+  it('a read-only judgement tightens an implementation request', () => {
+    const merged = mostRestrictiveIntent(impl, decisionFromJudgement({ readOnly: true, forbiddenTargets: [] }));
+    expect(merged.mutationAllowed).toBe(false);
+    expect(merged.intent).toBe('READ_ONLY_ANALYSIS');
+    expect(merged.forbiddenChanges).toEqual(['*']);
+  });
+
+  it('an implementation judgement cannot reopen a read-only request', () => {
+    const merged = mostRestrictiveIntent(readOnly, decisionFromJudgement({ readOnly: false, forbiddenTargets: [] }));
+    expect(merged.mutationAllowed).toBe(false);
+  });
+
+  it('unions scoped prohibitions case-insensitively', () => {
+    const base = detectExecutionIntent('implement /health, but do not modify the Delivery Gate');
+    const merged = mostRestrictiveIntent(
+      base,
+      decisionFromJudgement({ readOnly: false, forbiddenTargets: ['delivery gate', 'src/auth'] }),
+    );
+    expect(merged.mutationAllowed).toBe(true);
+    expect(merged.forbiddenChanges.map((t) => t.toLowerCase())).toEqual(['delivery gate', 'src/auth']);
+  });
+
+  it('without a second reading returns the first unchanged', () => {
+    expect(mostRestrictiveIntent(impl, undefined)).toBe(impl);
   });
 });

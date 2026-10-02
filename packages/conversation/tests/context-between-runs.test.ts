@@ -129,4 +129,16 @@ describe('context between runs in the shell', () => {
     expect(calls).toHaveLength(0);
     expect(reply).not.toContain('Context: using the output');
   });
+
+  describe('execution intent in a language the patterns do not know', () => {
+    it('is read-only when the planner model says so, and the plan is not an implementation', async () => {
+      shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
+      (shell as any).planner.setIntentJudge(async () => ({ readOnly: true, forbiddenTargets: [] }));
+
+      await shell.handleInput('No modifiques nada del repositorio, solo dime qué falta por hacer');
+
+      expect((shell as any).settledIntent.intent).toBe('READ_ONLY_ANALYSIS');
+      expect((shell as any).settledIntent.mutationAllowed).toBe(false);
+    });
+  });
 });

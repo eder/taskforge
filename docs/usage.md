@@ -100,6 +100,15 @@ A request such as:
 
 is writable implementation work.
 
+You can write in any language. The read-only check combines two readings of your request and always keeps the stricter one:
+
+1. a fixed set of patterns (English and Portuguese phrases such as "do not modify anything" or "somente análise"), and
+2. the planner model, which reads the request in whatever language you wrote and reports whether it is analysis-only, forbids changing the repository, or names files that must stay untouched.
+
+The model can only tighten a run: it can turn a request into read-only or add "do not touch X" restrictions, but it can never reopen a request the patterns already marked read-only. If the model is unavailable (no API key, timeout), only the patterns apply, so in other languages state read-only intent explicitly or check the plan's `Execution intent` line. The settled intent is stored with the run, so `tf resume` cannot loosen it.
+
+A leading "yes" / "no" (or "y" / "n") only answers a pending plan or permission question. With nothing waiting, a message such as "No modifiques nada…" is treated as a new request.
+
 This distinction matters because writable tasks can create isolated worktrees, commits, verification activity, integration state, and delivery options. Read-only analysis should not produce delivery artifacts.
 
 ## 4. Review the plan before execution

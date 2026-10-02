@@ -16,6 +16,9 @@ import {
   AgentMessage,
   ActiveAgentState,
   detectExecutionIntent,
+  mostRestrictiveIntent,
+  decisionFromJudgement,
+  type ExecutionIntentDecision,
   TASKFORGE_VERSION,
 } from '@taskforge/shared';
 import {
@@ -144,6 +147,8 @@ export class InteractiveShell {
   private currentGraph?: TaskGraph;
   private activeGoal?: Goal;
   private lastGoalDescription?: string;
+  /** Intent settled when the plan was proposed (deterministic reading + planner model, stricter wins). */
+  private settledIntent?: ExecutionIntentDecision;
   /** Output of an earlier run attached to the plan being proposed ("do item 1"). */
   private pendingPriorContext?: { runId: string; text: string; chars: number; createdAt: string };
   private isPaused = false;
@@ -1119,7 +1124,14 @@ export class InteractiveShell {
           }
         }
 
-        const executionIntent = detectExecutionIntent(intent.goal);
+        let executionIntent = detectExecutionIntent(intent.goal);
+        if (this.planner instanceof SemanticPlanner) {
+          const judgement = await this.planner.judgeExecutionIntent(intent.goal);
+          if (judgement) {
+            executionIntent = mostRestrictiveIntent(executionIntent, decisionFromJudgement(judgement));
+          }
+        }
+        this.settledIntent = executionIntent;
         const proposedGraph = await this.planner.plan(goal);
         const negotiatedGraph = await this.negotiator.negotiateGraph(
           proposedGraph,
@@ -1377,8 +1389,9 @@ export class InteractiveShell {
         }
 
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
-        const currentExecutionIntent = detectExecutionIntent(
-          this.lastGoalDescription ?? this.activeGoal?.description ?? '',
+        const currentExecutionIntent = mostRestrictiveIntent(
+          detectExecutionIntent(this.lastGoalDescription ?? this.activeGoal?.description ?? ''),
+          this.settledIntent,
         );
         const isReadOnlyAutoRun = currentExecutionIntent.intent === 'READ_ONLY_ANALYSIS';
 
@@ -1426,6 +1439,7 @@ export class InteractiveShell {
             .run(goalDesc, {
               runId,
               priorContext,
+              executionIntent: currentExecutionIntent,
               preplannedGraph: graphToRun,
               fakeFallback: isFakeRequested,
               abortSignal: this.activeExecutionController.signal,
@@ -1475,6 +1489,7 @@ export class InteractiveShell {
             {
               runId,
               priorContext: foregroundContext,
+              executionIntent: currentExecutionIntent,
               preplannedGraph: this.currentGraph,
               fakeFallback: isFakeRequested,
               abortSignal,
