@@ -94,8 +94,24 @@ export function recoveryConsumesRework(failureClass: RecoveryFailureClass): bool
   return failureClass === 'code_or_test';
 }
 
+/**
+ * Checks that fail because the environment they run in lacks something the
+ * project needs: a service that is not running, a secret that was withheld, a
+ * dependency that is not installed. The agent's change is not the cause, so
+ * retrying the agent cannot help.
+ */
+const ENVIRONMENT_PATTERNS: RegExp[] = [
+  /connection refused|econnrefused|connect call failed|could not connect to (?:server|database)/,
+  /\[errno (?:61|111)\]/, // connection refused on macOS / Linux
+  /temporary failure in name resolution|getaddrinfo (?:enotfound|eai_again)/,
+  /no [\w ]{0,30}api[_ ]?key[\w ]{0,20}(?:configured|set|found|provided)/,
+  /(?:missing|unset|not set|not defined|required)[\w ,:'"-]{0,40}(?:api[_ ]?key|environment variable)/,
+  /modulenotfounderror|cannot find module '(?!\.)/,
+];
+
 function looksLikeEnvironmentFailure(text: string): boolean {
   const value = text.toLowerCase();
+  if (ENVIRONMENT_PATTERNS.some((pattern) => pattern.test(value))) return true;
   return (
     value.includes('command not found') ||
     value.includes('no such file or directory') ||

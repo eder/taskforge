@@ -8,6 +8,7 @@ import {
 } from '@taskforge/shared';
 import { Goal, Task, TaskGraph, Planner } from '@taskforge/core';
 import { HeuristicPlanner, isPureExplanationGoal } from './planner.js';
+import { extractGoalClauses } from './goal-clauses.js';
 import { TaskGraphValidator, RawPlanOutput } from './task-graph-validator.js';
 
 export type { PlanRevision, PlanRevisionType, PlannerProvenance, PlannerSource };
@@ -140,6 +141,10 @@ export function summarizePlannerFailure(errors: string[]): string | undefined {
   if (!first) return 'the model returned no usable plan';
   const more = errors.length > 1 ? ` (+${errors.length - 1} more)` : '';
   const text = first.replace(/sk-[A-Za-z0-9_-]{6,}/g, 'sk-***').replace(/\s+/g, ' ').trim();
+  // "This operation was aborted" is our own timeout firing; say what happened.
+  if (/\babort(ed)?\b/i.test(text)) {
+    return `the planning model did not answer in time (raise router.timeoutSeconds if this repeats)${more}`;
+  }
   return `${text.slice(0, 160)}${more}`;
 }
 
@@ -167,7 +172,9 @@ export class SemanticPlanner implements Planner {
         ? options.apiKey
         : process.env.TASKFORGE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
     this.model = options.model ?? 'gpt-5.6-luna';
-    this.timeoutMs = options.timeoutMs ?? 15000;
+    // Planning a long, multi-part goal with a strict JSON schema routinely takes
+    // longer than 15s; a timeout here silently downgrades to the fallback plan.
+    this.timeoutMs = options.timeoutMs ?? 60000;
     this.fallbackPlanner = options.fallbackPlanner ?? new HeuristicPlanner();
     this.customCaller = options.customCaller;
   }
@@ -911,11 +918,8 @@ Output strictly according to the json_schema.`,
     // Detect if this is a complex multi-clause engineering prompt
     const clauses: string[] = [];
 
-    // Split on bullet points or comma/and patterns
-    const rawLines = text
-      .split('\n')
-      .map((l) => l.replace(/^[-*•>]\s*/, '').trim())
-      .filter((l) => l.length > 0);
+    // Split on numbered requirements (with their bullets as details) or on lines
+    const rawLines = extractGoalClauses(text);
 
     if (rawLines.length > 2) {
       clauses.push(...rawLines);

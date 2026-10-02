@@ -222,6 +222,7 @@ export class InteractiveShell {
       // silently route with one model while planning with a different hidden
       // default -- that causes avoidable API failures and fallback latency.
       model: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o',
+      timeoutMs: (this.config.router.timeoutSeconds ?? 60) * 1000,
     });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);
@@ -520,7 +521,14 @@ export class InteractiveShell {
           tasks.map((task) => task.type),
         ),
       });
-      return formatUsageEstimate(estimate);
+      const perTask = this.config.collaboration?.maxAgentsPerTask ?? 3;
+      const cap = this.config.execution.tokenBudget;
+      // The team shown above is only the first task's; every task is staffed when
+      // it starts. Say so, so the estimate is not read as a ceiling.
+      const note =
+        `  ${colors.dim}The team above is for the first task. Each task is staffed when it starts (up to ${perTask} agents each), so real usage can exceed this estimate. ` +
+        `${cap > 0 ? `The run stops starting new tasks at ${cap.toLocaleString('en-US')} tokens.` : 'There is no token cap (execution.tokenBudget: 0).'}${colors.reset}`;
+      return `${formatUsageEstimate(estimate)}\n${note}`;
     } catch {
       return ''; // an estimate must never block plan approval
     }
@@ -584,7 +592,10 @@ export class InteractiveShell {
         ? describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, result.runId)
         : [];
     const failureLines = formatRunFailureLines(failures, result.runId);
-    const step = recommendNextStep(failures, result.runId);
+    const step = recommendNextStep(failures, result.runId, {
+      spent: this.telemetry.getRunTokenTotal(result.runId),
+      budget: this.config.execution.tokenBudget,
+    });
     if (step?.runnable) {
       this.suggestedRetry = result.runId;
       failureLines.push('Press Enter to do that now (or /retry).');
