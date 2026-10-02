@@ -49,6 +49,8 @@ Inside the interactive shell, the equivalent operational view is:
 
 ## 2. Start TaskForge in a repository
 
+You can start `tf` from any sub-folder of the repository (for example `zaira/server`). TaskForge works from the **project root**, the enclosing git repository, so it always uses the same `.taskforge/` (database, runs, config) and prints `TaskForge: using the project root ... (you are in server)` when that differs from where you are. Set `TASKFORGE_PROJECT_ROOT=/path` to choose the root explicitly.
+
 TaskForge operates on the Git repository in your current working directory.
 
 ```bash
