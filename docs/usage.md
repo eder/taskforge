@@ -387,7 +387,7 @@ tf resume              # most recent failed, cancelled or interrupted run
 tf resume run-<id>
 ```
 
-Tasks already integrated into the run branch are kept and not re-executed. Every other task is reset and re-run with a fresh recovery budget, starting from the cumulative run branch. Planning and negotiation are not repeated. Completed runs cannot be resumed — deliver them with `/diff`, `/apply` or `/pr`.
+Without an id, `tf resume` continues the newest run that can be continued; runs that cannot (for example ones created before resume checkpoints existed) are skipped and explained. Tasks already integrated into the run branch are kept and not re-executed. Every other task is reset and re-run with a fresh recovery budget, starting from the cumulative run branch. Planning and negotiation are not repeated. Completed runs cannot be resumed — deliver them with `/diff`, `/apply` or `/pr`.
 
 ## 10. Verification and completion
 
