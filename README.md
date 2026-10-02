@@ -49,7 +49,7 @@ Then enter any Git repository:
 
 ```bash
 cd /path/to/your-project
-tf doctor
+tf setup    # guided first-time checks: environment, project config, a small test task
 tf
 ```
 

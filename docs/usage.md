@@ -35,7 +35,22 @@ pnpm build
 npm link apps/cli
 ```
 
-Check the environment:
+The fastest way to get going in a project is one guided command:
+
+```bash
+cd /path/to/your-project
+tf setup
+```
+
+It runs three steps and asks before each one that costs time or writes a file:
+
+1. **Environment**: `tf doctor` (git, database, ready agents). It stops with the exact fix if the folder is not a git repository, and tells you what to install if no agent is ready.
+2. **Project config**: `tf init --check`, which proposes `.taskforge/config.yaml`, runs the detected test commands once to confirm they work, shows the file, and writes it only after you confirm.
+3. **Test task**: a small read-only task ("describe this project"), capped at 60k tokens, that proves an agent can work here. It changes nothing.
+
+`tf setup --yes` accepts the defaults (including the test task); `--no-smoke` skips the test task. Without a terminal and without `--yes` it asks nothing and changes nothing.
+
+You can also run the pieces yourself. Check the environment:
 
 ```bash
 tf doctor

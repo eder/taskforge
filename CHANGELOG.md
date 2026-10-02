@@ -8,6 +8,8 @@ All workspace packages are released in lockstep under a single version.
 ## [Unreleased]
 
 ### Added
+- **`tf setup`**: one guided first-time command. It runs the environment checks (`tf doctor`), proposes and verifies the project config (`tf init --check`, written only after confirmation) and runs a small read-only test task capped at 60k tokens, asking before each step. `--yes` accepts the defaults, `--no-smoke` skips the test task; without a terminal it asks nothing and changes nothing. The one-time "no config" notice now points to it.
+- Error messages end with the next action: not a git repository (`cd` or `git init`), nothing ready to apply or open a PR for (`tf runs`, name a run), issue import failures (`gh auth status`), unreadable `--budget`/`--context` values.
 - **Plain-language account before applying.** `/diff` now ends with *What it does* and *How it was checked* (which checks passed per task, independent reviewers). A task that "passed" with no checks executed is reported as **not verified**, never as green. `describeRunConfidence()` / `formatRunConfidence()`.
 - **Apply asks when nothing was checked.** `/apply` on a run that is not fully verified shows that account and needs `--yes`; `tf apply` asks `Apply anyway?` on a terminal (`--yes` skips; without a terminal it warns and proceeds). The end-of-run summary says whether the changes were checked.
 - **`tf undo [run]` / `/undo`** reverses the last applied run with a revert commit (nothing rewritten, safe after pushing), refuses on a dirty tree, and changes nothing if later work conflicts. New delivery status `reverted`, event `DELIVERY_REVERTED`, shown in `tf runs`.
