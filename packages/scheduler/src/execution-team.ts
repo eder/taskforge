@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { REVIEW_CONTRACT, handoffBlock, isReviewerRole, reviewChangesFrom, reviewFixObjective } from './review-verdict.js';
+import { REVIEW_CONTRACT, changeBlock, handoffBlock, isReviewerRole, reviewChangesFrom, reviewFixObjective } from './review-verdict.js';
 import { AgentAssignment, VerificationResult, ReviewFinding } from '@taskforge/shared';
 import { Task, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter, AgentQuotaTracker } from '@taskforge/agents';
@@ -132,6 +132,19 @@ function reportDegradedStaffing(
  * is also checked before each further team member and before a fix pass: the cap can
  * then only be passed by the one agent already running.
  */
+/** The diff a reviewer judges: from where the task started to the work so far (or to a given commit). */
+async function diffOf(ctx: SchedulerContext, worktreePath: string | undefined, base: string, to?: string): Promise<string> {
+  if (!worktreePath) return '';
+  try {
+    const range = to ? [base, to] : [base];
+    const stat = await ctx.gitService.exec(['diff', '--no-color', '--stat', ...range], worktreePath);
+    const patch = await ctx.gitService.exec(['diff', '--no-color', '-U2', ...range], worktreePath);
+    return changeBlock(stat, patch);
+  } catch {
+    return ''; // a reviewer without the diff still works; it just has to look for the change
+  }
+}
+
 function tokenCapReached(ctx: SchedulerContext): boolean {
   return Boolean(ctx.tokenBudget && ctx.tokensSpent && ctx.tokensSpent() >= ctx.tokenBudget);
 }
@@ -217,7 +230,7 @@ async function runCollaborativeTeam(
             : `${assignment.objective}${handoffBlock(
                 { agent: chain[i - 1].selection.agent.name, role: chain[i - 1].selection.roleRequest.role },
                 lastRes?.output ?? lastRes?.message,
-              )}`,
+              )}${isReviewerRole(selection.roleRequest.role) ? await diffOf(ctx, worktree?.path, headCommit) : ''}`,
         existingWorktree: worktree,
       }),
     );
@@ -486,7 +499,7 @@ async function runReviewTeam(
       try {
         res = await executeGovernedAssignment(
           buildGovernedCtx(task, ctx, assignment, selection.agent, implCommit, {
-            objectiveOverride: assignment.objective,
+            objectiveOverride: `${assignment.objective}${await diffOf(ctx, implementerRes.worktreePath, headCommit, implCommit)}`,
             detached: true,
           }),
         );
