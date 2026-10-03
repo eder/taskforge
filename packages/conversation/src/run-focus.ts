@@ -34,6 +34,8 @@ export interface RunFocus {
   question?: FocusQuestion;
   /** What the person asked for while a repair was waiting; given to the agents after it. */
   guidance?: string;
+  /** The run is already past its token cap: continuing needs this higher cap or it would stop at once. */
+  raiseBudgetTo?: number;
 }
 
 export interface FocusProposal {
@@ -48,6 +50,32 @@ const roundUp = (value: number, step: number) => Math.ceil(value / step) * step;
 const tokens = (n: number) => n.toLocaleString('en-US');
 
 export function buildRunFocus(options: {
+  runId: string;
+  failures: RunFailureLine[];
+  repoRoot: string;
+  spend?: { spent: number; budget: number };
+}): FocusProposal {
+  const proposal = proposeFocus(options);
+  const { spend } = options;
+  // Whatever is proposed, a run past its cap would stop again before doing it.
+  if (
+    spend &&
+    spend.budget > 0 &&
+    spend.spent >= spend.budget &&
+    proposal.focus.action.kind !== 'raise_budget' &&
+    proposal.focus.action.kind !== 'none'
+  ) {
+    const raised = roundUp(Math.max(spend.budget * 2, spend.spent + 500_000), 100_000);
+    proposal.focus.raiseBudgetTo = raised;
+    proposal.lines.push(
+      `This run is already past its token cap (${tokens(spend.spent)} of ${tokens(spend.budget)}), so I would also raise the cap to ${tokens(raised)} tokens.`,
+    );
+    proposal.hint = `${proposal.hint} (and raise the cap to ${tokens(raised)})`;
+  }
+  return proposal;
+}
+
+function proposeFocus(options: {
   runId: string;
   failures: RunFailureLine[];
   repoRoot: string;

@@ -100,4 +100,22 @@ describe('what the REPL proposes when a run stops', () => {
     expect(focus.action).toEqual({ kind: 'none' });
     expect(lines.join('\n')).toContain('/back');
   });
+
+  it('a run already past its cap carries a higher cap with whatever it proposes, so it does not stop again at once', () => {
+    const { focus, lines, hint } = buildRunFocus({
+      runId: 'run-1',
+      repoRoot: repo,
+      failures: [line({ kind: 'failed', keptBranch: 'taskforge/candidate/1/T1' })],
+      spend: { spent: 3_717_115, budget: 2_000_000 },
+    });
+    expect(focus.action).toEqual({ kind: 'continue' });
+    expect(focus.raiseBudgetTo).toBe(4_300_000);
+    expect(lines.join('\n')).toContain('already past its token cap (3,717,115 of 2,000,000)');
+    expect(lines.join('\n')).toContain('raise the cap to 4,300,000');
+    expect(hint).toContain('raise the cap to 4,300,000');
+    // Under the cap nothing changes.
+    expect(
+      buildRunFocus({ runId: 'run-1', repoRoot: repo, failures: [line({ kind: 'failed' })], spend: { spent: 10, budget: 2_000_000 } }).focus.raiseBudgetTo,
+    ).toBeUndefined();
+  });
 });

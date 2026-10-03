@@ -110,3 +110,40 @@ describe('environment repair', () => {
     expect(fs.readFileSync(path.join(repo, '.taskforge/config.yaml'), 'utf8')).toContain('LLM_API_KEY');
   });
 });
+
+describe('a missing file: link it when your checkout has it, blame the change when nothing does', () => {
+  let repo: string;
+  beforeEach(() => {
+    repo = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-missing-'));
+    const sh = (...a: string[]) => execFileSync('git', a, { cwd: repo, stdio: 'ignore' });
+    sh('init', '-q', '-b', 'main');
+    sh('config', 'user.email', 't@t.dev');
+    sh('config', 'user.name', 'T');
+    fs.mkdirSync(path.join(repo, 'server/audio'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'server/audio/\n');
+    fs.writeFileSync(path.join(repo, 'server/app.py'), 'x = 1\n');
+    fs.writeFileSync(path.join(repo, 'server/audio/sample.wav'), 'riff');
+    sh('add', '-A');
+    sh('commit', '-q', '-m', 'init');
+  });
+  afterEach(() => fs.rmSync(repo, { recursive: true, force: true }));
+
+  it('finds the untracked file the failure names, relative to the directory the check ran in', async () => {
+    const { linkableMissingPaths, missingFileIsAgentsMistake } = await import('../src/environment-repair.js');
+    const text = "Command: cd server && .venv/bin/python -m pytest -q\nERROR test_multiturn.py - FileNotFoundError: [Errno 2] No such file or directory: 'audio/sample.wav'";
+    expect(linkableMissingPaths(repo, text)).toEqual(['server/audio/sample.wav']);
+    expect(missingFileIsAgentsMistake(repo, text)).toBe(false);
+    const fixes = diagnoseEnvironmentFailure({ repoRoot: repo, text, env: {} });
+    expect(fixes).toEqual([{ kind: 'link_files', paths: ['server/audio/sample.wav'] }]);
+  });
+
+  it('does not link a tracked file (it is already in the copy), and calls a file that exists nowhere the change’s mistake', async () => {
+    const { linkableMissingPaths, missingFileIsAgentsMistake } = await import('../src/environment-repair.js');
+    expect(linkableMissingPaths(repo, "No such file or directory: 'server/app.py'")).toEqual([]);
+    const nowhere = "FileNotFoundError: [Errno 2] No such file or directory: 'migrations/001.sql'";
+    expect(linkableMissingPaths(repo, nowhere)).toEqual([]);
+    expect(missingFileIsAgentsMistake(repo, nowhere)).toBe(true);
+    // A refused connection in the same output is still the environment.
+    expect(missingFileIsAgentsMistake(repo, `${nowhere}\nConnection refused`)).toBe(false);
+  });
+});

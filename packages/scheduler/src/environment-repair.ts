@@ -100,6 +100,35 @@ export function findComposeServiceForPort(
   return undefined;
 }
 
+/**
+ * Paths a failure says do not exist ("No such file or directory: 'fixtures/a.wav'"),
+ * resolved against the checkout and against any directory the check `cd`s into.
+ * Only paths that exist in the person's checkout but are not tracked by git are
+ * returned: those are what an isolated copy is missing (tracked files are in it).
+ */
+export function linkableMissingPaths(repoRoot: string, text: string): string[] {
+  const named = [
+    ...text.matchAll(/No such file or directory:?\s*['"]([^'"\n]+)['"]/gi),
+    ...text.matchAll(/FileNotFoundError:[^\n]*?['"]([^'"\n]+)['"]/g),
+  ].map((m) => m[1]);
+  const dirs = ['', ...[...text.matchAll(/\bcd\s+([\w./-]+)\s*&&/g)].map((m) => m[1])];
+  const found = new Set<string>();
+  for (const raw of named) {
+    if (path.isAbsolute(raw) && !raw.startsWith(repoRoot)) continue;
+    for (const dir of dirs) {
+      const rel = path.normalize(path.relative(repoRoot, path.resolve(repoRoot, dir, path.isAbsolute(raw) ? path.relative(repoRoot, raw) : raw)));
+      if (rel.startsWith('..') || rel === '' || rel.startsWith('.git')) continue;
+      if (!fs.existsSync(path.join(repoRoot, rel))) continue;
+      const tracked = git(repoRoot, ['ls-files', '--', rel]).trim().length > 0;
+      if (!tracked) {
+        found.add(rel.split(path.sep).join('/'));
+        break;
+      }
+    }
+  }
+  return [...found].slice(0, 5);
+}
+
 export function diagnoseEnvironmentFailure(options: {
   repoRoot: string;
   /** The recorded reason and evidence of the failed check. */
@@ -111,9 +140,12 @@ export function diagnoseEnvironmentFailure(options: {
   const lower = text.toLowerCase();
   const fixes: EnvironmentFix[] = [];
 
+  const missing = linkableMissingPaths(repoRoot, text);
+  if (missing.length > 0) fixes.push({ kind: 'link_files', paths: missing });
+
   const needsSecrets = /api[_ ]?key|environment variable|dotenv|\.env\b|not set|unset|missing/.test(lower);
   if (needsSecrets) {
-    const files = findIgnoredDotenvFiles(repoRoot);
+    const files = findIgnoredDotenvFiles(repoRoot).filter((f) => !missing.includes(f));
     if (files.length > 0) fixes.push({ kind: 'link_files', paths: files });
 
     // A variable the failure names that exists in the person's own environment.
@@ -139,7 +171,10 @@ export function diagnoseEnvironmentFailure(options: {
       });
     }
   }
-  return fixes;
+  // One link fix, however many places the paths were found.
+  const links = [...new Set(fixes.flatMap((f) => (f.kind === 'link_files' ? f.paths : [])))];
+  const rest = fixes.filter((f) => f.kind !== 'link_files');
+  return links.length > 0 ? [{ kind: 'link_files', paths: links }, ...rest] : rest;
 }
 
 /** Fixes TaskForge can apply on its own (the rest need a person). */
@@ -231,4 +266,20 @@ export async function applyEnvironmentFixes(repoRoot: string, fixes: Environment
     }
   }
   return result;
+}
+
+/**
+ * A failure that only says a file is missing is an environment problem when that file
+ * exists in the person's checkout (an isolated copy lacks it), and a problem with the
+ * change when it exists nowhere: the agent referred to a file that is not there, and
+ * should be told, not blocked.
+ */
+export function missingFileIsAgentsMistake(repoRoot: string, text: string): boolean {
+  const lower = text.toLowerCase();
+  const onlyMissingFile = /no such file or director|filenotfounderror|\[errno 2\]/.test(lower);
+  const otherEnvironment =
+    /connection refused|econnrefused|connect call failed|errno (?:61|111)|api[_ ]?key|modulenotfounderror|cannot find module|environment variable/.test(
+      lower,
+    );
+  return onlyMissingFile && !otherEnvironment && linkableMissingPaths(repoRoot, text).length === 0;
 }

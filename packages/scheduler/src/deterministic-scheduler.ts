@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { missingFileIsAgentsMistake } from './environment-repair.js';
 import {
   AgentAssignment,
   AgentStreamBus,
@@ -417,6 +418,15 @@ export class DeterministicScheduler {
       );
     }
     return cumulativeHead;
+  }
+
+  /** classifyVerificationFailure, plus: a missing file that exists nowhere in the checkout is the change's mistake. */
+  private classifyVerification(reason?: string, evidence?: string): RecoveryFailureClass {
+    const base = classifyVerificationFailure(reason, evidence);
+    if (base === 'environment' && missingFileIsAgentsMistake(this.ctx.repoRoot, `${reason ?? ''}\n${evidence ?? ''}`)) {
+      return 'code_or_test';
+    }
+    return base;
   }
 
   private async recoverTask(
@@ -858,7 +868,7 @@ export class DeterministicScheduler {
       return undefined;
     }
 
-    const failureClass = classifyVerificationFailure(result.failureReason);
+    const failureClass = this.classifyVerification(result.failureReason);
     if (failureClass === 'code_or_test') {
       this.ctx.onProgress?.(
         '⚠ Some of the project\'s checks already fail on the unchanged code, so they will not prove the agents\' work. Continuing.',
@@ -1197,6 +1207,32 @@ export class DeterministicScheduler {
               .split('\n')
               .map((line) => line.trim())
               .find((line) => line.length > 0) ?? 'the team did not produce a successful result';
+          if ((res as { budgetStopped?: boolean }).budgetStopped) {
+            // Not a failure of the work: the run hit its token cap. Keep what the team made
+            // and let the main loop stop the run with the budget reason.
+            const partial = (res as { commitHash?: string }).commitHash;
+            if (partial && partial !== taskBaseCommit) {
+              this.preserveCandidate(task, {
+                commit: partial,
+                phase: 'collaboration',
+                failureClass: 'code_or_test',
+                reason: 'The run reached its token cap before the team finished',
+              });
+            }
+            this.ctx.eventRepo.append({
+              id: `evt-${randomUUID()}`,
+              runId,
+              type: 'TOKEN_BUDGET_REACHED',
+              payload: { spent: this.ctx.tokensSpent?.() ?? 0, budget: this.ctx.tokenBudget ?? 0, taskId: task.id },
+              timestamp: new Date(),
+            });
+            this.noteTaskFailure(task, 'collaboration', 'The run reached its token cap before the team finished');
+            graph.updateTaskStatus(task.id, 'failed');
+            taskRepo.updateStatus(task.id, 'failed');
+            graph.updateTaskStatus(task.id, 'blocked');
+            taskRepo.updateStatus(task.id, 'blocked');
+            return;
+          }
           this.ctx.onProgress?.(`[${task.id}] ✗ Team execution failed: ${teamReason}`);
           this.noteTaskFailure(task, 'collaboration', teamReason);
           graph.updateTaskStatus(task.id, 'failed');
@@ -1363,7 +1399,7 @@ export class DeterministicScheduler {
 
 
         if (!verResult.passed) {
-          const failureClass = classifyVerificationFailure(verResult.failureReason);
+          const failureClass = this.classifyVerification(verResult.failureReason);
           const rework = recoveryConsumesRework(failureClass)
             ? taskRepo.incrementRework(task.id)
             : task.reworkCount;
@@ -2078,7 +2114,7 @@ export class DeterministicScheduler {
         await this.recoverTask(task, {
           agentId,
           phase: 'verification',
-          failureClass: classifyVerificationFailure(
+          failureClass: this.classifyVerification(
             verResult.failureReason,
             verificationEvidence(verResult.checks),
           ),

@@ -131,6 +131,25 @@ export class CostRepository {
     }));
   }
 
+  /**
+   * Tokens used by each of the most recent agent assignments (newest first), from
+   * what the providers reported. Used to tell the person what agents in this project
+   * really cost, instead of only a model's estimate.
+   */
+  recentAssignmentTotals(limit = 40): number[] {
+    const rows = this.db
+      .prepare(
+        `SELECT SUM(CASE WHEN total_tokens > 0 THEN total_tokens ELSE input_tokens + output_tokens END) AS total
+         FROM cost_tracking
+         WHERE assignment_id IS NOT NULL
+         GROUP BY assignment_id
+         ORDER BY MAX(created_at) DESC
+         LIMIT ?`,
+      )
+      .all(limit) as Array<{ total: number }>;
+    return rows.map((r) => Number(r.total)).filter((n) => n > 0);
+  }
+
   getTotalCostByRun(runId: string): {
     totalCostUsd: number;
     totalInputTokens: number;

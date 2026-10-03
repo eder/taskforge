@@ -219,4 +219,59 @@ describe('scenario matrix: every way a run can go wrong ends in a clear, recover
     }
     db.close();
   }, 180_000);
+
+  it('the token cap also stops a team between its members, not only between tasks', async () => {
+    const world: World = { writeFlag: true, failNext: false, tokens: 600, implCalls: 0 };
+    let reviewerCalls = 0;
+    const reviewer = read('rev', 'Reviewer');
+    const countingReviewer: AgentAdapter = {
+      ...reviewer,
+      execute: async (a, c) => {
+        reviewerCalls += 1;
+        return reviewer.execute(a, c);
+      },
+    };
+    const db = new TaskForgeDatabase(':memory:');
+    const registry = new AgentRegistry(false);
+    registry.register(read('res', 'Researcher'));
+    registry.register(implementer(world));
+    registry.register(countingReviewer);
+    const router: RoutingProvider = {
+      id: 'r',
+      route: async () => ({
+        strategy: 'collaborative',
+        complexity: 'high',
+        risk: 'high',
+        uncertainty: 'high',
+        teamSize: 3,
+        roles: [
+          { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Study', preferredAgent: 'res' },
+          { role: 'implementer', requiredCapabilities: ['canWrite'], objective: 'Implement', preferredAgent: 'impl' },
+          { role: 'architecture_reviewer', requiredCapabilities: ['canRead'], objective: 'Review', preferredAgent: 'rev' },
+        ],
+        communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
+        reason: 'test',
+      }),
+    };
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+    config.verification.review = false;
+    config.verification.preflight = false;
+    const orchestrator = new RunOrchestrator({ repoRoot: root, config, database: db, agentRegistry: registry, router, gitService: git, worktreeManager: worktrees });
+
+    const first = await orchestrator.run('Produce the file', { preplannedGraph: new TaskGraph([task('TASK-A')]), tokenBudget: 500 });
+
+    // The implementer used 600 tokens (> 500): the reviewer must not be started.
+    expect(first.status).toBe('failed');
+    expect(reviewerCalls).toBe(0);
+    const lines = describeRunFailures({ taskRepo: new TaskRepository(db), eventRepo: new EventRepository(db) }, first.runId);
+    expect(lines.some((l) => l.kind === 'budget')).toBe(true);
+    expect(lines.some((l) => l.keptBranch)).toBe(true); // the implementer's work is kept
+
+    const resumed = await orchestrator.resume(first.runId, { tokenBudget: 1_000_000 });
+    expect(resumed.status).toBe('completed');
+    db.close();
+  }, 120_000);
 });
