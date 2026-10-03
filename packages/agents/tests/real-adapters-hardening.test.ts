@@ -696,3 +696,40 @@ describe('Codex sandbox mode is stated by TaskForge, not inherited from the user
     expect((custom as any).formatArgs('PROMPT', context()) as string[]).toEqual(['exec', '--json', '--sandbox', 'danger-full-access', 'PROMPT']);
   });
 });
+
+describe('Claude Code is told it may edit, instead of relying on the user’s settings', () => {
+  const context = (over: Partial<AgentContext> = {}): AgentContext => ({
+    worktreePath: '/tmp/wt',
+    originalUserRequest: 'x',
+    assignment: { id: 'a', taskId: 'T', agentId: 'claude', role: 'implementer', objective: 'x', status: 'running' },
+    mutationAllowed: true,
+    task: { objective: 'x', allowedScope: ['**'], forbiddenChanges: [], acceptanceCriteria: ['x'], dependencies: [] },
+    ...over,
+  });
+
+  it('accepts edits inside the worktree for an assignment that may change files, before -p (which takes the prompt)', () => {
+    const args = (new ClaudeCodeAdapter() as any).formatArgs('PROMPT', context()) as string[];
+    expect(args).toEqual([
+      '--output-format=stream-json',
+      '--verbose',
+      '--no-session-persistence',
+      '--permission-mode',
+      'acceptEdits',
+      '-p',
+      'PROMPT',
+    ]);
+  });
+
+  it('leaves read-only assignments exactly as they were', () => {
+    const args = (new ClaudeCodeAdapter() as any).formatArgs('PROMPT', context({ mutationAllowed: false })) as string[];
+    expect(args).not.toContain('--permission-mode');
+    expect(args.slice(-2)).toEqual(['-p', 'PROMPT']);
+  });
+
+  it('respects a permission choice the user put in their agent configuration', () => {
+    const custom = new ClaudeCodeAdapter({ defaultArgs: ['--output-format=stream-json', '--permission-mode', 'plan', '-p'] });
+    const args = (custom as any).formatArgs('PROMPT', context()) as string[];
+    expect(args.filter((a) => a === '--permission-mode')).toHaveLength(1);
+    expect(args).toContain('plan');
+  });
+});

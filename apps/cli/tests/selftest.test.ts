@@ -79,4 +79,18 @@ describe('tf selftest', () => {
     const result = await runSelftest(d);
     expect(result.stages[0].detail).toContain('Agent "codex" is not installed and ready');
   });
+
+  it('explains a refused write with what TaskForge does about it, not a generic message', async () => {
+    const refused: AgentAdapter = {
+      id: 'refused',
+      name: 'Refused Agent',
+      detect: async () => true,
+      capabilities: async () => ({ canRead: true, canWrite: true, canExecute: true, languages: [], tools: ['git'] }),
+      execute: async () => ({ success: false, message: "I couldn't create greet.js: the write was denied because write permission hasn't been granted", durationMs: 1 }),
+    };
+    const { d, log } = deps({ fake: false, readyAgents: async () => [{ id: 'refused', name: 'Refused Agent' }], createAgent: () => refused });
+    const result = await runSelftest(d);
+    expect(result.stages.find((s) => s.state === 'failed')?.hint).toContain('not allowed to write');
+    expect(log.join('\n')).toContain('·'); // progress is shown while the agent works
+  }, 120_000);
 });
