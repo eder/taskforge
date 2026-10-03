@@ -96,6 +96,36 @@ describe('diagnosis does not depend on the order events were written in', () => 
     const lines = describeRunFailures({ taskRepo: new TaskRepository(db), eventRepo: events }, 'run-1');
     expect(lines[0].evidence).toContain('no LLM api_key configured');
     expect(lines[0].evidence).toContain('5432');
+    // The headline is the detailed one too, whichever event was written last.
+    expect(lines[0].reason).toContain('Check failed');
+    expect(lines[0].reason).not.toMatch(/^Preflight:/);
+    db.close();
+  });
+
+  it('describes two tasks blocked by the same cause the same way, whatever order their events were written in', async () => {
+    const { TaskForgeDatabase, TaskRepository, EventRepository } = await import('@taskforge/persistence');
+    const { describeRunFailures } = await import('../src/run-failure-report.js');
+    const db = new TaskForgeDatabase(':memory:');
+    db.prepare("INSERT INTO runs (id, status, created_at) VALUES ('run-2', 'failed', ?)").run(new Date().toISOString());
+    for (const id of ['A', 'B']) {
+      db.prepare(
+        'INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
+      ).run(id, 'run-2', `Task ${id}`, 'x', 'implementation', 'blocked', new Date().toISOString(), new Date().toISOString());
+    }
+    const events = new EventRepository(db);
+    const same = new Date();
+    const blocked = (taskId: string, id: string) =>
+      events.append({ id, runId: 'run-2', taskId, type: 'TASK_RECOVERY_BLOCKED', payload: { failureClass: 'environment', reason: 'Check failed', evidence: REAL_OUTPUT }, timestamp: same });
+    const note = (taskId: string, id: string) =>
+      events.append({ id, runId: 'run-2', taskId, type: 'TASK_FAILED', payload: { reason: 'Preflight: Check failed' }, timestamp: same });
+    blocked('A', 'a1');
+    note('A', 'a2'); // the short note is written last for A ...
+    note('B', 'b1');
+    blocked('B', 'b2'); // ... and first for B
+    const lines = describeRunFailures({ taskRepo: new TaskRepository(db), eventRepo: events }, 'run-2');
+    expect(lines[0].reason).toBe(lines[1].reason); // same cause, same words
+    expect(lines[0].reason).toContain('no LLM api_key configured');
+    expect(lines[0].reason).not.toMatch(/^Preflight:/);
     db.close();
   });
 });
