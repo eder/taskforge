@@ -400,6 +400,25 @@ TaskForge recognises these failures (missing key or variable, connection refused
 
 Then `tf resume` re-checks the kept work without calling an agent. `git show --stat <kept branch>` (printed in the report) shows what the agents changed in the meantime.
 
+### A suite that already has failures
+
+Many real projects have tests that fail before anyone touches the code (a service that is down, a missing key, an old failing test). Judging a change by the whole suite's exit code would block every change.
+
+So the preflight measures each check command on the unchanged code and records which tests fail there. After the agents' work, a check counts as **passed when it fails only with those same failures**, and it is reported honestly:
+
+```text
+✔ TASK-02  Add retry: test: no new failures (it already had failures before the change, which this change neither caused nor fixed)
+```
+
+When the change **adds** a failure, only the new ones are shown, to the person and to the agent that has to fix it:
+
+```text
+New failures compared with before the change (2 already failing are ignored):
+- FAILED tests/new.py::test_c
+```
+
+Failures are recognised in the output of pytest, vitest/jest, `go test`, `node --test` and `cargo test`. For any other format there is nothing to compare, and the check is judged by its exit code as before. A command that passed before gets no leniency. The measurement is stored with the run, so `tf resume` keeps judging against the same starting point. Turn all of this off with `verification.preflight: false`.
+
 ### TaskForge repairs the environment itself
 
 You should not have to fix this by hand. TaskForge does three things so that a run does not end with a to-do list for you:
@@ -768,10 +787,24 @@ Set a ceiling per run in `.taskforge/config.yaml`, or per command:
 
 ```yaml
 execution:
-  tokenBudget: 500000   # tokens per run, all attempts included (default 2000000; 0 = no cap)
+  tokenBudget: 500000   # tokens per run, all attempts included (default: set by the profile; 0 = no cap)
 ```
 
-The default is 2,000,000 tokens per run: generous enough not to interrupt normal work, low enough that a runaway run cannot spend without limit. Set `0` to remove the cap.
+The default comes from the profile (next section). Set `0` to remove the cap.
+
+### Profiles: how much a run may use
+
+Real runs showed what staffing costs: on a real project each agent assignment used roughly 0.5 to 1 million tokens (mostly context it reads), so a team of three on one task spent 2.7M. The default is therefore the cheapest setup that works, and more is opt-in:
+
+| `execution.profile` | agents per task | token cap |
+|---|---|---|
+| `economy` (default) | 1 | 1,000,000 |
+| `standard` | 2 (the author and a reviewer) | 2,000,000 |
+| `thorough` | up to 3 | 4,000,000 |
+
+Anything you set explicitly (`collaboration.maxAgentsPerTask`, `execution.tokenBudget`) wins over the profile. When a team is cut down, the implementer is always kept, then a reviewer, then explorers. The plan proposal shows the team the run will really use.
+
+Two more things keep a plan from costing more than the change deserves. The planner is asked for at most `planner.maxTasks` tasks (default 6) and told that tests and documentation for a change belong inside the task that makes it; a longer plan is sent back to be combined. And a reviewer is handed the **diff** of the change (not "go and find it"), and told not to run the full suite, since TaskForge runs the checks itself.
 
 ```bash
 tf run "…" --budget 500k

@@ -142,7 +142,7 @@ describe('a reviewer that asks for changes gets them fixed without anyone asking
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  async function run(reviewerReply: string, fixPasses?: number, withImplementer = true) {
+  async function run(reviewerReply: string, fixPasses?: number, withImplementer = true, maxAgents?: number) {
     const db = new TaskForgeDatabase(':memory:');
     const implementer = new Implementer();
     const reviewer = new Reviewer(reviewerReply);
@@ -176,6 +176,7 @@ describe('a reviewer that asks for changes gets them fixed without anyone asking
     config.verification.typecheck = false;
     config.verification.review = false;
     if (fixPasses !== undefined) config.collaboration.reviewFixPasses = fixPasses;
+    if (maxAgents !== undefined) config.collaboration.maxAgentsPerTask = maxAgents;
     const orchestrator = new RunOrchestrator({
       repoRoot: root,
       config,
@@ -238,5 +239,29 @@ describe('a reviewer that asks for changes gets them fixed without anyone asking
     expect(researcher.objectives[1]).toContain('- add the rollback plan');
     expect(progress.join('\n')).toContain('The reviewer asked for 1 change(s)');
     console.log(progress.join('\n'), result.status, result.error);
+  });
+
+  it('hands the reviewer the diff of the change, so it does not have to explore the repository', async () => {
+    const { reviewer } = await run('Fine.\nREVIEW_VERDICT: APPROVED');
+    expect(reviewer.taskObjectives[0]).toContain('THE_CHANGE');
+    expect(reviewer.taskObjectives[0]).toContain('feature.txt');
+    expect(reviewer.taskObjectives[0]).toContain('first draft');
+    expect(reviewer.objectives[0]).toContain('do not run the full test suite');
+  });
+
+  it('with one agent per task (the economy profile) only the implementer runs, even if the router asked for a team', async () => {
+    const { result, implementer, reviewer, researcher } = await run('unused', undefined, true, 1);
+    expect(result.status).toBe('completed');
+    expect(implementer.objectives).toHaveLength(1);
+    expect(reviewer.calls).toBe(0);
+    expect(researcher.objectives).toHaveLength(0);
+  });
+
+  it('with two agents it keeps the implementer and the reviewer, and drops the explorer', async () => {
+    const { result, implementer, reviewer, researcher } = await run('Fine.\nREVIEW_VERDICT: APPROVED', undefined, true, 2);
+    expect(result.status).toBe('completed');
+    expect(implementer.objectives).toHaveLength(1);
+    expect(reviewer.calls).toBe(1);
+    expect(researcher.objectives).toHaveLength(0);
   });
 });

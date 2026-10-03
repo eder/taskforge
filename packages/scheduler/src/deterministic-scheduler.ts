@@ -7,6 +7,7 @@ import {
   AgentUsage,
   TaskForgeConfig,
   VerificationResult,
+  CheckBaseline,
   IntegrationError,
 } from '@taskforge/shared';
 import { TaskGraph, Task, computeTaskPriority } from '@taskforge/core';
@@ -821,6 +822,15 @@ export class DeterministicScheduler {
         Object.keys(resume.candidates ?? {}).length > 0 ||
         Object.keys(resume.taskOutputs ?? {}).length > 0)
     ) {
+      // Not measuring again, but the first run's measurement still defines "new failure".
+      try {
+        const meta = JSON.parse(runRepo.get(runId)?.metadataJson ?? '{}') as {
+          verificationBaseline?: Record<string, CheckBaseline>;
+        };
+        verificationRunner.setBaseline(runId, meta.verificationBaseline);
+      } catch {
+        // No usable baseline: checks are judged by exit code, as before.
+      }
       return undefined;
     }
 
@@ -834,19 +844,37 @@ export class DeterministicScheduler {
       `Before any agent works, running ${shown} once on the unchanged code to make sure it can run here (a full test suite can take a minute)...`,
     );
     const probe = writable[0];
-    let result: VerificationResult;
+    // How each command behaves before any change: passing, or failing in which tests. The
+    // agents' work is then judged on what it ADDS, not on what was already wrong.
+    const baseline: Record<string, CheckBaseline> = {};
+    const alreadyFailing: string[] = [];
+    let blocking: { result: VerificationResult; failureClass: RecoveryFailureClass } | undefined;
+    verificationRunner.setBaseline(runId, undefined);
     try {
       const wt = await worktreeManager.createWorktree(probe.id, 'preflight', this.ctx.baseCommit, { detached: true });
       try {
-        result = await verificationRunner.verify({
-          taskId: probe.id,
-          runId,
-          worktreePath: wt.path,
-          config,
-          taskType: probe.type,
-          explicitCommands: commands,
-          documentationOnlyChange: false,
-        });
+        for (const command of commands) {
+          const outcome = await verificationRunner.verify({
+            taskId: probe.id,
+            runId,
+            worktreePath: wt.path,
+            config,
+            taskType: probe.type,
+            explicitCommands: [command],
+            documentationOnlyChange: false,
+          });
+          if (outcome.passed) {
+            baseline[command] = { failed: false, signatures: [] };
+            continue;
+          }
+          const cls = this.classifyVerification(outcome.failureReason);
+          if (cls !== 'code_or_test') {
+            blocking = { result: outcome, failureClass: cls };
+            break;
+          }
+          baseline[command] = { failed: true, signatures: outcome.checks[0]?.signatures ?? [] };
+          alreadyFailing.push(command);
+        }
       } finally {
         await worktreeManager.removeWorktree(probe.id, 'preflight', true, false).catch(() => undefined);
       }
@@ -856,26 +884,30 @@ export class DeterministicScheduler {
       return undefined;
     }
 
-    if (result.passed) {
+    if (!blocking) {
+      runRepo.mergeMetadata(runId, { verificationBaseline: baseline });
+      verificationRunner.setBaseline(runId, baseline);
       eventRepo.append({
         id: `evt-${randomUUID()}`,
         runId,
         type: 'PREFLIGHT_PASSED',
-        payload: { commands },
+        payload: { commands, alreadyFailing },
         timestamp: new Date(),
       });
-      this.ctx.onProgress?.('✔ The project\'s checks run in this environment.');
+      if (alreadyFailing.length === 0) {
+        this.ctx.onProgress?.('✔ The project\'s checks run in this environment.');
+      } else {
+        const known = alreadyFailing.reduce((n, c) => n + (baseline[c].signatures.length || 0), 0);
+        this.ctx.onProgress?.(
+          known > 0
+            ? `⚠ ${known} failure(s) already exist on the unchanged code. They will not count against the agents' work: only new failures will.`
+            : '⚠ Some of the project\'s checks already fail on the unchanged code, and their output has no failure list to compare, so they will not prove the agents\' work. Continuing.',
+        );
+      }
       return undefined;
     }
 
-    const failureClass = this.classifyVerification(result.failureReason);
-    if (failureClass === 'code_or_test') {
-      this.ctx.onProgress?.(
-        '⚠ Some of the project\'s checks already fail on the unchanged code, so they will not prove the agents\' work. Continuing.',
-      );
-      return undefined;
-    }
-
+    const { result, failureClass } = blocking;
     const reason = result.failureReason?.split('\n')[0] ?? 'The project\'s checks cannot run in this environment';
     eventRepo.append({
       id: `evt-${randomUUID()}`,

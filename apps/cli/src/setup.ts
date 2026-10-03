@@ -4,7 +4,7 @@
  * doctor, init and a test run are three separate things. Every side effect is
  * injected, so the flow is testable without a terminal, agents or a repository.
  */
-import { SECURITY_NOTICE } from '@taskforge/shared';
+import { SECURITY_NOTICE, EXECUTION_PROFILES } from '@taskforge/shared';
 
 export interface SetupDeps {
   /** Called once the security notice was printed (so the first-launch notice is not repeated). */
@@ -47,6 +47,9 @@ export async function runSetup(deps: SetupDeps): Promise<SetupOutcome> {
   for (const line of SECURITY_NOTICE) log(`  • ${line}`);
   log('');
   deps.noticeShown?.();
+  log(
+    `Spending: the default profile is economy (${EXECUTION_PROFILES.economy.maxAgentsPerTask} agent per task, ${EXECUTION_PROFILES.economy.tokenBudget.toLocaleString('en-US')}-token cap per run). Allow more with \`execution.profile: standard\` or \`thorough\` in .taskforge/config.yaml.\n`,
+  );
 
   log('TaskForge setup: 3 steps (environment, project config, a small test task).\n');
 

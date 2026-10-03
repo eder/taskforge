@@ -3,9 +3,11 @@ import * as path from 'node:path';
 import {
   VerificationCheck,
   VerificationResult,
+  CheckBaseline,
   VerificationExpectation,
   TaskForgeConfig,
 } from '@taskforge/shared';
+import { extractFailureSignatures } from './failure-signatures.js';
 import { ProcessRunner, DEFAULT_ENV_POLICY, EnvironmentPolicy } from '@taskforge/execution';
 import { EventRepository, VerificationRepository } from '@taskforge/persistence';
 
@@ -102,6 +104,14 @@ export function isTransientVerificationFailure(result: VerificationResult): bool
 }
 
 export class VerificationRunner {
+  /** Per run: how each check command behaved before any change. */
+  private baselines = new Map<string, Record<string, CheckBaseline>>();
+
+  setBaseline(runId: string, baseline?: Record<string, CheckBaseline>): void {
+    if (baseline) this.baselines.set(runId, baseline);
+    else this.baselines.delete(runId);
+  }
+
   constructor(
     private verificationRepo?: VerificationRepository,
     private eventRepo?: EventRepository,
@@ -235,6 +245,7 @@ export class VerificationRunner {
           ];
 
     const results: VerificationCheck[] = [];
+    const notes: string[] = [];
     let overallPassed = true;
     let failureReason: string | undefined;
 
@@ -257,6 +268,19 @@ export class VerificationRunner {
         env: { COLUMNS: process.env.COLUMNS ?? '220' },
       });
 
+      // A suite that already had failures before the change must not block a change that
+      // adds none, and when it does add some, only those are the change's business.
+      const failed = runResult.exitCode !== 0;
+      const signatures = failed ? extractFailureSignatures(`${runResult.stdout}\n${runResult.stderr}`) : [];
+      const baseline = this.baselines.get(runId)?.[check.command];
+      let newFailures: string[] = [];
+      let unchanged = false;
+      if (failed && baseline?.failed && signatures.length > 0 && !runResult.timedOut) {
+        const known = new Set(baseline.signatures);
+        newFailures = signatures.filter((s) => !known.has(s));
+        unchanged = newFailures.length === 0;
+      }
+
       const checkRecord: VerificationCheck = {
         name: check.name,
         command: check.command,
@@ -264,12 +288,19 @@ export class VerificationRunner {
         stdout: runResult.stdout,
         stderr: runResult.stderr,
         durationMs: runResult.durationMs,
-        success: runResult.exitCode === 0,
+        success: !failed || unchanged,
+        ...(signatures.length > 0 ? { signatures } : {}),
+        ...(unchanged ? { baselineOnly: true } : {}),
       };
 
       results.push(checkRecord);
+      if (unchanged) {
+        notes.push(
+          `${check.name}: ${signatures.length} failure(s) already there before the change, none new. They are not caused by this change and were not fixed by it.`,
+        );
+      }
 
-      if (runResult.exitCode !== 0 && expectation === 'pass') {
+      if (failed && !unchanged && expectation === 'pass') {
         overallPassed = false;
         // Say what failed, not just that something did: a bare exit code left
         // the user (and the retrying agent) with nothing to act on.
@@ -298,6 +329,12 @@ export class VerificationRunner {
           `Check '${check.name}' failed with exit code ${runResult.exitCode}` +
           (runResult.timedOut ? ' (timed out)' : '') +
           `\nCommand: ${check.command.split('\n')[0].slice(0, 200)}` +
+          (newFailures.length > 0
+            ? `\nNew failures compared with before the change (${signatures.length - newFailures.length} already failing are ignored):\n${newFailures
+                .slice(0, 15)
+                .map((s) => `- ${s}`)
+                .join('\n')}`
+            : '') +
           (tail ? `\nLast output:\n${tail}` : '') +
           (signals ? `\nErrors seen:\n${signals}` : '');
         break; // stop on first required-to-pass verification failure
@@ -332,6 +369,7 @@ export class VerificationRunner {
       passed: overallPassed,
       checks: results,
       failureReason,
+      ...(notes.length > 0 ? { notes } : {}),
     };
 
     if (this.verificationRepo) {
