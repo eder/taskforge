@@ -106,7 +106,9 @@ function hintFor(stage: string, message: string): string | undefined {
     return 'The agent is not signed in or its login expired: open that CLI once, sign in, and run the self-test again.';
   }
   if (/quota|rate limit|usage limit/.test(text)) return 'The agent reports a quota or rate limit; try another agent with --agent.';
-  if (/permission|denied/.test(text)) return 'The agent was refused a permission it needed. `tf inspect` shows which; see "Permissions" in docs/usage.md.';
+  if (/permission|denied|read-only|not been granted|hasn't been granted/.test(text)) {
+    return 'The agent was not allowed to write. TaskForge asks Claude to accept edits and Codex to use workspace-write for assignments that may change files; if you set your own permission or sandbox flags under `agents.<id>.defaultArgs`, they take over. `tf inspect last` shows what was refused.';
+  }
   if (stage === 'agent run') return 'Run `tf inspect last` for the full record of what the agent did and why the run stopped.';
   return undefined;
 }
@@ -214,11 +216,27 @@ export async function runSelftest(deps: SelftestDeps): Promise<SelftestResult> {
     worktrees = new WorktreeManager(root, '.taskforge/worktrees');
     const orchestrator = new RunOrchestrator({ repoRoot: root, config, database: db, agentRegistry: registry, router, gitService: git, worktreeManager: worktrees });
     const progress: string[] = [];
-    const result = await orchestrator.run('Self-test: create greet.js', {
-      preplannedGraph: new TaskGraph([selftestTask()]),
-      tokenBudget: deps.budget,
-      onProgress: (m) => progress.push(m),
-    });
+    // A real agent takes tens of seconds; silence looks like a hang. Show what TaskForge
+    // reports, and a sign of life while an agent is working.
+    const started = Date.now();
+    const heartbeat = setInterval(
+      () => log(`      … still running (${Math.round((Date.now() - started) / 1000)}s)`),
+      20_000,
+    );
+    heartbeat.unref?.();
+    let result;
+    try {
+      result = await orchestrator.run('Self-test: create greet.js', {
+        preplannedGraph: new TaskGraph([selftestTask()]),
+        tokenBudget: deps.budget,
+        onProgress: (m) => {
+          progress.push(m);
+          log(`      · ${m.replace(/\s+/g, ' ').slice(0, 150)}`);
+        },
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
     if (result.status !== 'completed') {
       // The run's own summary ("completed=0, failed=1") says nothing; the recorded reasons do.
       const recorded = describeRunFailures(
