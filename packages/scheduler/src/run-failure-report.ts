@@ -43,6 +43,13 @@ function outputLine(value: string): string | undefined {
   return line ? line.replace(/\s+/g, ' ').slice(0, 160) : undefined;
 }
 
+/** How much a task event usually says about why the task stopped (used only to break timestamp ties). */
+function detailRank(type: string): number {
+  if (type === 'TASK_RECOVERY_BLOCKED' || type === 'TASK_RECOVERY_SCHEDULED') return 2;
+  if (type === 'COMPLETION_GATE_REJECTED') return 1;
+  return 0;
+}
+
 /** Best human-readable reason a single event can give for a task ending badly. */
 function reasonFromEvent(event: ReasonEvent): string | undefined {
   const p = event.payload;
@@ -133,7 +140,14 @@ export function describeRunFailures(
       const mine = events
         .filter((e) => e.taskId === task.id)
         .map((e) => ({ type: e.type, payload: e.payload ?? {}, timestamp: new Date(e.timestamp) }))
-        .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+        // Newest first. Events written in the same millisecond have no reliable order, so
+        // ties go to the event that carries the most detail (the recorded block with the
+        // check output), not to a short "Preflight: ..." note: otherwise two tasks blocked
+        // by the same cause are described differently from run to run.
+        .sort(
+          (a, b) =>
+            b.timestamp.getTime() - a.timestamp.getTime() || detailRank(b.type) - detailRank(a.type),
+        );
       const reason = mine.map(reasonFromEvent).find((r) => r);
       const kept = mine.find((e) => e.type === 'TASK_CANDIDATE_PRESERVED');
       lines.push({

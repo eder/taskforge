@@ -819,7 +819,10 @@ export class DeterministicScheduler {
     const commands = [...new Set(writable.flatMap((t) => verificationCommandsForTask(t, config) ?? []))];
     if (commands.length === 0) return undefined;
 
-    this.ctx.onProgress?.("Checking that the project's checks can run here before any agent works...");
+    const shown = commands.map((c) => `\`${c.length > 70 ? `${c.slice(0, 69)}…` : c}\``).join(', ');
+    this.ctx.onProgress?.(
+      `Before any agent works, running ${shown} once on the unchanged code to make sure it can run here (a full test suite can take a minute)...`,
+    );
     const probe = writable[0];
     let result: VerificationResult;
     try {
