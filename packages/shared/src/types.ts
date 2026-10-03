@@ -354,12 +354,27 @@ export interface VerificationCheck {
   stderr: string;
   durationMs: number;
   success: boolean;
+  /** The failures found in the output (see failure-signatures.ts), when it was a failed test run. */
+  signatures?: string[];
+  /**
+   * The check failed, but only with failures that were already there before the change
+   * (see the preflight baseline); it is counted as passing and says so.
+   */
+  baselineOnly?: boolean;
 }
 
 export interface VerificationResult {
   passed: boolean;
   checks: VerificationCheck[];
   failureReason?: string;
+  /** Things the person should know that are not failures, e.g. failures that predate the change. */
+  notes?: string[];
+}
+
+/** What a check looked like on the unchanged code, to tell a new failure from an old one. */
+export interface CheckBaseline {
+  failed: boolean;
+  signatures: string[];
 }
 
 export interface RepositoryProfile {
