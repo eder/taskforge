@@ -54,3 +54,55 @@ describe('summarizePlannerFailure', () => {
     expect(summarizePlannerFailure([])).toBe('the model returned no usable plan');
   });
 });
+
+describe('a plan longer than the limit is sent back to be combined', () => {
+  const rawTask = (i: number, dependencies: string[] = []) => ({
+    taskId: `T${i}`,
+    title: `Do part ${i}`,
+    description: `Part ${i}`,
+    type: 'implementation',
+    dependencies,
+    objective: `Do part ${i}`,
+    allowedScope: ['src/**'],
+    forbiddenChanges: [],
+    acceptanceCriteria: [`part ${i} works`],
+    completionMode: 'mutation',
+    verification: null,
+  });
+  const plan = (n: number) => ({
+    summary: `${n} tasks`,
+    tasks: Array.from({ length: n }, (_, i) => rawTask(i + 1, i === 0 ? [] : [`T${i}`])),
+  });
+
+  it('asks the model again with what to do, and takes the shorter plan', async () => {
+    const seen: string[] = [];
+    let call = 0;
+    const planner = new SemanticPlanner({
+      maxTasks: 5,
+      customCaller: async (messages) => {
+        seen.push(messages.map((m) => m.content).join('\n'));
+        call += 1;
+        return (call === 1 ? plan(8) : plan(4)) as never;
+      },
+    });
+    const graph = await planner.plan(goal);
+    expect(graph.getAllTasks()).toHaveLength(4);
+    expect(call).toBe(2);
+    expect(seen[1]).toContain('exceeds maximum limit (5)');
+    expect(seen[1]).toContain('combine related tasks');
+    expect(seen[0]).toContain('Prefer 2 to 5 tasks');
+  });
+
+  it('does not push a plan that fits', async () => {
+    let call = 0;
+    const planner = new SemanticPlanner({
+      maxTasks: 5,
+      customCaller: async () => {
+        call += 1;
+        return plan(5) as never;
+      },
+    });
+    expect((await planner.plan(goal)).getAllTasks()).toHaveLength(5);
+    expect(call).toBe(1);
+  });
+});

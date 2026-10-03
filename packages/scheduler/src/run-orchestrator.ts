@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { taskProducesChanges } from './dual-review.js';
+import { capRoles } from './staffing-cap.js';
 import {
   TaskForgeConfig,
   loadConfig,
@@ -812,10 +814,9 @@ export class RunOrchestrator {
         const maxAgents = this.config.collaboration?.maxAgentsPerTask ?? 3;
         if (routing.roles.length > maxAgents) {
           const originalCount = routing.roles.length;
-          routing.roles = routing.roles.slice(0, maxAgents);
-          if (routing.teamSize > maxAgents) {
-            routing.teamSize = maxAgents;
-          }
+          routing.roles = capRoles(routing.roles, maxAgents, taskProducesChanges(task));
+          routing.teamSize = routing.roles.length;
+          if (routing.roles.length === 1) routing.strategy = 'single';
           this.eventRepo.append({
             id: `evt-${randomUUID()}`,
             runId,

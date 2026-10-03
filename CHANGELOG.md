@@ -7,6 +7,11 @@ All workspace packages are released in lockstep under a single version.
 
 ## [Unreleased]
 
+### Changed
+- **Cheaper defaults (profiles).** Loading a project's config now applies `execution.profile` (default `economy`): one agent per task and a 1,000,000-token cap, instead of up to three agents and 2,000,000. `standard` (2 agents, 2M) and `thorough` (3 agents, 4M) are opt-in; anything set explicitly wins. Teams were the main cost on a real project (2.7M tokens on a single task). When a team is cut to the cap the implementer is kept, then a reviewer (previously the first roles in the router's list, which could drop the implementer), and the plan proposal shows the capped team.
+- **Plans are asked to be small.** The planner prompt now asks for 2 to 5 tasks with tests and docs inside the task that changes the code, and a plan over `planner.maxTasks` (default 6) is sent back to be combined.
+- **Reviewers get the diff.** A reviewer is handed the diff of the change and told not to run the full test suite, instead of exploring the repository (a real review cost about a million tokens and ended up judging the project rather than the change).
+
 ### Added
 - **Verification judges what the change adds.** The preflight now measures each check command separately on the unchanged code and stores which tests fail there (`verificationBaseline` in the run). A check that fails only with those same failures counts as passed and is reported as "no new failures (it already had failures before the change)"; when the change adds failures, only the new ones are shown. Recognised formats: pytest, vitest/jest, `go test`, `node --test` (TAP, by test name), `cargo test`; anything else is judged by exit code as before. Found on a real project whose suite fails before any change (a database and keys that tests need): the whole-suite exit code blocked every attempt.
 - The plan proposal prints what the project's last agent assignments actually used (average and high), next to the model's estimate, once there are at least 3 samples. For the real run the estimate was ~347k tokens; it used 3.7M.

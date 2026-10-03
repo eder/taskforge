@@ -69,7 +69,7 @@ TaskForge proposes a plan before writable execution. You can approve it, revise 
 
 - **No sandbox.** Agents are the CLIs you already have (`claude`, `codex`, `agy`) running as your user. TaskForge limits what it forwards to them and what it integrates; it does not stop an agent process from reading files your user can read, and writes outside its worktree are not prevented or detected. Use a test repository, or run TaskForge inside a container or VM, especially with code you did not write.
 - **Nothing reaches your branch by itself.** Work happens in isolated Git worktrees and an integration branch. `/apply`, `tf apply` and `/pr` are separate commands, `/apply` stops when the changes were not fully verified, and `tf undo` reverses an applied run with a revert commit.
-- **Spend is capped by default.** Each run stops starting new tasks after `execution.tokenBudget` tokens (default 2,000,000; `0` turns the cap off). It only counts usage the agent reports, so also watch your provider's own limits. Every run ends by printing what it used.
+- **Spend is capped by default, and teams are off.** The default `economy` profile uses one agent per task and stops starting new tasks after 1,000,000 tokens (`execution.profile: standard` allows an author plus a reviewer and 2,000,000; `thorough` up to three agents and 4,000,000; `execution.tokenBudget: 0` turns the cap off). It only counts usage the agent reports, so also watch your provider's own limits. Every run ends by printing what it used.
 - **Your own approval stays in the loop.** Writable plans are shown before they run, and agents ask before actions that need a permission.
 
 ### Known limits

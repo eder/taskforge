@@ -154,7 +154,7 @@ export class TaskGraphValidator {
       issues.push({ field: 'tasks', message: msg });
     }
     if (plan.tasks.length > maxTasks) {
-      const msg = `Plan task count (${plan.tasks.length}) exceeds maximum limit (${maxTasks})`;
+      const msg = `Plan task count (${plan.tasks.length}) exceeds maximum limit (${maxTasks}): combine related tasks into at most ${maxTasks}. Tests and documentation for a change belong inside the task that makes the change, not in separate tasks.`;
       errors.push(msg);
       issues.push({ field: 'tasks', message: msg });
     }

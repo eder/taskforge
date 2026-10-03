@@ -65,6 +65,8 @@ import {
   describeRunFailures,
   formatRunFailureLines,
   planRunRepair,
+  capRoles,
+  taskProducesChanges,
   repairRun,
   waitForPort,
   describeRunConfidence,
@@ -227,6 +229,7 @@ export class InteractiveShell {
       // default -- that causes avoidable API failures and fallback latency.
       model: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o',
       timeoutMs: (this.config.router.timeoutSeconds ?? 60) * 1000,
+      maxTasks: this.config.planner?.maxTasks,
     });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);
@@ -530,7 +533,7 @@ export class InteractiveShell {
       // The team shown above is only the first task's; every task is staffed when
       // it starts. Say so, so the estimate is not read as a ceiling.
       const note =
-        `  ${colors.dim}The team above is for the first task. Each task is staffed when it starts (up to ${perTask} agents each), so real usage can exceed this estimate. ` +
+        `  ${colors.dim}The team above is for the first task. Each task is staffed when it starts (${perTask === 1 ? 'one agent each' : `up to ${perTask} agents each`}), so real usage can exceed this estimate. ` +
         `${cap > 0 ? `The run stops starting new tasks at ${cap.toLocaleString('en-US')} tokens.` : 'There is no token cap (execution.tokenBudget: 0).'}${colors.reset}`;
       const observed = this.telemetry.observedAssignmentTokens();
       const reality = observed
@@ -1411,6 +1414,13 @@ export class InteractiveShell {
           task: primaryTask,
           availableAgents: availableAgentIds,
         });
+        // Show the team the run will really use: the same cap the orchestrator applies.
+        const maxAgents = this.config.collaboration?.maxAgentsPerTask ?? 3;
+        if (routing.roles.length > maxAgents) {
+          routing.roles = capRoles(routing.roles, maxAgents, taskProducesChanges(primaryTask));
+          routing.teamSize = routing.roles.length;
+          if (routing.roles.length === 1) routing.strategy = 'single';
+        }
 
         const selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${primaryTask.id}`,
@@ -1525,6 +1535,13 @@ export class InteractiveShell {
           task: primaryTask,
           availableAgents: availableAgentIds,
         });
+        // Show the team the run will really use: the same cap the orchestrator applies.
+        const maxAgents = this.config.collaboration?.maxAgentsPerTask ?? 3;
+        if (routing.roles.length > maxAgents) {
+          routing.roles = capRoles(routing.roles, maxAgents, primaryTask.contract.completionMode === 'mutation');
+          routing.teamSize = routing.roles.length;
+          if (routing.roles.length === 1) routing.strategy = 'single';
+        }
 
         const selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${primaryTask.id}`,

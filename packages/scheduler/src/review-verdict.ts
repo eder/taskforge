@@ -13,6 +13,7 @@ export const REVIEW_CONTRACT = [
   'Reply format (required): the last line of your reply must be exactly `REVIEW_VERDICT: APPROVED` when the change can be accepted as it is, or exactly `REVIEW_VERDICT: REJECTED` when something must change first.',
   'When you reject, list every required change on its own line starting with "- ".',
   'Reject only for real problems in the change itself (bugs, broken contracts, missing tests for new behaviour), not for style or optional ideas.',
+  "Review the change shown below. TaskForge runs the project's checks itself, so do not run the full test suite or explore the whole repository; read only what you need beyond the diff. Report only what you verified: never say a test passed unless you ran it and saw the result.",
 ].join('\n');
 
 export function isReviewerRole(role: string): boolean {
@@ -58,6 +59,17 @@ export function handoffBlock(previous: { agent: string; role: string }, output?:
     body,
     'PREVIOUS_MEMBER_OUTPUT>>>',
   ].join('\n');
+}
+
+/**
+ * The change a reviewer is asked to judge, as a diff. Without it a reviewer explores the
+ * repository to find out what changed, which on a real project cost about a million
+ * tokens per review, and may end up judging the project instead of the change.
+ */
+export function changeBlock(stat: string, patch: string): string {
+  const body = patch.length > 14_000 ? `${patch.slice(0, 14_000)}\n[…diff shortened; see the stat above…]` : patch;
+  if (!stat.trim() && !body.trim()) return '';
+  return ['', 'THE_CHANGE (git diff against where this task started):', stat.trim(), '', body.trim()].join('\n');
 }
 
 /** The instruction given back to the author for the fix pass. */

@@ -16,3 +16,4 @@ export * from './run-confidence.js';
 export * from './environment-repair.js';
 export * from './run-repair.js';
 export * from './review-verdict.js';
+export * from './staffing-cap.js';

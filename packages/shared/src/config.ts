@@ -61,8 +61,10 @@ export const TaskForgeConfigSchema = z.object({
   planner: z
     .object({
       agent: z.string().default('claude'),
+      /** The planner is asked for at most this many tasks; tests and docs belong inside the task that changes the code. */
+      maxTasks: z.number().int().positive().default(6),
     })
-    .default({ agent: 'claude' }),
+    .default({ agent: 'claude', maxTasks: 6 }),
   router: z
     .object({
       provider: z.enum(['openai', 'static', 'adaptive']).default('openai'),
@@ -107,6 +109,13 @@ export const TaskForgeConfigSchema = z.object({
        * stops a runaway run, so a new user never has unlimited spend by accident.
        */
       tokenBudget: z.number().int().min(0).default(2_000_000),
+      /**
+       * How much staffing and spend a run may use. `economy` (the default when loading a
+       * project's config): one agent per task and a 1M-token cap. `standard`: an author and a
+       * reviewer, 2M. `thorough`: up to three agents, 4M. Any value set explicitly below
+       * (collaboration.maxAgentsPerTask, execution.tokenBudget) wins over the profile.
+       */
+      profile: z.enum(['economy', 'standard', 'thorough']).optional(),
       autoPruneOlderThan: z
         .string()
         .regex(/^\d+[smhdw]$/, 'Use a number plus s, m, h, d or w (e.g. 7d)')
@@ -389,6 +398,26 @@ function deepMerge(target: Record<string, any>, source: Record<string, any>): Re
   return result;
 }
 
+/** What each profile means (see `execution.profile`). */
+export const EXECUTION_PROFILES = {
+  economy: { maxAgentsPerTask: 1, tokenBudget: 1_000_000 },
+  standard: { maxAgentsPerTask: 2, tokenBudget: 2_000_000 },
+  thorough: { maxAgentsPerTask: 3, tokenBudget: 4_000_000 },
+} as const;
+
+/** Fills the settings a profile governs, unless the person set them. */
+function applyProfile(merged: Record<string, any>): Record<string, any> {
+  const execution = { ...(merged.execution ?? {}) };
+  // A misspelt profile is left as written so validation rejects it with a clear message.
+  if (execution.profile !== undefined && !(execution.profile in EXECUTION_PROFILES)) return merged;
+  const profile: keyof typeof EXECUTION_PROFILES = execution.profile ?? 'economy';
+  const values = EXECUTION_PROFILES[profile];
+  const collaboration = { ...(merged.collaboration ?? {}) };
+  if (collaboration.maxAgentsPerTask === undefined) collaboration.maxAgentsPerTask = values.maxAgentsPerTask;
+  if (execution.tokenBudget === undefined) execution.tokenBudget = values.tokenBudget;
+  return { ...merged, execution: { ...execution, profile }, collaboration };
+}
+
 export function loadConfig(configPath?: string): TaskForgeConfig {
   let merged: Record<string, any> = {};
 
@@ -427,9 +456,8 @@ export function loadConfig(configPath?: string): TaskForgeConfig {
     }
   }
 
-  if (Object.keys(merged).length === 0) {
-    return getDefaultConfig();
-  }
+  // A project with no config at all gets the same profile as one with a partial config.
+  merged = applyProfile(merged);
 
   try {
     return TaskForgeConfigSchema.parse(merged);

@@ -763,10 +763,24 @@ Set a ceiling per run in `.taskforge/config.yaml`, or per command:
 
 ```yaml
 execution:
-  tokenBudget: 500000   # tokens per run, all attempts included (default 2000000; 0 = no cap)
+  tokenBudget: 500000   # tokens per run, all attempts included (default: set by the profile; 0 = no cap)
 ```
 
-The default is 2,000,000 tokens per run: generous enough not to interrupt normal work, low enough that a runaway run cannot spend without limit. Set `0` to remove the cap.
+The default comes from the profile (next section). Set `0` to remove the cap.
+
+### Profiles: how much a run may use
+
+Real runs showed what staffing costs: on a real project each agent assignment used roughly 0.5 to 1 million tokens (mostly context it reads), so a team of three on one task spent 2.7M. The default is therefore the cheapest setup that works, and more is opt-in:
+
+| `execution.profile` | agents per task | token cap |
+|---|---|---|
+| `economy` (default) | 1 | 1,000,000 |
+| `standard` | 2 (the author and a reviewer) | 2,000,000 |
+| `thorough` | up to 3 | 4,000,000 |
+
+Anything you set explicitly (`collaboration.maxAgentsPerTask`, `execution.tokenBudget`) wins over the profile. When a team is cut down, the implementer is always kept, then a reviewer, then explorers. The plan proposal shows the team the run will really use.
+
+Two more things keep a plan from costing more than the change deserves. The planner is asked for at most `planner.maxTasks` tasks (default 6) and told that tests and documentation for a change belong inside the task that makes it; a longer plan is sent back to be combined. And a reviewer is handed the **diff** of the change (not "go and find it"), and told not to run the full suite, since TaskForge runs the checks itself.
 
 ```bash
 tf run "…" --budget 500k
