@@ -1,5 +1,6 @@
 import {
   AgentCapabilities,
+  AgentContext,
 } from '@taskforge/shared';
 
 import { BaseCliAdapter, CliAdapterOptions } from './base-cli-adapter.js';
@@ -25,6 +26,25 @@ export class CodexAdapter extends BaseCliAdapter {
       ...options,
       defaultArgs,
     });
+  }
+
+  /**
+   * Codex decides what it may write from the sandbox mode, which by default comes from the
+   * user's own config: a project Codex has not been told to "trust" runs read-only, so on a
+   * new repository the implementer could not create a single file ("blocked by the read-only
+   * workspace") and the run ended with no changes. TaskForge states what each assignment
+   * may do instead of depending on that config: workspace-write (the isolated worktree) when
+   * it may change files, read-only when it may not. A sandbox flag the user put in their
+   * agent configuration is left alone.
+   */
+  protected formatArgs(prompt: string, context?: AgentContext): string[] {
+    const args = super.formatArgs(prompt, context);
+    const chosenByUser = (this.options.defaultArgs ?? []).some(
+      (a) => a === '-s' || a.startsWith('--sandbox') || a.startsWith('--dangerously-bypass') || a === '--full-auto',
+    );
+    if (chosenByUser || !context) return args;
+    const readOnly = context.mutationAllowed === false || context.task.forbiddenChanges.includes('*');
+    return [...args.slice(0, -1), '--sandbox', readOnly ? 'read-only' : 'workspace-write', args[args.length - 1]];
   }
 
   async capabilities(): Promise<AgentCapabilities> {
