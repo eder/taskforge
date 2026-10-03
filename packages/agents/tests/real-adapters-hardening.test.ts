@@ -668,3 +668,31 @@ describe('Real-Agent Hardening - Opt-in Real CLI Tests by Provider', () => {
     expect(agy.id).toBe('agy');
   });
 });
+
+describe('Codex sandbox mode is stated by TaskForge, not inherited from the user’s config', () => {
+  const context = (over: Partial<AgentContext> = {}): AgentContext => ({
+    worktreePath: '/tmp/wt',
+    originalUserRequest: 'x',
+    assignment: { id: 'a', taskId: 'T', agentId: 'codex', role: 'implementer', objective: 'x', status: 'running' },
+    mutationAllowed: true,
+    task: { objective: 'x', allowedScope: ['**'], forbiddenChanges: [], acceptanceCriteria: ['x'], dependencies: [] },
+    ...over,
+  });
+
+  it('lets an assignment that may change files write inside its isolated worktree', () => {
+    const args = (new CodexAdapter() as any).formatArgs('PROMPT', context()) as string[];
+    expect(args).toEqual(['exec', '--json', '--ephemeral', '--sandbox', 'workspace-write', 'PROMPT']);
+  });
+
+  it('keeps read-only assignments read-only', () => {
+    const readOnly = (new CodexAdapter() as any).formatArgs('PROMPT', context({ mutationAllowed: false })) as string[];
+    expect(readOnly.slice(-3)).toEqual(['--sandbox', 'read-only', 'PROMPT']);
+    const star = (new CodexAdapter() as any).formatArgs('PROMPT', context({ task: { objective: 'x', allowedScope: [], forbiddenChanges: ['*'], acceptanceCriteria: [], dependencies: [] } })) as string[];
+    expect(star.slice(-3)).toEqual(['--sandbox', 'read-only', 'PROMPT']);
+  });
+
+  it('leaves alone a sandbox choice the user put in their agent configuration', () => {
+    const custom = new CodexAdapter({ defaultArgs: ['exec', '--json', '--sandbox', 'danger-full-access'] });
+    expect((custom as any).formatArgs('PROMPT', context()) as string[]).toEqual(['exec', '--json', '--sandbox', 'danger-full-access', 'PROMPT']);
+  });
+});

@@ -123,7 +123,7 @@ export async function runSetup(deps: SetupDeps): Promise<SetupOutcome> {
   log(
     blocked
       ? '\nSetup needs attention: fix the ✖ above, then run `tf setup` again.'
-      : '\nYou are set. Start with `tf`, then describe what you want done.',
+      : '\nYou are set. To prove the whole flow works here first, run `tf selftest`; then start with `tf` and describe what you want done.',
   );
   return { status: blocked ? 'needs_attention' : 'ready', steps };
 }

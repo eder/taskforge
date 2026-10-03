@@ -53,7 +53,8 @@ Then enter any Git repository:
 
 ```bash
 cd /path/to/your-project
-tf setup    # guided first-time checks: environment, project config, a small test task
+tf setup       # guided first-time checks: environment, project config, a small test task
+tf selftest    # proves the whole flow (edit, verify, integrate, apply, undo) on a throwaway project with your agents
 tf
 ```
 

@@ -50,6 +50,30 @@ It runs three steps and asks before each one that costs time or writes a file:
 
 `tf setup --yes` accepts the defaults (including the test task); `--no-smoke` skips the test task. Without a terminal and without `--yes` it asks nothing and changes nothing.
 
+### Prove it works here, before real work: `tf selftest`
+
+`tf setup` checks that things are installed. `tf selftest` checks that **the whole flow works**, on a throwaway project and with your real agents, so a problem shows up there and not in the middle of a real task:
+
+```bash
+tf selftest                 # the first ready agent (Claude, then Codex, then Antigravity), capped at 150k tokens
+tf selftest --agent codex   # a specific agent
+tf selftest --fake          # no provider is called: only checks TaskForge's own pipeline
+```
+
+It creates a tiny project with one failing test and asks the agent to make it pass, then walks the path every real run takes, printing each stage:
+
+```text
+  ✔ agent
+  ✔ sandbox project
+  ✔ agent run (isolated worktree, edit, verification, integration) (17.5s)
+  ✔ independent check of the delivered branch      # TaskForge runs `node --test` itself on the result
+  ✔ apply to the target branch
+  ✔ undo the applied run
+  Tokens used: 58,573 (~$0.15) · 59% of the 100,000 budget
+```
+
+When a stage fails it stops, says which one, shows the recorded cause (not a summary) and what to try ("the agent is not signed in or its login expired: open that CLI once…"). A real agent is called, so it asks first on a terminal (`--yes` skips the question; without a terminal it does nothing until you pass `--yes` or `--fake`). `--keep` leaves the throwaway project for inspection. Exit code 0 means every stage passed.
+
 You can also run the pieces yourself. Check the environment:
 
 ```bash

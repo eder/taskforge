@@ -60,6 +60,7 @@ import {
 import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector, computeInsights, formatInsights } from '@taskforge/telemetry';
 import { runSetup } from './setup.js';
+import { runSelftest } from './selftest.js';
 
 /**
  * Headless commands must survive Ctrl-C gracefully: the first SIGINT/SIGTERM
@@ -395,6 +396,61 @@ export function createCli(): Command {
         log: (line) => console.log(line),
       });
       if (outcome.status === 'needs_attention') process.exitCode = 1;
+    });
+
+  // tf selftest
+  program
+    .command('selftest')
+    .description('Prove the whole pipeline on a throwaway project with your real agents (capped), before using it on real work')
+    .option('--agent <id>', 'Use this agent (claude, codex, agy); default: the first one that is ready')
+    .option('--fake', 'Use a built-in fake agent: checks the pipeline without calling any provider', false)
+    .option('--budget <tokens>', 'Token cap for the run', '150k')
+    .option('--keep', 'Keep the throwaway project for inspection', false)
+    .option('-y, --yes', 'Do not ask before using a real agent', false)
+    .action(async (options: { agent?: string; fake?: boolean; budget?: string; keep?: boolean; yes?: boolean }) => {
+      const budget = parseBudgetOption(options.budget) ?? 150_000;
+      const fake = options.fake ?? false;
+      if (!fake && !options.yes) {
+        const price = `a real agent works on a tiny throwaway project, capped at ${budget.toLocaleString('en-US')} tokens (usually well under that)`;
+        if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+          console.log(`\nThe self-test calls a provider: ${price}. Re-run with --yes to go ahead, or --fake to check the pipeline without calling anything.\n`);
+          process.exitCode = 1;
+          return;
+        }
+        if (!(await confirmOnTerminal(`The self-test calls a provider: ${price}. Run it? [Y/n] `, true))) {
+          console.log('\nNot run. `tf selftest --fake` checks the pipeline without calling anything.\n');
+          return;
+        }
+      }
+      const registryFor = () => {
+        const availabilityDb = new TaskForgeDatabase(getGlobalStateDatabasePath());
+        AgentQuotaTracker.getInstance().configureStore(new AgentAvailabilityRepository(availabilityDb));
+        return { registry: new AgentRegistry(true, loadConfig().agents), availabilityDb };
+      };
+      let held: ReturnType<typeof registryFor> | undefined;
+      try {
+        const result = await runSelftest({
+          fake,
+          agentId: options.agent,
+          budget,
+          keep: options.keep ?? false,
+          readyAgents: async () => {
+            held = registryFor();
+            const reports = await AgentDetector.detect(held.registry.list());
+            // Prefer Claude, then Codex, then the rest, so the default is predictable.
+            const order = ['claude', 'codex', 'agy'];
+            return reports
+              .filter((r) => r.ready)
+              .sort((a, b) => (order.indexOf(a.id) + 1 || 99) - (order.indexOf(b.id) + 1 || 99))
+              .map((r) => ({ id: r.id, name: r.name }));
+          },
+          createAgent: (id) => held?.registry.get(id),
+          log: (line) => console.log(line),
+        });
+        if (!result.passed) process.exitCode = 1;
+      } finally {
+        held?.availabilityDb.close();
+      }
     });
 
   // tf health

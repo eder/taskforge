@@ -175,7 +175,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       .join('\n');
   }
 
-  protected formatArgs(prompt: string): string[] {
+  protected formatArgs(prompt: string, _context?: AgentContext): string[] {
     if (this.options.defaultArgs && this.options.defaultArgs.length > 0) {
       return [...this.options.defaultArgs, prompt];
     }
@@ -711,7 +711,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     }
 
     const prompt = this.buildPrompt(assignment, context);
-    const args = this.formatArgs(prompt);
+    const args = this.formatArgs(prompt, context);
     const timeoutMs =
       context.timeoutMs ??
       this.options.timeoutMs ??
