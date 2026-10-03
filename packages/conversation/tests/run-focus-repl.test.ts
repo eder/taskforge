@@ -186,3 +186,28 @@ describe('the REPL goes into a run that stopped', () => {
     expect(resumes).toEqual([]);
   });
 });
+
+describe('an unexpected error does not leave a dead run and a raw message', () => {
+  it('says the work is kept and leaves the run ready to try again with Enter', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-unexpected-'));
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+    const db = new TaskForgeDatabase(path.join(dir, 'test.db'));
+    new RunRepository(db).create('run-1790000000000040', undefined, {});
+    new RunRepository(db).updateStatus('run-1790000000000040', 'failed');
+    const shell = new InteractiveShell({ repoRoot: dir, database: db });
+    (shell as any).buildOrchestrator = () => ({
+      checkResumable: async () => undefined,
+      resume: async () => {
+        throw new Error('Failed to integrate task TASK-12 (commit abc): Git command failed: git cherry-pick abc\nhint: After resolving the conflicts');
+      },
+    });
+    const reply = plain(await shell.handleInput('/retry run-1790000000000040'));
+    expect(reply).toContain('Something went wrong inside TaskForge while running run-1790000000000040');
+    expect(reply).toContain('Nothing was applied to your branch');
+    expect(reply).toContain('Enter: try again from where it stopped');
+    expect(reply).not.toContain('hint:'); // only the first line, never the git advice block
+    expect((shell as any).focusedRun).toMatchObject({ runId: 'run-1790000000000040', action: { kind: 'continue' } });
+    shell.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

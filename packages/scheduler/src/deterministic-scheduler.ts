@@ -6,6 +6,7 @@ import {
   AgentUsage,
   TaskForgeConfig,
   VerificationResult,
+  IntegrationError,
 } from '@taskforge/shared';
 import { TaskGraph, Task, computeTaskPriority } from '@taskforge/core';
 import { AgentRegistry, AgentActivityTracker, AgentQuotaTracker } from '@taskforge/agents';
@@ -1442,13 +1443,41 @@ export class DeterministicScheduler {
         }
 
         if (res.commitHash && res.commitHash !== taskBaseCommit) {
-          await integrationService.integrateTaskCommit({
-            runId,
-            taskId: task.id,
-            commitHash: res.commitHash,
-            baseCommit,
-          });
-          this.recordIntegratedCommit(task.id);
+          // A team that continued from kept work built its commit on that work, so the
+          // commit only holds the difference from it. The run branch does not have the
+          // kept work: integrate the full delta from where the task started, exactly as
+          // a single agent's result is (see commitForIntegration).
+          const commitToIntegrate = await this.commitForIntegration(task, res.commitHash, verifyPath);
+          if (commitToIntegrate) {
+            try {
+              await integrationService.integrateTaskCommit({
+                runId,
+                taskId: task.id,
+                commitHash: commitToIntegrate,
+                baseCommit,
+              });
+            } catch (err) {
+              if (!(err instanceof IntegrationError)) throw err;
+              // Do not lose the work or end the run on a raw git error: keep it and block
+              // the task with what conflicted, so it can be continued.
+              const reason = "The team's result conflicts with changes already on the run branch";
+              this.ctx.onProgress?.(`[${task.id}] ✗ ${reason}. The work is kept.`);
+              this.noteTaskFailure(task, 'integration', `${reason}: ${err.message.split('\n')[0]}`);
+              this.preserveCandidate(task, {
+                commit: res.commitHash,
+                phase: 'completion',
+                failureClass: 'code_or_test',
+                reason,
+                evidence: err.message,
+              });
+              graph.updateTaskStatus(task.id, 'failed');
+              taskRepo.updateStatus(task.id, 'failed');
+              graph.updateTaskStatus(task.id, 'blocked');
+              taskRepo.updateStatus(task.id, 'blocked');
+              return;
+            }
+            this.recordIntegratedCommit(task.id);
+          }
         }
 
         graph.updateTaskStatus(task.id, 'integrated');
@@ -2116,12 +2145,30 @@ export class DeterministicScheduler {
           wt.path,
         );
         if (commitToIntegrate) {
-          await integrationService.integrateTaskCommit({
-            runId,
-            taskId: task.id,
-            commitHash: commitToIntegrate,
-            baseCommit,
-          });
+          try {
+            await integrationService.integrateTaskCommit({
+              runId,
+              taskId: task.id,
+              commitHash: commitToIntegrate,
+              baseCommit,
+            });
+          } catch (err) {
+            if (!(err instanceof IntegrationError)) throw err;
+            this.ctx.onProgress?.(
+              `[${task.id}] ✗ The result conflicts with changes already on the run branch. The work is kept.`,
+            );
+            await this.recoverTask(task, {
+              agentId,
+              phase: 'completion',
+              failureClass: 'code_or_test',
+              reason: 'The result conflicts with changes already on the run branch',
+              evidence: err.message,
+              candidateCommit: agentResult.commitHash,
+              assignmentId,
+            });
+            await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+            return;
+          }
           this.recordIntegratedCommit(task.id);
         }
         this.ctx.onProgress?.(`[${task.id}] Integrated successfully ✓`);
