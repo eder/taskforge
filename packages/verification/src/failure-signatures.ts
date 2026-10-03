@@ -14,6 +14,8 @@ const PATTERNS: RegExp[] = [
   // go test: "--- FAIL: TestName (0.00s)" and "FAIL\tpackage"
   /^\s*(--- FAIL):\s*(\S+)/,
   /^(FAIL)\s+(\S+\/\S+|\S+\.\S+)\s/,
+  // node --test with its default reporter (Node 20+ prints a line per failed test): "✖ name (1.2ms)"
+  /^\s*(✖|✕)\s+(?!failing tests)(\S.*)$/,
   // node --test (TAP): "not ok 3 - name"
   /^\s*(not ok)\s+\d+\s*-?\s*(.+)$/,
   // cargo test: "test module::name ... FAILED"

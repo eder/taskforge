@@ -23,6 +23,9 @@ describe('extractFailureSignatures', () => {
       'FAIL example.com/pkg 0.2s',
     ].sort());
     expect(extractFailureSignatures('ok 1 - fine\nnot ok 2 - broken thing')).toEqual(['not ok broken thing']);
+    // Node's default reporter: a decimal timing that changes on every run must not change the identity.
+    expect(extractFailureSignatures('✖ greets by name (1.027875ms)\nℹ fail 1\n✖ failing tests:')).toEqual(['✖ greets by name']);
+    expect(extractFailureSignatures('✖ greets by name (9.5ms)')).toEqual(['✖ greets by name']);
     expect(extractFailureSignatures('test parser::handles_empty ... FAILED')).toEqual(['test parser::handles_empty ... FAILED']);
   });
 
