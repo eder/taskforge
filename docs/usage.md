@@ -384,13 +384,16 @@ You should not have to fix this by hand. TaskForge does three things so that a r
 2. **`tf fix [run]` / `/fix`.** It reads the recorded evidence and the project, and repairs what it can point at:
    - a gitignored `.env` in your checkout: it is added to `execution.worktreeLinks`, so the isolated copies see it (the agents can read it there too, as they can in your checkout);
    - a secret-looking variable the failure names and you have: added to `verification.passEnv`;
+   - a file the tests open that your checkout has but git does not track (`No such file or directory: 'audio/sample.wav'`): that path is linked; if it exists nowhere in your checkout, the change referred to a file that is not there, and the agent is told instead of the run being blocked;
    - a service the tests connect to: if the failure refuses a local port and a docker compose file publishes it, `docker compose -f <file> up -d <service>` is run and TaskForge waits for the port.
    Then it continues the run (`tf fix --no-resume` only repairs). Config changes are written to `.taskforge/config.yaml` with your comments kept. The report offers it as the next step, and in the REPL a bare Enter accepts it; the line says exactly what it will do first.
 3. **Anything else is a plain message.** In the REPL, if what you write is about a run that stopped ("fix the reviewer's points", "continue"), TaskForge continues that run and gives your words to the agents as an instruction. If the run is blocked by something it can repair, it shows the repair, you press Enter, and your instruction is carried through. No run id needed.
 
+Check output is captured at 220 columns (test runners otherwise cut their summaries at 80, hiding the path a failure is about), and the evidence keeps the distinct error lines that sit before a final "8 errors" summary.
+
 ### Reviewers' findings are acted on
 
-When a team ends with an independent reviewer, the reviewer is asked to finish with `REVIEW_VERDICT: APPROVED` or `REVIEW_VERDICT: REJECTED` plus the required changes. A rejection is sent back to the implementer once, in the same worktree (`collaboration.reviewFixPasses`, default 1; `0` only reports them), and the fixed work is what goes on to verification. A reviewer that ignores the format changes nothing.
+When a team ends with an independent reviewer, the reviewer is asked to finish with `REVIEW_VERDICT: APPROVED` or `REVIEW_VERDICT: REJECTED` plus the required changes. Each team member receives what the previous one produced (as reference data to check, so a reviewer reviews the author's work and not whatever it finds in the repository). A rejection is sent back to the author once (the implementer, or the lead when the task has none, such as a written analysis), in the same worktree (`collaboration.reviewFixPasses`, default 1; `0` only reports them), and the fixed work is what goes on to verification. A reviewer that ignores the format changes nothing.
 
 ### One recommended next step
 
@@ -723,7 +726,7 @@ It shows where to invest (a recurring stop cause is a config or environment fix,
 
 ### What the plan's estimate does and does not tell you
 
-The plan proposal shows an estimated range. It is not a ceiling: the team shown is for the first task, and each task is staffed when it starts (up to `collaboration.maxAgentsPerTask`, default 3, agents each). A heavy task can use several agents in sequence, so real usage can exceed the estimate; the proposal says so and shows the token cap that will stop the run.
+The plan proposal shows an estimated range. Once the project has a few runs it also prints what its last agent assignments really used ("about 740k tokens each, up to 1,000k"), which is the better guide for a plan with several tasks. The estimate is not a ceiling: the team shown is for the first task, and each task is staffed when it starts (up to `collaboration.maxAgentsPerTask`, default 3, agents each). A heavy task can use several agents in sequence, so real usage can exceed the estimate; the proposal says so and shows the token cap that will stop the run.
 
 If the planning model does not answer within `router.timeoutSeconds` (default 60), TaskForge falls back to a simpler plan and says why in the proposal. For a pasted numbered list ("1. … 2. …") that fallback makes one task per numbered item, with the bullets under it as details.
 
@@ -751,7 +754,7 @@ tf run "…" --budget 500k
 tf resume last --budget 1.5m     # new total cap; what was already spent counts
 ```
 
-At 80% TaskForge warns. At 100% it **stops starting new tasks**, lets the ones already running finish (killing them would leave half-done changes, so a run can overshoot by what was in flight), and ends as a resumable run with "Stopped at the token budget" and the exact `tf resume … --budget` command. Nothing is lost.
+At 80% TaskForge warns. At 100% it **stops starting new tasks**, and a team stops before starting its next member or a reviewer's fix pass, keeping the work done so far. Only the one agent already running finishes (killing it would leave half-done changes), so a run can pass the cap by at most that one agent's usage, and ends as a resumable run with "Stopped at the token budget" and the exact `tf resume … --budget` command. Nothing is lost.
 
 TaskForge treats provider token usage as telemetry. It should not label a run efficient or inefficient based only on absolute token volume; orchestration efficiency requires evidence such as failed assignments, unnecessary fan-out, rework, or cancelled work.
 

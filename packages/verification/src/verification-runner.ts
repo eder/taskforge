@@ -24,6 +24,9 @@ export function verificationEnvPolicy(passEnv: string[] = []): EnvironmentPolicy
   };
 }
 
+/** Output lines that say what went wrong (as opposed to progress or summary lines). */
+const ERROR_SIGNAL = /(Error|Exception|not found|No such file|refused|Traceback|cannot find|failed to)/;
+
 const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.markdown', '.txt', '.rst', '.adoc']);
 const DOC_BASENAMES = new Set(['license', 'notice', 'authors', 'contributors', 'changelog', 'readme', 'codeowners']);
 
@@ -248,6 +251,10 @@ export class VerificationRunner {
         cwd: worktreePath,
         timeoutMs: (config.verification.commandTimeoutSeconds ?? 600) * 1000,
         envPolicy: verificationEnvPolicy(config.verification.passEnv),
+        // Without a terminal, test runners cut their summary lines at 80 columns
+        // ("No such file or direct..."), hiding the path the failure is about, from the
+        // person and from the agent that has to fix it. Wide output keeps it.
+        env: { COLUMNS: process.env.COLUMNS ?? '220' },
       });
 
       const checkRecord: VerificationCheck = {
@@ -273,11 +280,26 @@ export class VerificationRunner {
           .slice(-6)
           .join('\n')
           .slice(-600);
+        // The last lines are often only a summary ("8 errors"); the lines that say what
+        // went wrong sit earlier. Keep the distinct ones, so the evidence names the cause.
+        const shownTail = new Set(tail.split('\n'));
+        const signals = [
+          ...new Set(
+            `${runResult.stdout}\n${runResult.stderr}`
+              .split('\n')
+              .map((line) => line.trim().slice(0, 240))
+              .filter((line) => ERROR_SIGNAL.test(line) && !shownTail.has(line)),
+          ),
+        ]
+          .slice(0, 8)
+          .join('\n')
+          .slice(0, 1500);
         failureReason =
           `Check '${check.name}' failed with exit code ${runResult.exitCode}` +
           (runResult.timedOut ? ' (timed out)' : '') +
           `\nCommand: ${check.command.split('\n')[0].slice(0, 200)}` +
-          (tail ? `\nLast output:\n${tail}` : '');
+          (tail ? `\nLast output:\n${tail}` : '') +
+          (signals ? `\nErrors seen:\n${signals}` : '');
         break; // stop on first required-to-pass verification failure
       }
     }

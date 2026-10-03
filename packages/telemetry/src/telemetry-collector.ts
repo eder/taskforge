@@ -82,6 +82,19 @@ export class TelemetryCollector {
     };
   }
 
+  /**
+   * What agent assignments in this project actually used recently: the average, and a
+   * high value (the 90th percentile). Undefined with fewer than 3 samples.
+   */
+  observedAssignmentTokens(): { samples: number; average: number; high: number } | undefined {
+    const totals = this.costRepo.recentAssignmentTotals(40);
+    if (totals.length < 3) return undefined;
+    const sorted = [...totals].sort((a, b) => a - b);
+    const average = Math.round(totals.reduce((sum, n) => sum + n, 0) / totals.length);
+    const high = sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.9) - 1)];
+    return { samples: totals.length, average, high };
+  }
+
   /** Provider-reported tokens spent so far in a run (all attempts). */
   getRunTokenTotal(runId: string): number {
     return this.costRepo.getTotalCostByRun(runId).totalTokens;

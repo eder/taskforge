@@ -59,3 +59,31 @@ describe('transient verification failures', () => {
     expect(isTransientVerificationFailure({ passed: true, checks: [] })).toBe(false);
   });
 });
+
+describe('check evidence names the cause', () => {
+  it('runs with wide terminal columns and keeps the earlier lines that say what went wrong', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-evidence-'));
+    try {
+      const c = getDefaultConfig();
+      c.verification.tests = false;
+      c.verification.lint = false;
+      c.verification.typecheck = false;
+      // Prints the width it was given, an early error line, then only summary lines.
+      const cmd = `node -e "console.log('FileNotFoundError: [Errno 2] No such file or directory: \\'audio/sample.wav\\''); console.log('COLUMNS=' + process.env.COLUMNS); for (let i=0;i<8;i++) console.log('summary line ' + i); process.exit(2)"`;
+      const result = await new VerificationRunner(undefined, undefined, 0).verify({
+        taskId: 'T',
+        runId: 'r',
+        worktreePath: dir,
+        config: c,
+        taskType: 'implementation',
+        explicitCommands: [cmd],
+      });
+      expect(result.passed).toBe(false);
+      expect(result.failureReason).toContain('Errors seen:');
+      expect(result.failureReason).toContain("audio/sample.wav"); // not cut off, though it is not in the last lines
+      expect(result.checks[0].stdout).toContain('COLUMNS=220');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

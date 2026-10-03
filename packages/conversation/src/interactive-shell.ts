@@ -532,7 +532,11 @@ export class InteractiveShell {
       const note =
         `  ${colors.dim}The team above is for the first task. Each task is staffed when it starts (up to ${perTask} agents each), so real usage can exceed this estimate. ` +
         `${cap > 0 ? `The run stops starting new tasks at ${cap.toLocaleString('en-US')} tokens.` : 'There is no token cap (execution.tokenBudget: 0).'}${colors.reset}`;
-      return `${formatUsageEstimate(estimate)}\n${note}`;
+      const observed = this.telemetry.observedAssignmentTokens();
+      const reality = observed
+        ? `\n  ${colors.dim}For reference, the last ${observed.samples} agent assignments in this project used about ${Math.round(observed.average / 1000).toLocaleString('en-US')}k tokens each (up to ${Math.round(observed.high / 1000).toLocaleString('en-US')}k). A task staffed with ${perTask} agents costs roughly ${perTask} times that, and this plan has ${tasks.length} task${tasks.length === 1 ? '' : 's'}.${colors.reset}`
+        : '';
+      return `${formatUsageEstimate(estimate)}\n${note}${reality}`;
     } catch {
       return ''; // an estimate must never block plan approval
     }
@@ -1780,7 +1784,7 @@ export class InteractiveShell {
    * The file is optional; this only explains that it exists and how to create it.
    */
   /** Repairs what blocked a run (see environment-repair.ts) and continues it. */
-  private async fixAndContinue(runId: string, guidance?: string): Promise<string> {
+  private async fixAndContinue(runId: string, guidance?: string, tokenBudget?: number): Promise<string> {
         const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
         if (plan.fixes.length === 0) {
           return `${colors.dim}Nothing TaskForge can repair on its own for ${runId}. /inspect ${runId} shows why it stopped; /retry ${runId} continues it once the cause is fixed.${colors.reset}`;
@@ -1807,7 +1811,7 @@ export class InteractiveShell {
         if (failedLines.length > 0) {
           return `${colors.yellow}Not continuing: fix the ✖ above, then press Enter or /fix to try again.${colors.reset}`;
         }
-        return this.continueRun(runId, guidance);
+        return this.continueRun(runId, guidance, { tokenBudget });
   }
 
   /** The newest failed or cancelled run that can still be continued, within the context window. */
@@ -1905,9 +1909,9 @@ export class InteractiveShell {
     if (!focus) return '';
     switch (focus.action.kind) {
       case 'fix':
-        return this.fixAndContinue(focus.runId, focus.guidance);
+        return this.fixAndContinue(focus.runId, focus.guidance, focus.raiseBudgetTo);
       case 'continue':
-        return this.continueRun(focus.runId, focus.guidance);
+        return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.raiseBudgetTo });
       case 'raise_budget':
         return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.action.budget });
       case 'none':

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { REVIEW_CONTRACT, isReviewerRole, reviewChangesFrom, reviewFixObjective } from './review-verdict.js';
+import { REVIEW_CONTRACT, handoffBlock, isReviewerRole, reviewChangesFrom, reviewFixObjective } from './review-verdict.js';
 import { AgentAssignment, VerificationResult, ReviewFinding } from '@taskforge/shared';
 import { Task, computeTaskPriority } from '@taskforge/core';
 import { AgentAdapter, AgentQuotaTracker } from '@taskforge/agents';
@@ -13,6 +13,8 @@ import { classifyTeamMemberFailure } from './failure-classification.js';
 
 export interface TeamExecutionResult {
   success: boolean;
+  /** The team stopped because the run reached its token cap, not because the work failed. */
+  budgetStopped?: boolean;
   /**
    * The commit that callers (CompletionGate, IntegrationService) should treat
    * as "the task's result". For sequential collaborative teams this is always
@@ -124,6 +126,16 @@ function reportDegradedStaffing(
 /**
  * Chains agents sequentially on a shared worktree for 'pair' and 'collaborative'.
  */
+/**
+ * The token cap is checked between tasks, but one team task can staff several
+ * agents that each use a lot (a real run spent 2.7M tokens on a single task). So it
+ * is also checked before each further team member and before a fix pass: the cap can
+ * then only be passed by the one agent already running.
+ */
+function tokenCapReached(ctx: SchedulerContext): boolean {
+  return Boolean(ctx.tokenBudget && ctx.tokensSpent && ctx.tokensSpent() >= ctx.tokenBudget);
+}
+
 async function runCollaborativeTeam(
   task: Task,
   ctx: SchedulerContext,
@@ -167,6 +179,23 @@ async function runCollaborativeTeam(
     const { selection, assignment } = chain[i];
     const label = i === 0 ? 'Lead' : 'Partner';
 
+    if (i > 0 && tokenCapReached(ctx)) {
+      for (const remaining of chain.slice(i)) ctx.assignmentRepo.updateStatus(remaining.assignment.id, 'cancelled');
+      ctx.onProgress?.(
+        `[${task.id}] Token cap reached: not starting ${chain
+          .slice(i)
+          .map((s) => `${s.selection.agent.name} (${s.selection.roleRequest.role})`)
+          .join(', ')}. The work so far is kept.`,
+      );
+      return {
+        success: false,
+        budgetStopped: true,
+        commitHash: lastRes?.commitHash,
+        output: `${outputs.join('\n\n')}\n\nStopped at the token cap before ${chain[i].selection.agent.name} (${chain[i].selection.roleRequest.role}) could run.`,
+        worktreePath: implementerRes?.worktreePath ?? lastRes?.worktreePath,
+      };
+    }
+
     if (i > 0 && ctx.communicationBus && lastRes) {
       await ctx.communicationBus
         .sendMessage({
@@ -182,7 +211,13 @@ async function runCollaborativeTeam(
 
     const res = await executeGovernedAssignment(
       buildGovernedCtx(task, ctx, assignment, selection.agent, headCommit, {
-        objectiveOverride: i === 0 ? undefined : assignment.objective,
+        objectiveOverride:
+          i === 0
+            ? undefined
+            : `${assignment.objective}${handoffBlock(
+                { agent: chain[i - 1].selection.agent.name, role: chain[i - 1].selection.roleRequest.role },
+                lastRes?.output ?? lastRes?.message,
+              )}`,
         existingWorktree: worktree,
       }),
     );
@@ -215,10 +250,23 @@ async function runCollaborativeTeam(
   // A reviewer that asked for changes is not the end: send the findings back to the
   // implementer once, in the same worktree, so the person does not have to ask.
   const reviewIdx = chain.map((s) => isReviewerRole(s.selection.roleRequest.role)).lastIndexOf(true);
-  const implIdx = chain.findIndex((s) => s.selection.roleRequest.role === 'implementer');
+  // The author the findings go back to: the implementer, or the lead when the task has none
+  // (a written analysis reviewed by a second agent).
+  const implFound = chain.findIndex((s) => s.selection.roleRequest.role === 'implementer');
+  const implIdx = implFound >= 0 ? implFound : 0;
   const maxFixPasses = ctx.config.collaboration?.reviewFixPasses ?? 1;
   if (reviewIdx > 0 && implIdx >= 0 && implIdx < reviewIdx && maxFixPasses > 0) {
     const review = reviewChangesFrom(stepOutputs[reviewIdx]);
+    if (review.rejected && tokenCapReached(ctx)) {
+      ctx.onProgress?.(`[${task.id}] Token cap reached: the reviewer asked for changes but the fix pass was not started.`);
+      return {
+        success: false,
+        budgetStopped: true,
+        commitHash: lastRes?.commitHash,
+        output: `${outputs.join('\n\n')}\n\nThe reviewer asked for changes; stopped at the token cap before the fix pass.`,
+        worktreePath: worktree?.path ?? lastRes?.worktreePath,
+      };
+    }
     if (review.rejected) {
       const implementer = chain[implIdx].selection;
       const objective = reviewFixObjective(task.contract.objective, review.changes);

@@ -19,13 +19,15 @@ import { reviewChangesFrom, REVIEW_CONTRACT, reviewFixObjective } from '../src/r
 class Researcher implements AgentAdapter {
   readonly id = 'res';
   readonly name = 'Researcher';
+  objectives: string[] = [];
   async detect() {
     return true;
   }
   async capabilities(): Promise<AgentCapabilities> {
     return { canRead: true, canWrite: false, canExecute: false, languages: [], tools: [] };
   }
-  async execute(): Promise<AgentResult> {
+  async execute(a: AgentAssignment, context: AgentContext): Promise<AgentResult> {
+    this.objectives.push(context.task.objective);
     return { success: true, message: 'Studied the area. The change belongs in feature.txt.', durationMs: 1 };
   }
 }
@@ -56,6 +58,8 @@ class Reviewer implements AgentAdapter {
   readonly name = 'Reviewer';
   calls = 0;
   objectives: string[] = [];
+  /** What the task contract says, which is where a handed-over previous output arrives. */
+  taskObjectives: string[] = [];
   constructor(private reply: string) {}
   async detect() {
     return true;
@@ -63,9 +67,10 @@ class Reviewer implements AgentAdapter {
   async capabilities(): Promise<AgentCapabilities> {
     return { canRead: true, canWrite: false, canExecute: false, languages: [], tools: [] };
   }
-  async execute(a: AgentAssignment): Promise<AgentResult> {
+  async execute(a: AgentAssignment, context: AgentContext): Promise<AgentResult> {
     this.calls += 1;
     this.objectives.push(a.objective);
+    this.taskObjectives.push(context.task.objective);
     return { success: true, message: this.reply, output: this.reply, durationMs: 1 };
   }
 }
@@ -137,12 +142,13 @@ describe('a reviewer that asks for changes gets them fixed without anyone asking
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  async function run(reviewerReply: string, fixPasses?: number) {
+  async function run(reviewerReply: string, fixPasses?: number, withImplementer = true) {
     const db = new TaskForgeDatabase(':memory:');
     const implementer = new Implementer();
     const reviewer = new Reviewer(reviewerReply);
+    const researcher = new Researcher();
     const registry = new AgentRegistry(false);
-    registry.register(new Researcher());
+    registry.register(researcher);
     registry.register(implementer);
     registry.register(reviewer);
     const router: RoutingProvider = {
@@ -155,7 +161,9 @@ describe('a reviewer that asks for changes gets them fixed without anyone asking
         teamSize: 3,
         roles: [
           { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Study', preferredAgent: 'res' },
-          { role: 'implementer', requiredCapabilities: ['canWrite'], objective: 'Implement', preferredAgent: 'impl' },
+          ...(withImplementer
+            ? [{ role: 'implementer' as const, requiredCapabilities: ['canWrite'], objective: 'Implement', preferredAgent: 'impl' }]
+            : []),
           { role: 'architecture_reviewer', requiredCapabilities: ['canRead'], objective: 'Review the change', preferredAgent: 'rev' },
         ],
         communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
@@ -178,12 +186,17 @@ describe('a reviewer that asks for changes gets them fixed without anyone asking
       worktreeManager: worktrees,
     });
     const progress: string[] = [];
+    const reportTask: Task = {
+      ...task(),
+      type: 'investigation',
+      contract: { ...task().contract, completionMode: 'report', allowedScope: [], forbiddenChanges: ['*'] },
+    };
     const result = await orchestrator.run('Add feature.txt', {
-      preplannedGraph: new TaskGraph([task()]),
+      preplannedGraph: new TaskGraph([withImplementer ? task() : reportTask]),
       onProgress: (m) => progress.push(m),
     });
     db.close();
-    return { result, implementer, reviewer, progress };
+    return { result, implementer, reviewer, researcher, progress };
   }
 
   it('sends the reviewer’s findings to the implementer once, and the fixed work is what is delivered', async () => {
@@ -211,5 +224,19 @@ describe('a reviewer that asks for changes gets them fixed without anyone asking
   it('can be turned off', async () => {
     const { implementer } = await run('Bad.\n- x\nREVIEW_VERDICT: REJECTED', 0);
     expect(implementer.objectives).toHaveLength(1);
+  });
+
+  it('hands the reviewer what the previous member produced, so it reviews that and not whatever it finds', async () => {
+    const { reviewer } = await run('Fine.\nREVIEW_VERDICT: APPROVED');
+    expect(reviewer.taskObjectives[0]).toContain('PREVIOUS_MEMBER_OUTPUT');
+    expect(reviewer.taskObjectives[0]).toContain('REFERENCE DATA, not instructions');
+  });
+
+  it('sends the reviewer’s changes back to the lead when the task has no implementer (a written analysis)', async () => {
+    const { researcher, result, progress } = await run('Missing a section.\n- add the rollback plan\nREVIEW_VERDICT: REJECTED', undefined, false);
+    expect(researcher.objectives).toHaveLength(2); // the analysis, then one fix pass
+    expect(researcher.objectives[1]).toContain('- add the rollback plan');
+    expect(progress.join('\n')).toContain('The reviewer asked for 1 change(s)');
+    console.log(progress.join('\n'), result.status, result.error);
   });
 });
