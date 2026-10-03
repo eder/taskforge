@@ -376,6 +376,25 @@ TaskForge recognises these failures (missing key or variable, connection refused
 
 Then `tf resume` re-checks the kept work without calling an agent. `git show --stat <kept branch>` (printed in the report) shows what the agents changed in the meantime.
 
+### A suite that already has failures
+
+Many real projects have tests that fail before anyone touches the code (a service that is down, a missing key, an old failing test). Judging a change by the whole suite's exit code would block every change.
+
+So the preflight measures each check command on the unchanged code and records which tests fail there. After the agents' work, a check counts as **passed when it fails only with those same failures**, and it is reported honestly:
+
+```text
+✔ TASK-02  Add retry: test: no new failures (it already had failures before the change, which this change neither caused nor fixed)
+```
+
+When the change **adds** a failure, only the new ones are shown, to the person and to the agent that has to fix it:
+
+```text
+New failures compared with before the change (2 already failing are ignored):
+- FAILED tests/new.py::test_c
+```
+
+Failures are recognised in the output of pytest, vitest/jest, `go test`, `node --test` and `cargo test`. For any other format there is nothing to compare, and the check is judged by its exit code as before. A command that passed before gets no leniency. The measurement is stored with the run, so `tf resume` keeps judging against the same starting point. Turn all of this off with `verification.preflight: false`.
+
 ### TaskForge repairs the environment itself
 
 You should not have to fix this by hand. TaskForge does three things so that a run does not end with a to-do list for you:

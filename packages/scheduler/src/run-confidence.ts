@@ -14,6 +14,8 @@ export interface TaskConfidence {
   state: TaskCheckState;
   /** Names of the checks that passed (tests, lint, ...). */
   checks: string[];
+  /** Checks that failed only with failures that already existed before the change. */
+  baselineChecks: string[];
 }
 
 export type RunConfidenceHeadline = 'verified' | 'partly_verified' | 'unverified' | 'not_applicable';
@@ -49,12 +51,13 @@ export function describeRunConfidence(
     .filter((t) => t.status === 'integrated')
     .map((t) => {
       const result = results.get(t.id);
-      const passedChecks = (result?.checks ?? []).filter((c) => c.success).map((c) => c.name);
+      const passedChecks = (result?.checks ?? []).filter((c) => c.success && !c.baselineOnly).map((c) => c.name);
+      const baselineChecks = (result?.checks ?? []).filter((c) => c.success && c.baselineOnly).map((c) => c.name);
       let state: TaskCheckState;
-      if (result && result.passed && passedChecks.length > 0) state = 'verified';
+      if (result && result.passed && passedChecks.length + baselineChecks.length > 0) state = 'verified';
       else if (!result && isReadOnlyTask(t)) state = 'not_applicable';
       else state = 'no_checks';
-      return { taskId: t.id, title: t.title, state, checks: [...new Set(passedChecks)] };
+      return { taskId: t.id, title: t.title, state, checks: [...new Set(passedChecks)], baselineChecks: [...new Set(baselineChecks)] };
     });
 
   const changing = tasks.filter((t) => t.state !== 'not_applicable');
@@ -90,7 +93,14 @@ export function formatRunConfidence(confidence: RunConfidence, goal?: string): s
     if (task.state === 'not_applicable') continue;
     out.push(
       task.state === 'verified'
-        ? `  ✔ ${task.taskId}  ${task.title}: ${task.checks.join(', ')} passed`
+        ? `  ✔ ${task.taskId}  ${task.title}: ${
+            task.baselineChecks.length === 0
+              ? `${task.checks.join(', ')} passed`
+              : [
+                  ...(task.checks.length > 0 ? [`${task.checks.join(', ')} passed`] : []),
+                  ...task.baselineChecks.map((name) => `${name}: no new failures (it already had failures before the change, which this change neither caused nor fixed)`),
+                ].join('; ')
+          }`
         : `  ⚠ ${task.taskId}  ${task.title}: no automated checks ran (a documentation-only change, or no check commands are configured)`,
     );
   }
