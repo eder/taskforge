@@ -138,7 +138,7 @@ export async function runSelftest(deps: SelftestDeps): Promise<SelftestResult> {
     } catch (err) {
       failed = true;
       const message = (err as Error).message.split('\n')[0];
-      const h = hint?.(err as Error) ?? hintFor(name, (err as Error).message);
+      const h = (err as { hint?: string }).hint ?? hint?.(err as Error) ?? hintFor(name, (err as Error).message);
       stages.push({ name, state: 'failed', detail: message, hint: h, ms: Date.now() - started });
       log(`  ✖ ${name}: ${message}`);
       if (h) log(`    → ${h}`);
@@ -160,9 +160,20 @@ export async function runSelftest(deps: SelftestDeps): Promise<SelftestResult> {
     const ready = await deps.readyAgents();
     const chosen = deps.agentId ? ready.find((r) => r.id === deps.agentId) : ready[0];
     if (!chosen) {
-      throw new Error(
-        deps.agentId ? `Agent "${deps.agentId}" is not installed and ready.` : 'No coding agent is installed and ready.',
-      );
+      if (!deps.agentId) throw new Error('No coding agent is installed and ready.');
+      // Say what was wrong with the name before blaming the installation: a typo
+      // ("claude.") is not a missing agent.
+      const known = [...new Set(['claude', 'codex', 'agy', ...ready.map((r) => r.id)])];
+      const cleaned = deps.agentId.toLowerCase().replace(/[^a-z0-9-]/g, '');
+      const readyNow = ready.length > 0 ? ` Ready now: ${ready.map((r) => r.id).join(', ')}.` : ' None is ready.';
+      if (!known.includes(deps.agentId)) {
+        throw Object.assign(new Error(`"${deps.agentId}" is not a known agent.`), {
+          hint: `${known.includes(cleaned) ? `Did you mean "${cleaned}"? ` : ''}Known agents: ${known.join(', ')}.${readyNow}`,
+        });
+      }
+      throw Object.assign(new Error(`Agent "${deps.agentId}" is not installed and ready.`), {
+        hint: `${readyNow.trim()} Install and sign in to ${deps.agentId}, then run \`tf doctor\`; or choose another with --agent.`,
+      });
     }
     agent = deps.createAgent(chosen.id);
     if (!agent) throw new Error(`Could not start the ${chosen.id} adapter.`);

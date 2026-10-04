@@ -74,6 +74,15 @@ describe('tf selftest', () => {
     expect(log.join('\n')).toContain('not signed in');
   }, 120_000);
 
+  it('calls a typo a typo, with a suggestion, instead of saying the agent is not installed', async () => {
+    const { d } = deps({ fake: false, agentId: 'claude.', readyAgents: async () => [{ id: 'claude', name: 'Claude Code' }] });
+    const result = await runSelftest(d);
+    expect(result.stages[0].detail).toContain('"claude." is not a known agent');
+    expect(result.stages[0].hint).toContain('Did you mean "claude"?');
+    expect(result.stages[0].hint).toContain('Known agents: claude, codex, agy');
+    expect(result.stages[0].hint).toContain('Ready now: claude');
+  });
+
   it('picks the requested agent, and says so when it is not ready', async () => {
     const { d } = deps({ fake: false, agentId: 'codex', readyAgents: async () => [{ id: 'claude', name: 'Claude Code' }] });
     const result = await runSelftest(d);
