@@ -99,3 +99,18 @@ describe('judging a check against how it behaved before the change', () => {
     expect((await verify(runner)).passed).toBe(false);
   });
 });
+
+import { testsActuallyRan } from '../src/failure-signatures.js';
+
+describe('testsActuallyRan', () => {
+  it('is true when some tests passed, false when the run died before running any', () => {
+    expect(testsActuallyRan('1 failed, 3 passed in 2.1s')).toBe(true);
+    expect(testsActuallyRan('Tests  2 failed | 5 passed (7)')).toBe(true);
+    expect(testsActuallyRan('ok  \texample.com/pkg\t0.2s')).toBe(true);
+    expect(testsActuallyRan('✔ adds numbers (1.2ms)\n✖ greets (0.4ms)')).toBe(true);
+    expect(testsActuallyRan('!!!! Interrupted: 8 errors during collection !!!!')).toBe(false);
+    expect(testsActuallyRan('ERROR test_a.py\n8 errors during collection\n3 passed')).toBe(false);
+    expect(testsActuallyRan('sh: pytest: command not found')).toBe(false);
+    expect(testsActuallyRan('0 passed, 4 failed')).toBe(false);
+  });
+});

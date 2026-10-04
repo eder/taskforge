@@ -78,7 +78,7 @@ describe('a project whose suite already has failures: only what the change adds 
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  function build(state: { breakSomething: boolean; calls: number }) {
+  function build(state: { breakSomething: boolean; calls: number }, suite = SUITE) {
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
     registry.register(writer(state));
@@ -100,7 +100,7 @@ describe('a project whose suite already has failures: only what the change adds 
     config.verification.lint = false;
     config.verification.typecheck = false;
     config.verification.review = false;
-    config.verification.commands = [SUITE];
+    config.verification.commands = [suite];
     config.verification.maxReworkCycles = 0;
     const orchestrator = new RunOrchestrator({ repoRoot: root, config, database: db, agentRegistry: registry, router, gitService: git, worktreeManager: worktrees });
     return { db, orchestrator };
@@ -156,5 +156,48 @@ describe('a project whose suite already has failures: only what the change adds 
 
     expect(resumed.status).toBe('completed');
     db.close();
+  });
+
+  // Tests that talk to a service which is not running here: the suite RUNS (3 pass), some fail.
+  const LIVE_SERVICE_SUITE = `node -e "const fs=require('fs');console.log('FAILED tests/test_live.py::test_voice - ConnectionRefusedError: [Errno 61] Connect call failed (\\'127.0.0.1\\', 8765)');if(fs.existsSync('breaks.flag'))console.log('FAILED tests/new.py::test_c - boom');console.log('1 failed, 3 passed');process.exit(1)"`;
+  const DIES_AT_COLLECTION = `node -e "console.log('ERROR test_a.py - ConnectionRefusedError: [Errno 61] Connect call failed');console.log('!!!! Interrupted: 1 error during collection !!!!');process.exit(2)"`;
+  const UNREADABLE = `node -e "console.error('Connection refused');process.exit(1)"`;
+
+  it('does not stop for tests that need a service which is not running: the suite ran, so it is a starting point', async () => {
+    const state = { breakSomething: false, calls: 0 };
+    const { db, orchestrator } = build(state, LIVE_SERVICE_SUITE);
+    const progress: string[] = [];
+
+    const result = await orchestrator.run('Add feature.txt', { preplannedGraph: new TaskGraph([task()]), onProgress: (m) => progress.push(m) });
+
+    expect(result.status).toBe('completed');
+    expect(state.calls).toBe(1);
+    const text = progress.join('\n');
+    expect(text).toContain('already fail here because they need something this environment does not have (for example a service on port 8765)');
+    expect(text).toContain('a test that talks to a running service tests that service, not the isolated copy');
+    const metadata = JSON.parse(new RunRepository(db).get(result.runId)!.metadataJson!);
+    expect(metadata.verificationBaseline[LIVE_SERVICE_SUITE].environmental).toBe(true);
+    db.close();
+  });
+
+  it('still blocks a change that adds a failure on top of those', async () => {
+    const state = { breakSomething: true, calls: 0 };
+    const { db, orchestrator } = build(state, LIVE_SERVICE_SUITE);
+    const result = await orchestrator.run('Add feature.txt', { preplannedGraph: new TaskGraph([task()]) });
+    expect(result.status).toBe('failed');
+    const lines = describeRunFailures({ taskRepo: new TaskRepository(db), eventRepo: new EventRepository(db) }, result.runId);
+    expect(lines.map((l) => l.evidence ?? '').join('\n')).toContain('- FAILED tests/new.py::test_c');
+    db.close();
+  });
+
+  it('still stops before any agent when the suite proves nothing: it dies at collection, or its output cannot be read', async () => {
+    for (const suite of [DIES_AT_COLLECTION, UNREADABLE]) {
+      const state = { breakSomething: false, calls: 0 };
+      const { db, orchestrator } = build(state, suite);
+      const result = await orchestrator.run('Add feature.txt', { preplannedGraph: new TaskGraph([task()]) });
+      expect(result.status).toBe('failed');
+      expect(state.calls).toBe(0); // nothing was spent on agents
+      db.close();
+    }
   });
 });

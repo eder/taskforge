@@ -375,6 +375,8 @@ export interface VerificationResult {
 export interface CheckBaseline {
   failed: boolean;
   signatures: string[];
+  /** Those failures come from the environment (a service that is not running), not from the code. */
+  environmental?: boolean;
 }
 
 export interface RepositoryProfile {

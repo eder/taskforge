@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { missingFileIsAgentsMistake } from './environment-repair.js';
+import { missingFileIsAgentsMistake, refusedPort } from './environment-repair.js';
 import {
   AgentAssignment,
   AgentStreamBus,
@@ -21,7 +21,7 @@ import {
   TaskRepository,
   WorkspaceRepository,
 } from '@taskforge/persistence';
-import { VerificationRunner, isDocumentationOnlyChange } from '@taskforge/verification';
+import { VerificationRunner, isDocumentationOnlyChange, testsActuallyRan } from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
 import { NegotiationManager } from '@taskforge/negotiation';
 import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
@@ -848,6 +848,7 @@ export class DeterministicScheduler {
     // agents' work is then judged on what it ADDS, not on what was already wrong.
     const baseline: Record<string, CheckBaseline> = {};
     const alreadyFailing: string[] = [];
+    let environmentalNote: string | undefined;
     let blocking: { result: VerificationResult; failureClass: RecoveryFailureClass } | undefined;
     verificationRunner.setBaseline(runId, undefined);
     try {
@@ -868,12 +869,30 @@ export class DeterministicScheduler {
             continue;
           }
           const cls = this.classifyVerification(outcome.failureReason);
-          if (cls !== 'code_or_test') {
+          const check = outcome.checks[0];
+          const signatures = check?.signatures ?? [];
+          // The environment lacks something (a service, a data file), but the suite RAN and
+          // only some tests fail: that is a measurable starting point, not a reason to stop.
+          // Those tests also cannot verify this change: one that talks to a running service
+          // tests that service, not the isolated copy. Stopping is for checks that prove
+          // nothing: the command cannot start, or no test executed.
+          const measurable =
+            cls === 'environment' &&
+            signatures.length > 0 &&
+            testsActuallyRan(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`);
+          if (cls !== 'code_or_test' && !measurable) {
             blocking = { result: outcome, failureClass: cls };
             break;
           }
-          baseline[command] = { failed: true, signatures: outcome.checks[0]?.signatures ?? [] };
+          baseline[command] = { failed: true, signatures, ...(measurable ? { environmental: true } : {}) };
           alreadyFailing.push(command);
+          if (measurable) {
+            const port = refusedPort(outcome.failureReason ?? '');
+            environmentalNote =
+              `${signatures.length} test(s) already fail here because they need something this environment does not have` +
+              `${port ? ` (for example a service on port ${port})` : ''}. They are ignored, and they could not verify this change anyway: ` +
+              'a test that talks to a running service tests that service, not the isolated copy. Only new failures will count.';
+          }
         }
       } finally {
         await worktreeManager.removeWorktree(probe.id, 'preflight', true, false).catch(() => undefined);
@@ -894,7 +913,9 @@ export class DeterministicScheduler {
         payload: { commands, alreadyFailing },
         timestamp: new Date(),
       });
-      if (alreadyFailing.length === 0) {
+      if (environmentalNote) {
+        this.ctx.onProgress?.(`⚠ ${environmentalNote}`);
+      } else if (alreadyFailing.length === 0) {
         this.ctx.onProgress?.('✔ The project\'s checks run in this environment.');
       } else {
         const known = alreadyFailing.reduce((n, c) => n + (baseline[c].signatures.length || 0), 0);
