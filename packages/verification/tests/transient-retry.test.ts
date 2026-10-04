@@ -86,4 +86,28 @@ describe('check evidence names the cause', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('shortens a long line at its end, so a path is never cut at its start', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-cut-'));
+    try {
+      const c = getDefaultConfig();
+      c.verification.tests = false;
+      c.verification.lint = false;
+      c.verification.typecheck = false;
+      // A script file avoids the quoting a one-liner would need around the path's quotes.
+      fs.writeFileSync(
+        path.join(dir, 'fail.js'),
+        "console.log(\"ERROR test_x.py - FileNotFoundError: [Errno 2] No such file or directory: 'testdata/capital_irlanda.pcm' \" + 'x'.repeat(400)); process.exit(2);",
+      );
+      const cmd = 'node fail.js';
+      const result = await new VerificationRunner(undefined, undefined, 0).verify({
+        taskId: 'T', runId: 'r', worktreePath: dir, config: c, taskType: 'implementation', explicitCommands: [cmd],
+      });
+      // The start of the line, with the whole path, survives; only the far end is cut.
+      expect(result.failureReason).toContain("No such file or directory: 'testdata/capital_irlanda.pcm'");
+      expect(result.failureReason).toContain('…');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

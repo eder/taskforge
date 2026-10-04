@@ -146,4 +146,17 @@ describe('a missing file: link it when your checkout has it, blame the change wh
     // A refused connection in the same output is still the environment.
     expect(missingFileIsAgentsMistake(repo, `${nowhere}\nConnection refused`)).toBe(false);
   });
+
+  it('links the whole data set beside the file the failure named, so the next run does not name the next file', async () => {
+    const { linkableMissingPaths } = await import('../src/environment-repair.js');
+    fs.writeFileSync(path.join(repo, 'server/audio/other.wav'), 'riff');
+    fs.writeFileSync(path.join(repo, 'server/audio/third.wav'), 'riff');
+    fs.writeFileSync(path.join(repo, 'server/audio/.hidden'), 'x');
+    const text = "Command: cd server && pytest\nFileNotFoundError: [Errno 2] No such file or directory: 'audio/sample.wav'";
+    expect(linkableMissingPaths(repo, text).sort()).toEqual([
+      'server/audio/other.wav',
+      'server/audio/sample.wav',
+      'server/audio/third.wav',
+    ]);
+  });
 });
