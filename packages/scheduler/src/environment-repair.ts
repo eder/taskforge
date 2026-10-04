@@ -121,12 +121,32 @@ export function linkableMissingPaths(repoRoot: string, text: string): string[] {
       if (!fs.existsSync(path.join(repoRoot, rel))) continue;
       const tracked = git(repoRoot, ['ls-files', '--', rel]).trim().length > 0;
       if (!tracked) {
-        found.add(rel.split(path.sep).join('/'));
+        const posix = rel.split(path.sep).join('/');
+        found.add(posix);
+        // A failure only names the files it reached first. A test data set is a directory of
+        // files, so the next run would name the next one and the next (a real run needed
+        // five rounds): link the untracked files that sit beside it too.
+        for (const sibling of untrackedSiblings(repoRoot, posix)) found.add(sibling);
         break;
       }
     }
   }
-  return [...found].slice(0, 5);
+  return [...found].slice(0, 40);
+}
+
+/** Untracked (including git-ignored) files directly inside the same directory as `rel`. */
+function untrackedSiblings(repoRoot: string, rel: string): string[] {
+  const dir = path.posix.dirname(rel);
+  if (dir === '.' || dir === '') return [];
+  const listed = [
+    git(repoRoot, ['ls-files', '--others', '--ignored', '--exclude-standard', '--', dir]),
+    git(repoRoot, ['ls-files', '--others', '--exclude-standard', '--', dir]),
+  ]
+    .join('\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && path.posix.dirname(l) === dir && !path.posix.basename(l).startsWith('.'));
+  return [...new Set(listed)].slice(0, 40);
 }
 
 export function diagnoseEnvironmentFailure(options: {

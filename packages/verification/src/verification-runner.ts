@@ -309,8 +309,10 @@ export class VerificationRunner {
           .map((line) => line.trimEnd())
           .filter(Boolean)
           .slice(-6)
-          .join('\n')
-          .slice(-600);
+          // Cut long lines at their end, never their start: cutting the front of the first
+          // line turned "testdata/capital_irlanda.pcm" into "estdata/capital_irlanda.pcm".
+          .map((line) => (line.length > 220 ? `${line.slice(0, 220)}…` : line))
+          .join('\n');
         // The last lines are often only a summary ("8 errors"); the lines that say what
         // went wrong sit earlier. Keep the distinct ones, so the evidence names the cause.
         const shownTail = new Set(tail.split('\n'));
