@@ -536,9 +536,18 @@ export class InteractiveShell {
         `  ${colors.dim}The team above is for the first task. Each task is staffed when it starts (${perTask === 1 ? 'one agent each' : `up to ${perTask} agents each`}), so real usage can exceed this estimate. ` +
         `${cap > 0 ? `The run stops starting new tasks at ${cap.toLocaleString('en-US')} tokens.` : 'There is no token cap (execution.tokenBudget: 0).'}${colors.reset}`;
       const observed = this.telemetry.observedAssignmentTokens();
-      const reality = observed
-        ? `\n  ${colors.dim}For reference, the last ${observed.samples} agent assignments in this project used about ${Math.round(observed.average / 1000).toLocaleString('en-US')}k tokens each (up to ${Math.round(observed.high / 1000).toLocaleString('en-US')}k). A task staffed with ${perTask} agents costs roughly ${perTask} times that, and this plan has ${tasks.length} task${tasks.length === 1 ? '' : 's'}.${colors.reset}`
-        : '';
+      // The model's estimate is usually far below what agents really use on this project;
+      // project it from what they did use, and say when that would reach the cap.
+      const k = (n: number) => `${Math.round(n / 1000).toLocaleString('en-US')}k`;
+      let reality = '';
+      if (observed) {
+        const projected = observed.average * perTask * tasks.length;
+        const reaches = cap > 0 && projected >= cap * 0.7;
+        reality =
+          `\n  ${colors.dim}For reference, the last ${observed.samples} agent assignments in this project used about ${k(observed.average)} tokens each (up to ${k(observed.high)}). ` +
+          `${perTask === 1 ? 'Each task uses one agent' : `Each task uses up to ${perTask} agents`}, and this plan has ${tasks.length} task${tasks.length === 1 ? '' : 's'}: roughly ${k(projected)} tokens.` +
+          `${reaches ? ` That is close to the ${k(cap)} cap, so the run may stop and need a higher one (it keeps its work and offers to raise it).` : ''}${colors.reset}`;
+      }
       return `${formatUsageEstimate(estimate)}\n${note}${reality}`;
     } catch {
       return ''; // an estimate must never block plan approval

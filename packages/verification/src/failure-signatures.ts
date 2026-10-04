@@ -46,3 +46,16 @@ export function extractFailureSignatures(output: string): string[] {
   }
   return [...found].sort();
 }
+
+/**
+ * Whether a test run actually executed tests (some passed), as opposed to dying before
+ * running any (collection errors, a missing command). A run that executed tests and failed
+ * only in some of them can still be compared before and after a change; one that executed
+ * nothing proves nothing either way.
+ */
+export function testsActuallyRan(output: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  const text = output.replace(/\u001b\[[0-9;]*m/g, '');
+  if (/\berrors? during collection\b|\bno tests ran\b|\bInterrupted:/i.test(text)) return false;
+  return /\b[1-9]\d* passed\b/.test(text) || /^\s*(?:ok\b|✔\s)/m.test(text);
+}
