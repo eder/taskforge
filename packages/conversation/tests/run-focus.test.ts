@@ -65,6 +65,27 @@ describe('what the REPL proposes when a run stops', () => {
     expect(focus.question).toEqual({ kind: 'check_command' });
   });
 
+  it('proposes the check command it can read from the kept work, and saves it on Enter', () => {
+    execFileSync('git', ['checkout', '-q', '-b', 'kept'], { cwd: repo });
+    fs.mkdirSync(path.join(repo, 'tests'));
+    fs.writeFileSync(path.join(repo, 'requirements.txt'), 'fastapi\n');
+    fs.writeFileSync(path.join(repo, 'tests', 'test_api.py'), 'def test_x():\n    pass\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.dev', '-c', 'user.name=T', 'commit', '-q', '-m', 'work'], { cwd: repo });
+    execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo });
+
+    const { focus, lines, hint } = buildRunFocus({
+      runId: 'run-1',
+      repoRoot: repo,
+      failures: [line({ failureClass: 'verification_configuration', keptBranch: 'kept' })],
+    });
+    expect(focus.action.kind).toBe('save_check_command');
+    expect(focus.action).toMatchObject({ command: expect.stringContaining('pytest -q') });
+    expect(focus.question).toEqual({ kind: 'check_command' }); // typing a different command still works
+    expect(lines.join('\n')).toContain('save `');
+    expect(hint).toContain('Enter: save that command');
+  });
+
   it('tells the person what only they can fix, and re-checks on Enter', () => {
     const { focus, lines } = buildRunFocus({
       runId: 'run-1',

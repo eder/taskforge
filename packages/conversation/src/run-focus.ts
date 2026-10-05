@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { inferCheckCommand, type InferredCheck, type ProjectTree } from '@taskforge/verification';
 import {
   environmentFixesFor,
   environmentHint,
@@ -18,6 +20,8 @@ export type FocusAction =
   | { kind: 'fix' }
   /** Continue the run (the agent picks up its kept work, or the checks re-run). */
   | { kind: 'continue' }
+  /** The project has no check command: save this one (inferred from its files) and re-check. */
+  | { kind: 'save_check_command'; command: string }
   /** The run stopped at its token cap: raise it and continue. */
   | { kind: 'raise_budget'; budget: number }
   /** Nothing TaskForge can do on its own; only a way to get out of the run. */
@@ -140,13 +144,29 @@ function proposeFocus(options: {
     };
   }
 
-  // 5. The project's check command does not work: ask which one should be used.
+  // 5. The project's check command does not work: propose one from the project's own files, else ask.
   if (failures.some((l) => l.failureClass === 'verification_configuration')) {
+    const keptBranch = failures.find((l) => l.keptBranch)?.keptBranch;
+    const inferred = keptBranch ? inferCheckFromBranch(repoRoot, keptBranch) : undefined;
+    if (inferred) {
+      return {
+        focus: {
+          runId,
+          action: { kind: 'save_check_command', command: inferred.command },
+          question: { kind: 'check_command' },
+        },
+        lines: [
+          'No command is set to verify this project, so the change could not be checked. That is not a problem with the change.',
+          `${inferred.reason}. What I'd do: save \`${inferred.command}\` as the check command in .taskforge/config.yaml and re-check the kept work (no agent is called).`,
+        ],
+        hint: 'Enter: save that command and re-check · or type a different command',
+      };
+    }
     return {
       focus: { runId, action: { kind: 'continue' }, question: { kind: 'check_command' } },
       lines: [
         'The command used to verify this project does not work, so no change can be checked.',
-        'I need one thing from you: type the command that verifies this project (for example `npm test` or `pytest -q server`) and I will save it and re-check. Or fix it yourself and press Enter.',
+        'I could not tell from its files which command to use. Type the command that verifies this project (for example `npm test` or `pytest -q server`) and I will save it and re-check. Or fix it yourself and press Enter.',
       ],
       hint: 'Enter: fixed it, re-check · or type the command that verifies this project',
     };
@@ -175,6 +195,28 @@ function proposeFocus(options: {
     ],
     hint: 'Enter: continue',
   };
+}
+
+/** What the kept branch contains, read with git (nothing is checked out or executed). */
+function inferCheckFromBranch(repoRoot: string, branch: string): InferredCheck | undefined {
+  try {
+    const git = (args: string[]) =>
+      execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const files = git(['ls-tree', '-r', '--name-only', branch]).split('\n').filter(Boolean);
+    const tree: ProjectTree = {
+      files,
+      read: (path) => {
+        try {
+          return git(['show', `${branch}:${path}`]).slice(0, 100_000);
+        } catch {
+          return undefined;
+        }
+      },
+    };
+    return inferCheckCommand(tree);
+  } catch {
+    return undefined;
+  }
 }
 
 function capitalize(text: string): string {
