@@ -181,6 +181,27 @@ export function enforceArchitectureBoundaryDecision(
   const mutatingTasks = tasks.filter(taskRequiresMutation);
   if (mutatingTasks.length === 0) return { changed: false };
 
+  // The planner already put a read-only architecture decision ahead of all the
+  // mutating work: a second one would repeat it and add a step to the chain.
+  const readOnlyArchitecture = tasks.filter(
+    (task) => task.type === 'architecture' && !taskRequiresMutation(task),
+  );
+  const dependsTransitively = (task: Task, targetId: string, seen = new Set<string>()): boolean =>
+    task.dependencies.some((id) => {
+      if (id === targetId) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      const upstream = graph.getTask(id);
+      return upstream ? dependsTransitively(upstream, targetId, seen) : false;
+    });
+  if (
+    readOnlyArchitecture.some((decision) =>
+      mutatingTasks.every((task) => dependsTransitively(task, decision.id)),
+    )
+  ) {
+    return { changed: false };
+  }
+
   const text = tasks
     .map((task) =>
       [

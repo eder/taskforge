@@ -905,6 +905,10 @@ When you start `tf` in a project without the file, it prints a short notice (onc
 
 The file is local to the project you run `tf` in, and `~/.taskforge/config.yaml` can hold settings shared by all projects. Later files override earlier ones: defaults, then global, then project.
 
+### Parallel tasks
+
+Tasks that do not depend on each other run at the same time, each in its own worktree, up to `execution.maxParallelTasks`. The planner splits a change into parallel tasks only along files (for example storage, domain rules and the HTTP layer), each with its own `allowedScope`. Two tasks that nothing orders and whose scopes may overlap are run one after the other, so parallel work does not collide when it is integrated. The proposal says how many tasks can run at once. Parallel tasks finish sooner and use more tokens in total.
+
 Project-local configuration:
 
 ```text
@@ -927,7 +931,7 @@ router:
   # timeoutSeconds: 60   # how long the planner waits for the model before using a simpler plan
 
 execution:
-  maxParallelTasks: 3
+  maxParallelTasks: 3   # tasks running at once; the plan decides how many can (see "Parallel tasks")
   defaultTimeoutMinutes: 30
   worktreesDir: .taskforge/worktrees
   databasePath: .taskforge/taskforge.db

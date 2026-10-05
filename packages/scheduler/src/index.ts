@@ -8,6 +8,7 @@ export * from './task-recovery.js';
 
 export * from './task-policy.js';
 export * from './dual-review.js';
+export * from './plan-parallelism.js';
 export * from './task-id-allocation.js';
 export * from './run-failure-report.js';
 export * from './run-context.js';

@@ -80,6 +80,7 @@ import {
   findPriorRunContext,
   renderPriorContext,
   describeAge,
+  planWidth,
 } from '@taskforge/scheduler';
 import {
   TaskForgeDatabase,
@@ -531,6 +532,18 @@ export class InteractiveShell {
   }
 
   /** Approximate token budget for the plan, shown before the user approves it. */
+  /** How many of the plan's tasks can run at once, so waiting is not a surprise. */
+  private planParallelismLine(tasks: import('@taskforge/core').Task[]): string {
+    const width = planWidth(tasks);
+    const limit = this.config.execution.maxParallelTasks;
+    const running = Math.min(width, limit);
+    const text =
+      running > 1
+        ? `Up to ${running} tasks run at the same time${width > limit ? ` (limit ${limit})` : ''}; each uses its own agent run, so tokens add up.`
+        : 'The tasks run one after another: each waits for the previous one.';
+    return `  ${colors.dim}${text}${colors.reset}`;
+  }
+
   private planUsageEstimateLine(
     tasks: import('@taskforge/core').Task[],
     primaryTaskId: string,
@@ -1514,6 +1527,7 @@ export class InteractiveShell {
           ...taskFormattedList,
           '',
           contextLine,
+          this.planParallelismLine(tasks),
           this.planUsageEstimateLine(tasks, primaryTask.id, selected.length),
           `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
         ].join('\n');
@@ -1608,6 +1622,7 @@ export class InteractiveShell {
           `Total of ${tasks.length} structured tasks:`,
           ...taskFormattedList,
           '',
+          this.planParallelismLine(tasks),
           this.planUsageEstimateLine(tasks, primaryTask.id, selected.length),
           `  ${colors.green}●${colors.reset} ${colors.bold}Do you want me to execute the revised plan?${colors.reset} ${colors.dim}(type "yes", "y" or "/approve" to start)${colors.reset}`,
         ].join('\n');

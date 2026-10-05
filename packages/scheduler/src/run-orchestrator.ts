@@ -37,6 +37,7 @@ import {
   AgentQuotaTracker,
 } from '@taskforge/agents';
 import { TaskGraph, Goal, Task } from '@taskforge/core';
+import { serializeOverlappingTasks } from './plan-parallelism.js';
 import {
   HeuristicPlanner,
   normalizeGraphForExecutionIntent,
@@ -111,6 +112,8 @@ export interface RunOptions {
   runId?: string;
   baseCommit?: string;
   preplannedGraph?: TaskGraph;
+  /** Keep tasks that may write the same files running together (used to exercise integration conflicts). */
+  allowOverlappingParallelTasks?: boolean;
   fakeFallback?: boolean;
   onProgress?: (message: string) => void;
   abortSignal?: AbortSignal;
@@ -450,6 +453,21 @@ export class RunOrchestrator {
       });
       options.onProgress?.(
         `[${normalization.taskId}] Plan intent normalized: ${normalization.originalTaskType} → ${normalization.normalizedTaskType} (${normalization.reason})`,
+      );
+    }
+
+    // 5c. Tasks that could run together but may write the same files run in turn.
+    const serialized = options.allowOverlappingParallelTasks ? [] : serializeOverlappingTasks(graph);
+    if (serialized.length > 0) {
+      this.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        type: 'PLAN_PARALLELISM_LIMITED',
+        payload: { added: serialized },
+        timestamp: new Date(),
+      });
+      options.onProgress?.(
+        `Tasks that may change the same files run one after the other: ${serialized.map((d) => `${d.taskId} after ${d.after}`).join(', ')}`,
       );
     }
 
