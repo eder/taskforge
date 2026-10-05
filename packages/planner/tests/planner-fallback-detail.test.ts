@@ -106,3 +106,43 @@ describe('a plan longer than the limit is sent back to be combined', () => {
     expect(call).toBe(1);
   });
 });
+
+describe('a model plan of the size the planner was asked for is accepted, however long the pasted request', () => {
+  const rawTask = (i: number) => ({
+    taskId: `T${i}`,
+    title: `Do part ${i}`,
+    description: `Part ${i}`,
+    type: 'implementation',
+    dependencies: i === 1 ? [] : [`T${i - 1}`],
+    objective: `Do part ${i}`,
+    allowedScope: ['src/**'],
+    forbiddenChanges: [],
+    acceptanceCriteria: [`part ${i} works`],
+    completionMode: 'mutation',
+    verification: null,
+  });
+
+  it('takes 4 tasks for a 48-line paste instead of falling back to a generic plan', async () => {
+    const paste = Array.from({ length: 48 }, (_, i) => `Requirement line ${i + 1} describing part of the work`).join('\n');
+    let calls = 0;
+    const planner = new SemanticPlanner({
+      customCaller: async () => {
+        calls += 1;
+        return { summary: 'four', tasks: [1, 2, 3, 4].map(rawTask) } as never;
+      },
+    });
+    const graph = await planner.plan({ ...goal, description: paste });
+    const provenance = graph.metadata?.planner as { source?: string; fallbackReason?: string };
+    expect(calls).toBe(1);
+    expect(graph.getAllTasks()).toHaveLength(4);
+    expect(provenance.fallbackReason).toBeUndefined();
+    expect(provenance.source).not.toBe('deterministic_decomposition');
+  });
+
+  it('still rejects a plan collapsed into too few tasks for a complex request', async () => {
+    const paste = Array.from({ length: 12 }, (_, i) => `Requirement line ${i + 1} describing part of the work`).join('\n');
+    const planner = new SemanticPlanner({ customCaller: async () => ({ summary: 'one', tasks: [rawTask(1)] }) as never });
+    const graph = await planner.plan({ ...goal, description: paste });
+    expect((graph.metadata?.planner as { fallbackReason?: string }).fallbackReason).toBe('model_unresponsive_or_invalid');
+  });
+});
