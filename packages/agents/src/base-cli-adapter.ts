@@ -168,6 +168,9 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       readOnly
         ? 'Provenance policy: clearly distinguish facts observed in repository files from inference; do not present inference as repository fact.'
         : undefined,
+      readOnly
+        ? undefined
+        : 'Environment: nobody can approve a command while you work, and installing packages, creating virtual environments or reaching the network is not available. Do not try them, and do not commit: TaskForge commits your changes and runs the project\'s checks itself once you finish, then returns the output to you if they fail. Run only what needs no approval (for example a syntax check).',
       'Acceptance criteria:',
       ...context.task.acceptanceCriteria.map((criterion) => `- ${criterion}`),
     ]

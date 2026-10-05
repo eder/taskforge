@@ -887,7 +887,12 @@ export class InteractiveShell {
         this.focusedRun = undefined;
         return `${colors.dim}Left ${left}. It stays in /runs and can be continued any time with /retry.${colors.reset}`;
       }
-      if (intent.type === 'submit_goal') {
+      // "I approve the commands, run the tests" is an instruction for the run, not an answer to an
+      // interaction request, unless one is actually waiting.
+      const nothingToApprove =
+        (intent.type === 'approve_interaction' || intent.type === 'deny_interaction') &&
+        this.interactionGateway.getPendingRequests().length === 0;
+      if (intent.type === 'submit_goal' || nothingToApprove) {
         const reply = await this.handleFocusedMessage(text);
         if (reply !== undefined) return reply;
       }
@@ -1925,9 +1930,11 @@ export class InteractiveShell {
     message: string,
     /** The message did not come from inside the run: show what would happen and wait for Enter. */
     confirm = false,
+    /** The cap the proposal offered; a message typed instead of Enter must not lose it. */
+    raiseBudgetTo?: number,
   ): Promise<string> {
     const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, runId);
-    if (plan.fixes.length === 0 && !confirm) return this.continueRun(runId, message);
+    if (plan.fixes.length === 0 && !confirm) return this.continueRun(runId, message, { tokenBudget: raiseBudgetTo });
     if (plan.fixes.length === 0) {
       // The planner (not the person) decided this message is about a run that stopped.
       // Continuing it spends tokens on work that was approved earlier: say so and wait.
@@ -1936,7 +1943,7 @@ export class InteractiveShell {
       const left = tasks.filter((t) => t.status !== 'integrated').length;
       const spent = this.telemetry.getRunTokenTotal(runId);
       const cap = this.config.execution.tokenBudget;
-      this.focusedRun = { runId, action: { kind: 'continue' }, guidance: message };
+      this.focusedRun = { runId, action: { kind: 'continue' }, guidance: message, raiseBudgetTo };
       return [
         `${colors.brand}✦ ${colors.bold}This sounds like ${runId}, which stopped${colors.reset}${info?.goal ? ` ${colors.dim}(${info.goal})${colors.reset}` : ''}`,
         `  I would continue that run and give it your words as the instruction. ${left} of ${tasks.length} task${tasks.length === 1 ? '' : 's'} ${left === 1 ? 'is' : 'are'} left` +
@@ -1944,7 +1951,7 @@ export class InteractiveShell {
         `  ${colors.dim}↵ Enter: continue that run  ·  or /back, then /clear if you meant something new (a new task is planned and shown to you first)${colors.reset}`,
       ].join('\n');
     }
-    this.focusedRun = { runId, action: { kind: 'fix' }, guidance: message };
+    this.focusedRun = { runId, action: { kind: 'fix' }, guidance: message, raiseBudgetTo };
     return [
       `${colors.brand}✦ ${colors.bold}${runId} stopped on the environment, not on your request${colors.reset}`,
       ...plan.descriptions.map((d) => `  ${colors.green}•${colors.reset} ${d}`),
@@ -2009,7 +2016,12 @@ export class InteractiveShell {
         return undefined;
       }
     }
-    return this.respondToUnfinishedRun(focus.runId, text);
+    return this.respondToUnfinishedRun(
+      focus.runId,
+      text,
+      false,
+      focus.raiseBudgetTo ?? (focus.action.kind === 'raise_budget' ? focus.action.budget : undefined),
+    );
   }
 
   /** The person typed the command that starts the service the checks need: run it, wait for the port, continue. */

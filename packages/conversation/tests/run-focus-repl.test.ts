@@ -121,6 +121,25 @@ describe('the REPL goes into a run that stopped', () => {
     expect(resumes[0]).toMatchObject({ runId: 'run-1790000000000023', tokenBudget: 4_000_000 });
   });
 
+  it('a message typed instead of Enter still gets the raised cap the proposal offered', async () => {
+    seed('run-1790000000000026', { failureClass: 'code_or_test', evidence: 'x' });
+    new EventRepository(db).append({
+      id: 'budget-26',
+      runId: 'run-1790000000000026',
+      type: 'TOKEN_BUDGET_REACHED',
+      payload: { spent: 1_567_076, budget: 1_000_000 },
+      timestamp: new Date(Date.now() + 1000),
+    });
+    shell = open();
+    await stopped(shell, 'run-1790000000000026');
+
+    await shell.handleInput('I approve the commands, run the tests');
+
+    expect(resumes).toEqual([
+      { runId: 'run-1790000000000026', guidance: 'I approve the commands, run the tests', tokenBudget: 2_000_000 },
+    ]);
+  });
+
   it('a message goes to that run as the user’s instruction; no model needed', async () => {
     seed('run-1790000000000024', { failureClass: 'code_or_test', evidence: 'AssertionError: 1 != 2' });
     shell = open();
