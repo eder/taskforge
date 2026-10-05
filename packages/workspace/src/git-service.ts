@@ -10,6 +10,14 @@ export interface GitStatus {
   uncommittedFiles: string[];
 }
 
+/** The folder is not in a state TaskForge can work from, and fixing that is the person's decision. */
+export class RepositoryNotReadyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RepositoryNotReadyError';
+  }
+}
+
 export class GitService {
   constructor(private repoRoot: string) {}
 
@@ -94,13 +102,27 @@ export class GitService {
     }
   }
 
+  /**
+   * The commit a run starts from. TaskForge never creates a repository and never commits
+   * the person's files for them: it used to `git init` any folder and `git add -A` +
+   * commit everything, and when started in a folder of projects it began versioning all
+   * of them at once (secrets and `.env` files included). Only a repository that has no
+   * commits AND no files gets an empty first commit, so there is a base to branch from.
+   */
   async ensureInitialCommit(cwd: string = this.repoRoot): Promise<string> {
     try {
       return await this.exec(['rev-parse', 'HEAD'], cwd);
     } catch {
-      const isRepo = await this.isGitRepo();
-      if (!isRepo) {
-        await this.exec(['init', '-b', 'main'], cwd);
+      if (!(await this.isGitRepo())) {
+        throw new RepositoryNotReadyError(
+          `${cwd} is not a git repository. TaskForge never creates one for you: open it inside your project, or run \`git init\` there and make a first commit.`,
+        );
+      }
+      const statusOutput = await this.exec(['status', '--porcelain'], cwd).catch(() => '');
+      if (statusOutput.trim().length > 0) {
+        throw new RepositoryNotReadyError(
+          `This repository has no commits yet but has files. TaskForge will not commit them for you: make your own first commit (\`git add <files> && git commit\`), then try again.`,
+        );
       }
 
       let hasUser = false;
@@ -110,23 +132,11 @@ export class GitService {
       } catch {
         hasUser = false;
       }
-
       if (!hasUser) {
         await this.exec(['config', 'user.name', 'TaskForge Bot'], cwd);
         await this.exec(['config', 'user.email', 'bot@taskforge.dev'], cwd);
       }
-
-      const statusOutput = await this.exec(['status', '--porcelain'], cwd).catch(() => '');
-      if (statusOutput.trim().length > 0) {
-        await this.exec(['add', '-A'], cwd);
-        await this.exec(['commit', '-m', 'chore: initial commit by TaskForge'], cwd);
-      } else {
-        await this.exec(
-          ['commit', '--allow-empty', '-m', 'chore: initial commit by TaskForge'],
-          cwd,
-        );
-      }
-
+      await this.exec(['commit', '--allow-empty', '-m', 'chore: initial commit by TaskForge'], cwd);
       return await this.exec(['rev-parse', 'HEAD'], cwd);
     }
   }

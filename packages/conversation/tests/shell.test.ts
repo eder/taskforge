@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -14,6 +15,9 @@ describe('InteractiveShell (REPL)', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-shell-test-'));
+    // A real repository: TaskForge does not create one for the folder it is opened in.
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'initial'], { cwd: tmpDir, stdio: 'ignore' });
     db = new TaskForgeDatabase(path.join(tmpDir, 'test.db'));
   });
 
@@ -43,7 +47,7 @@ describe('InteractiveShell (REPL)', () => {
     expect(banner).toContain('Agents');
     expect(banner).toContain('Router');
     expect(banner).toContain('Git Status');
-    expect(banner).toContain('unavailable');
+    expect(banner).toContain('main'); // a real repository shows its branch
     expect(banner).not.toContain('unknown (unknown)');
   });
 

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -17,6 +18,9 @@ describe('/apply and /diff result UX', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-apply-diff-test-'));
+    // A real repository: TaskForge does not create one for the folder it is opened in.
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'initial'], { cwd: tmpDir, stdio: 'ignore' });
     // In-memory DB: keeps the repo working tree clean so /apply can
     // actually succeed (an on-disk sqlite file inside the repo root would
     // make the tree permanently dirty and /apply would always refuse).

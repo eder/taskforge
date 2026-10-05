@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -17,6 +18,9 @@ describe('Result screens differentiate READ_ONLY_ANALYSIS from IMPLEMENTATION', 
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-result-screens-test-'));
+    // A real repository: TaskForge does not create one for the folder it is opened in.
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'initial'], { cwd: tmpDir, stdio: 'ignore' });
     db = new TaskForgeDatabase(path.join(tmpDir, 'test.db'));
   });
 
