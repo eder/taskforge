@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { PassThrough } from 'node:stream';
@@ -25,6 +26,9 @@ describe('E2E Self-Hosting Correctness Pass (PR #10 Integration)', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-e2e-integration-'));
+    // A real repository: TaskForge does not create one for the folder it is opened in.
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'initial'], { cwd: tmpDir, stdio: 'ignore' });
     db = new TaskForgeDatabase(path.join(tmpDir, 'test.db'));
   });
 
