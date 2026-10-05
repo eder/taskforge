@@ -453,20 +453,7 @@ export class RunOrchestrator {
       );
     }
 
-    // Persist all tasks in DB
-    for (const task of graph.getAllTasks()) {
-      this.taskRepo.create({
-        id: task.id,
-        runId,
-        goalId: goal.id,
-        title: task.title,
-        description: task.description,
-        type: task.type,
-        status: task.status,
-        contract: task.contract,
-        dependencies: task.dependencies,
-      });
-    }
+    persistTaskGraph(this.taskRepo, graph, runId, goal.id);
 
     return this.executeGraph({
       runId,
@@ -1093,5 +1080,32 @@ export class RunOrchestrator {
       schedulerResult,
       executionIntent,
     };
+  }
+}
+
+/**
+ * Stores the plan's tasks. A task's dependency rows point at other tasks, so a
+ * task has to be stored after the ones it depends on: the planner may list a
+ * prerequisite last (for example a design decision written as the final task),
+ * and storing in listing order failed with "FOREIGN KEY constraint failed".
+ */
+export function persistTaskGraph(
+  taskRepo: TaskRepository,
+  graph: TaskGraph,
+  runId: string,
+  goalId: string,
+): void {
+  for (const task of graph.topologicalSort()) {
+    taskRepo.create({
+      id: task.id,
+      runId,
+      goalId,
+      title: task.title,
+      description: task.description,
+      type: task.type,
+      status: task.status,
+      contract: task.contract,
+      dependencies: task.dependencies,
+    });
   }
 }
