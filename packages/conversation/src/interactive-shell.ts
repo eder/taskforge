@@ -1293,6 +1293,19 @@ export class InteractiveShell {
           (resolved && 'runId' in resolved ? resolved.runId : undefined) ??
           runs.listAll().find((r) => ['failed', 'cancelled', 'running'].includes(r.status))?.id;
         if (!runId) return 'Nothing to retry: no failed, cancelled or interrupted runs. See /runs.';
+        // Past its token cap the run would stop again at once: offer the higher cap first.
+        const spent = this.telemetry.getRunTokenTotal(runId);
+        const budget = this.config.execution.tokenBudget;
+        if (budget > 0 && spent >= budget) {
+          const proposal = buildRunFocus({
+            runId,
+            failures: [{ taskId: '', title: '', kind: 'budget', budget: { spent, budget } }],
+            repoRoot: this.repoRoot,
+            spend: { spent, budget },
+          });
+          this.focusedRun = proposal.focus;
+          return [...proposal.lines, '', `↵ ${proposal.hint}   ·   /back to leave this run`].join('\n');
+        }
         return this.continueRun(runId);
       }
 
@@ -2008,7 +2021,13 @@ export class InteractiveShell {
       const info = this.describeUnfinished(focus.runId);
       const chosen = info
         ? await this.planner.selectEarlierRun(text, [
-            { id: info.runId, goal: info.goal, age: describeAge(info.createdAt), excerpt: info.summary, state: 'not_finished' },
+            {
+              id: info.runId,
+              goal: info.goal,
+              age: describeAge(info.createdAt),
+              excerpt: focus.asked ? `${info.summary}\nThe person was just asked: ${focus.asked}`.slice(0, 1200) : info.summary,
+              state: 'not_finished',
+            },
           ])
         : null;
       if (chosen === null) {

@@ -40,6 +40,8 @@ export interface RunFocus {
   guidance?: string;
   /** The run is already past its token cap: continuing needs this higher cap or it would stop at once. */
   raiseBudgetTo?: number;
+  /** What the person was just asked, in words; lets the planner read a short reply such as "ok" or "aprovo" as an answer. */
+  asked?: string;
 }
 
 export interface FocusProposal {
@@ -61,6 +63,7 @@ export function buildRunFocus(options: {
 }): FocusProposal {
   const proposal = proposeFocus(options);
   const { spend } = options;
+  proposal.focus.asked = proposal.lines.join(' ');
   // Whatever is proposed, a run past its cap would stop again before doing it.
   if (
     spend &&
@@ -76,6 +79,7 @@ export function buildRunFocus(options: {
     );
     proposal.hint = `${proposal.hint} (and raise the cap to ${tokens(raised)})`;
   }
+  proposal.focus.asked = proposal.lines.join(' ');
   return proposal;
 }
 

@@ -140,6 +140,31 @@ describe('the REPL goes into a run that stopped', () => {
     ]);
   });
 
+  it('/retry on a run past its token cap offers the higher cap instead of stopping again at once', async () => {
+    seed('run-1790000000000028', { failureClass: 'code_or_test', evidence: 'x' });
+    shell = open();
+    (shell as any).telemetry.getRunTokenTotal = () => 1_567_076;
+
+    const text = plain(await shell.handleInput('/retry'));
+
+    expect(resumes).toEqual([]); // nothing was started that would stop at once
+    expect(text).toContain('raise the cap to 2,000,000');
+    expect(text).toContain('Enter');
+    expect((shell as any).focusedRun).toMatchObject({ runId: 'run-1790000000000028', action: { kind: 'raise_budget', budget: 2_000_000 } });
+    expect((shell as any).focusedRun.asked).toContain('raise the cap');
+
+    await shell.handleInput('');
+    expect(resumes[0]).toMatchObject({ runId: 'run-1790000000000028', tokenBudget: 2_000_000 });
+  });
+
+  it('remembers what the person was asked, so a short reply in any language can answer it', async () => {
+    seed('run-1790000000000029', { failureClass: 'environment', evidence: 'RuntimeError: no LLM api_key configured' });
+    fs.writeFileSync(path.join(dir, '.env'), 'LLM_API_KEY=x\n');
+    shell = open();
+    await stopped(shell, 'run-1790000000000029');
+    expect((shell as any).focusedRun.asked).toContain("What I'd do");
+  });
+
   it('a message goes to that run as the user’s instruction; no model needed', async () => {
     seed('run-1790000000000024', { failureClass: 'code_or_test', evidence: 'AssertionError: 1 != 2' });
     shell = open();
