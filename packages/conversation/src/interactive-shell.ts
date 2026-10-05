@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { buildRunFocus, type RunFocus } from './run-focus.js';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
+import { execFileSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
 import {
@@ -130,6 +131,16 @@ import {
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
 
+/** Whether `dir` is inside a git work tree (synchronous: it decides where state may be written). */
+function insideGitRepo(dir: string): boolean {
+  try {
+    execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: dir, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface ShellOptions {
   repoRoot?: string;
   config?: TaskForgeConfig;
@@ -169,6 +180,8 @@ export class InteractiveShell {
   private settledIntent?: ExecutionIntentDecision;
   /** The stopped run the REPL is "in": Enter accepts its proposal and typing goes to it (see run-focus.ts). */
   private focusedRun?: RunFocus;
+  /** The folder is inside a git repository (checked once, when the shell opens). */
+  private inRepo = true;
   /** Output of an earlier run attached to the plan being proposed ("do item 1"). */
   private pendingPriorContext?: { runId: string; text: string; chars: number; createdAt: string };
   private isPaused = false;
@@ -204,7 +217,11 @@ export class InteractiveShell {
     this.streamBus = options.streamBus ?? new AgentStreamBus();
     this.sessionRegistry = new SessionRegistry();
     this.config = options.config ?? loadConfig();
-    this.db = options.database ?? new TaskForgeDatabase(this.config.execution.databasePath);
+    // Outside a git repository nothing can run, so do not leave a `.taskforge/` state
+    // directory behind in whatever folder TaskForge happened to be opened in.
+    this.inRepo = insideGitRepo(this.repoRoot);
+    this.db =
+      options.database ?? new TaskForgeDatabase(this.inRepo ? this.config.execution.databasePath : ':memory:');
     this.availabilityDb =
       options.database ?? new TaskForgeDatabase(getGlobalStateDatabasePath());
     const globalAvailability = new AgentAvailabilityRepository(this.availabilityDb);
@@ -704,7 +721,9 @@ export class InteractiveShell {
     }));
 
     const reports = await AgentDetector.detect(this.agentRegistry.list());
-    const gitStatusLabel = gitStatus
+    const gitStatusLabel = !this.inRepo
+      ? `${colors.yellow}not a git repository${colors.reset}`
+      : gitStatus
       ? `${colors.yellow}${gitStatus.currentBranch}${colors.reset} ${colors.dim}(${gitStatus.headCommit.slice(0, 7)})${colors.reset} • ${
           gitStatus.isClean
             ? `${colors.green}clean${colors.reset}`
@@ -1657,6 +1676,10 @@ export class InteractiveShell {
           return 'No pending plan for approval. Describe an engineering goal in natural language to get started.';
         }
 
+        // Without a repository there is nothing to isolate or deliver. Stop here, in words,
+        // before anything touches the folder: TaskForge does not create repositories.
+        if (!(await this.gitService.isGitRepo())) return this.notARepositoryMessage();
+
         const isFakeRequested = text.includes('--fake') || text.includes('fake');
         const currentExecutionIntent = mostRestrictiveIntent(
           detectExecutionIntent(this.lastGoalDescription ?? this.activeGoal?.description ?? ''),
@@ -2050,6 +2073,25 @@ export class InteractiveShell {
           this.conversationState = 'IDLE';
           return this.describeUnexpectedStop(runId, err);
         }
+  }
+
+  /** Said when TaskForge is opened somewhere that is not a project: what is wrong and where to go. */
+  private notARepositoryMessage(): string {
+    const here = fs.existsSync(this.repoRoot)
+      ? fs
+          .readdirSync(this.repoRoot, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.') && fs.existsSync(path.join(this.repoRoot, e.name, '.git')))
+          .map((e) => e.name)
+          .sort()
+          .slice(0, 12)
+      : [];
+    return [
+      `  ${colors.red}✖ ${this.repoRoot} is not a git repository.${colors.reset}`,
+      `  ${colors.dim}TaskForge works in isolated git worktrees and delivers by merge, so it needs one, and it will not create or commit one for you.${colors.reset}`,
+      here.length > 0
+        ? `  Projects in this folder: ${colors.bold}${here.join(', ')}${colors.reset}. Open TaskForge inside one: ${colors.cyan}cd ${here[0]} && tf${colors.reset}`
+        : `  Open TaskForge inside your project (\`cd <project> && tf\`), or run \`git init\` there and make a first commit.`,
+    ].join('\n');
   }
 
   /** The no-sandbox warning, once per machine, so it is seen even by someone who skips `tf setup`. */
