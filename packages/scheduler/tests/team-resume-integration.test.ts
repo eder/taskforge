@@ -244,7 +244,10 @@ describe('an integration conflict keeps the work instead of ending the run with 
     const a = { ...task(), id: 'TASK-A', title: 'Edit A' };
     const b = { ...task(), id: 'TASK-B', title: 'Edit B' };
 
-    const result = await orchestrator.run('Edit the readme twice', { preplannedGraph: new TaskGraph([a, b]) });
+    const result = await orchestrator.run('Edit the readme twice', {
+      preplannedGraph: new TaskGraph([a, b]),
+      allowOverlappingParallelTasks: true,
+    });
 
     expect(result.status).toBe('failed');
     expect(result.error ?? '').not.toContain('cherry-pick');
@@ -253,6 +256,52 @@ describe('an integration conflict keeps the work instead of ending the run with 
     expect(text).toContain('conflicts with changes already on the run branch');
     expect(lines.some((l) => l.keptBranch)).toBe(true); // nothing was lost
     expect(result.tasksCompleted).toBe(1);
+    db.close();
+  }, 120_000);
+
+  it('runs tasks that edit the same file one after the other, so they do not conflict', async () => {
+    const { describeRunFailures, formatRunFailureLines } = await import('../src/run-failure-report.js');
+    const { TaskRepository, EventRepository } = await import('@taskforge/persistence');
+    const db = new TaskForgeDatabase(':memory:');
+    const registry = new AgentRegistry(false);
+    registry.register(new Overwriter());
+    const router: RoutingProvider = {
+      id: 'r',
+      route: async () => ({
+        strategy: 'single',
+        complexity: 'low',
+        risk: 'low',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [{ role: 'implementer', requiredCapabilities: ['canWrite'], objective: 'x', preferredAgent: 'over' }],
+        communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
+        reason: 'test',
+      }),
+    };
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+    config.verification.review = false;
+    config.verification.maxReworkCycles = 0; // do not retry: look at the first outcome
+    const orchestrator = new RunOrchestrator({
+      repoRoot: root,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router,
+      gitService: git,
+      worktreeManager: worktrees,
+    });
+    const a = { ...task(), id: 'TASK-A', title: 'Edit A' };
+    const b = { ...task(), id: 'TASK-B', title: 'Edit B' };
+
+    const result = await orchestrator.run('Edit the readme twice', {
+      preplannedGraph: new TaskGraph([a, b]),
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.tasksCompleted).toBe(2);
     db.close();
   }, 120_000);
 });
