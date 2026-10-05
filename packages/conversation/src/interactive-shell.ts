@@ -1976,6 +1976,8 @@ export class InteractiveShell {
         return this.fixAndContinue(focus.runId, focus.guidance, focus.raiseBudgetTo);
       case 'continue':
         return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.raiseBudgetTo });
+      case 'save_check_command':
+        return this.saveCheckCommand(focus, focus.action.command);
       case 'raise_budget':
         return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.action.budget });
       case 'none':
@@ -2022,7 +2024,7 @@ export class InteractiveShell {
       return `${colors.yellow}The command ran, but port ${port} did not accept connections within 30s.${colors.reset}\n${colors.dim}Type another command, or start it yourself and press Enter.${colors.reset}`;
     }
     this.viewport.writeUpper(`  ${colors.green}✔${colors.reset} Port ${port} is accepting connections.\n`);
-    return this.continueRun(focus.runId, focus.guidance);
+    return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.raiseBudgetTo });
   }
 
   /** The person typed the command that verifies the project: save it and re-check. */
@@ -2032,7 +2034,7 @@ export class InteractiveShell {
     this.viewport.writeUpper(
       `\n  ${colors.green}✔${colors.reset} ${added.length > 0 ? `Saved "${command}" as the check command in .taskforge/config.yaml` : `"${command}" is already the check command`}\n`,
     );
-    return this.continueRun(focus.runId, focus.guidance);
+    return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.raiseBudgetTo });
   }
 
   /** Continues an unfinished run (the REPL's `tf resume`), optionally with what the user just asked for. */
