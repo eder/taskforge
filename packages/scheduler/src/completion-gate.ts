@@ -254,6 +254,8 @@ export interface CompletionGateContext {
   worktreePath?: string;
   verificationPassed?: boolean;
   verificationChecks?: VerificationCheck[];
+  /** The commands that were meant to run (the project's configured ones win over the task's own); defaults to the task's. */
+  expectedVerificationCommands?: string[];
   gitService?: GitService;
 }
 
@@ -395,7 +397,7 @@ export class CompletionGate {
       }
     } else if (policy.requirement === 'verification_evidence_required') {
       const checks = ctx.verificationChecks ?? [];
-      const expectedCommands = task.contract.verification?.commands ?? [];
+      const expectedCommands = ctx.expectedVerificationCommands ?? task.contract.verification?.commands ?? [];
       const expectation = task.contract.verification?.expectation ?? 'pass';
 
       if (checks.length === 0) {
