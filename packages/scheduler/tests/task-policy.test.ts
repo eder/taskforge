@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getDefaultConfig } from '@taskforge/shared';
 import { Task } from '@taskforge/core';
-import { allowedWritersForTask, verificationCommandsForTask } from '../src/task-policy.js';
+import { allowedWritersForTask, commandsForVerificationTask, verificationCommandsForTask } from '../src/task-policy.js';
 
 function task(scope: string[]): Task {
   return {
@@ -66,5 +66,28 @@ describe('task policy', () => {
       'git diff --check',
       'swiftc -parse ios/ZairaCompanion/*.swift',
     ]);
+  });
+});
+
+describe('commandsForVerificationTask', () => {
+  const written = (commands: string[]): Task => {
+    const t = task(['src/**']);
+    t.contract.verification = { commands, expectation: 'pass' } as Task['contract']['verification'];
+    return t;
+  };
+
+  it('runs what the project configured instead of what the planner guessed', () => {
+    const config = getDefaultConfig();
+    config.verification.commands = ['python3 -m venv .venv && .venv/bin/python -m pytest -q'];
+    expect(commandsForVerificationTask(written(['python -m pytest']), config)).toEqual([
+      'python3 -m venv .venv && .venv/bin/python -m pytest -q',
+    ]);
+  });
+
+  it('uses the planner\'s commands when the project configured none', () => {
+    const config = getDefaultConfig();
+    config.verification.commands = [];
+    expect(commandsForVerificationTask(written(['make check']), config)).toEqual(['make check']);
+    expect(commandsForVerificationTask(task(['src/**']), config)).toEqual([]);
   });
 });
