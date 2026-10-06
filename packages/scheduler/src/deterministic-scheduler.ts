@@ -1326,6 +1326,7 @@ export class DeterministicScheduler {
           gitService: this.ctx.gitService,
           verificationPassed: collabCompletionVerification?.passed,
           verificationChecks: collabCompletionVerification?.checks,
+          expectedVerificationCommands: commandsForVerificationTask(task, config),
         });
 
         if (!collabGate.accepted) {
@@ -1965,6 +1966,7 @@ export class DeterministicScheduler {
       gitService: this.ctx.gitService,
       verificationPassed: completionVerification?.passed,
       verificationChecks: completionVerification?.checks,
+      expectedVerificationCommands: commandsForVerificationTask(task, config),
     });
 
     if (!gateResult.accepted) {

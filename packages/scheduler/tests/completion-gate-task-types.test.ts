@@ -452,6 +452,42 @@ describe('CompletionGate - Task-Type Aware Policy Matrix', () => {
       expect(result.evidence.explanation).toContain('exit code 2');
     });
 
+    it('judges a verification task by the commands that were meant to run, not by the planner\'s guess', async () => {
+      const task = createTask('testing', {
+        title: 'Run the tests',
+        objective: 'Run the tests',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        completionMode: 'verification',
+        verification: { commands: ['python -m pytest'], expectation: 'pass' },
+      });
+      const configured = 'python3 -m venv .venv && .venv/bin/python -m pytest -q';
+      const check = {
+        name: 'explicit-1',
+        command: configured,
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+        durationMs: 25,
+        success: true,
+      };
+      const base = {
+        task,
+        agentResult: createAgentResult({ output: 'Tests passed.' }),
+        baseCommit: 'commit-base',
+        resultingCommit: 'commit-base',
+        verificationPassed: true,
+        verificationChecks: [check],
+      };
+
+      const stale = await gate.evaluate(base);
+      expect(stale.accepted).toBe(false);
+      expect(stale.evidence.explanation).toContain('did not execute required command(s): python -m pytest');
+
+      const effective = await gate.evaluate({ ...base, expectedVerificationCommands: [configured] });
+      expect(effective.accepted).toBe(true);
+    });
+
     it('rejects verification-only completion without command evidence', async () => {
       const task = createTask('testing', {
         title: 'Run pnpm lint',
