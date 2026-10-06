@@ -135,6 +135,11 @@ export class IntegrationService {
           worktreePath: wt.path,
           config,
           documentationOnlyChange: isDocumentationOnlyChange(changedFiles),
+          // What the project says verifies it. Without this only Node scripts are discovered,
+          // and a project that configured its own command failed after every task had passed.
+          ...(config.verification.commands && config.verification.commands.length > 0
+            ? { explicitCommands: config.verification.commands }
+            : {}),
         });
         verified = verResult.passed;
         if (!verified) {
