@@ -9,7 +9,7 @@ import {
   getDefaultConfig,
 } from '@taskforge/shared';
 import { type AgentAdapter, AgentRegistry } from '@taskforge/agents';
-import { TaskForgeDatabase } from '@taskforge/persistence';
+import { RunRepository, TaskForgeDatabase } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';
@@ -193,6 +193,29 @@ describe('RunOrchestrator.resume', () => {
     expect(files).toContain('upstream.ts');
     expect(files).toContain('downstream.ts');
 
+    db.close();
+  });
+
+  it('repeats only the final check when every task is integrated but the run did not complete', async () => {
+    const db = new TaskForgeDatabase(':memory:');
+    const agent = new FlakyDownstreamAgent();
+    const orchestrator = build(agent, db);
+    const graph = new TaskGraph();
+    graph.addTask(makeTask('TASK-UPSTREAM', []));
+    const first = await orchestrator.run('Build upstream.', { preplannedGraph: graph });
+    expect(first.status).toBe('completed');
+
+    // What a failed final check leaves behind: tasks integrated, run marked failed.
+    new RunRepository(db).updateStatus(first.runId, 'failed');
+    agent.calls = [];
+
+    expect(await orchestrator.checkResumable(first.runId)).toBeUndefined();
+    const resumed = await orchestrator.resume(first.runId);
+
+    expect(resumed.status).toBe('completed');
+    expect(resumed.tasksCompleted).toBe(1);
+    expect(resumed.integrationBranch).toBeDefined();
+    expect(agent.calls).toEqual([]); // no agent was called
     db.close();
   });
 

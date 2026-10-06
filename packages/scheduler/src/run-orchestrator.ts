@@ -569,10 +569,9 @@ export class RunOrchestrator {
       };
     });
 
+    // Every task integrated but the run did not complete: only the final check of the
+    // integration branch is left, and resuming runs it again (no agent is called).
     const pending = tasks.filter((t) => t.status !== 'integrated');
-    if (pending.length === 0) {
-      throw new Error(`Run ${runId} has no pending tasks; nothing to resume.`);
-    }
 
     return {
       run,
@@ -673,7 +672,9 @@ export class RunOrchestrator {
       );
     }
     options.onProgress?.(
-      `Resuming run ${runId}: ${integratedIds.length} task(s) already integrated${integratedIds.length ? ` (${integratedIds.join(', ')})` : ''}, ${pending.length} to execute (${pending.map((t) => t.id).join(', ')})`,
+      pending.length === 0
+        ? `Resuming run ${runId}: all ${integratedIds.length} task(s) are integrated; only the final check of the run branch is repeated (no agent is called).`
+        : `Resuming run ${runId}: ${integratedIds.length} task(s) already integrated${integratedIds.length ? ` (${integratedIds.join(', ')})` : ''}, ${pending.length} to execute (${pending.map((t) => t.id).join(', ')})`,
     );
     await this.worktreeManager.prune().catch(() => {});
 
