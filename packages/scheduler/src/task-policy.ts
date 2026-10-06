@@ -84,6 +84,17 @@ export function verificationCommandsForTask(
   return commands.size > 0 ? [...commands] : undefined;
 }
 
+/**
+ * The commands a verification task runs. What the project's own configuration
+ * says verifies it (`verification.commands`, `scopedCommands`, saved by the
+ * person or by `tf init`) wins over what the planner model wrote into the task:
+ * the model cannot know that the project needs a virtual environment, and a
+ * guess such as `python -m pytest` fails where the configured command works.
+ */
+export function commandsForVerificationTask(task: Task, config: TaskForgeConfig): string[] {
+  return verificationCommandsForTask(task, config) ?? task.contract.verification?.commands ?? [];
+}
+
 function isWildcardScope(scope: string): boolean {
   const normalized = normalizeScope(scope);
   return normalized === '' || normalized === '*' || normalized === '**' || normalized === '.';

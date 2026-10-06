@@ -47,6 +47,7 @@ import {
   allowedWritersForTask,
   filesOutsideScope,
   verificationCommandsForTask,
+  commandsForVerificationTask,
 } from './task-policy.js';
 import {
   assessTaskSensitivity,
@@ -1304,10 +1305,7 @@ export class DeterministicScheduler {
             worktreePath: verifyPath,
             config,
             taskType: task.type,
-            explicitCommands:
-              task.contract.verification?.commands ??
-              verificationCommandsForTask(task, config) ??
-              [],
+            explicitCommands: commandsForVerificationTask(task, config),
             expectation: task.contract.verification?.expectation ?? 'pass',
           });
         }
@@ -1941,10 +1939,7 @@ export class DeterministicScheduler {
         worktreePath: wt.path,
         config,
         taskType: task.type,
-        explicitCommands:
-          task.contract.verification?.commands ??
-          verificationCommandsForTask(task, config) ??
-          [],
+        explicitCommands: commandsForVerificationTask(task, config),
         expectation: task.contract.verification?.expectation ?? 'pass',
       });
     }
