@@ -421,6 +421,43 @@ describe('SemanticPlanner', () => {
     }
   });
 
+  it('sends the repository map to the model so parallel scopes can use real directories', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401 });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const planner = new SemanticPlanner({ apiKey: 'test-key', model: 'test-model' });
+      const goal: Goal = {
+        id: 'goal-map',
+        description: 'Implement storage and the http layer',
+        repository: '/fake/repo',
+        constraints: [],
+        acceptanceCriteria: [],
+        createdAt: new Date(),
+      };
+      await planner.plan(goal, {
+        languages: ['TypeScript'],
+        frameworks: [],
+        testCommands: [],
+        lintCommands: [],
+        typecheckCommands: [],
+        buildCommands: [],
+        hasECC: false,
+        summary: 'repo',
+        repositoryMap: ['packages/storage/ — 30 files (ts 30)', 'packages/http/ — 20 files (ts 20)'],
+      });
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+      const user = JSON.parse(body.messages.find((m: { role: string }) => m.role === 'user').content);
+      expect(user.repository.repositoryMap).toEqual([
+        'packages/storage/ — 30 files (ts 30)',
+        'packages/http/ — 20 files (ts 20)',
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('Requirement 3: revises existing plan with typed revisions without creating new goal', async () => {
     const planner = new SemanticPlanner();
     const goal: Goal = {
