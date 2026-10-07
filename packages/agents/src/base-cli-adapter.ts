@@ -11,6 +11,7 @@ import {
 import { ProcessRunner } from '@taskforge/execution';
 import { GitService } from '@taskforge/workspace';
 import { AgentAdapter } from './adapter-interface.js';
+import type { StructuredQueryRequest } from './structured-output.js';
 import { AgentQuotaTracker } from './quota-tracker.js';
 import { RealCliAgentSession } from './agent-session.js';
 import { parseAgentStreamEvents } from './stream-event-parser.js';
@@ -92,6 +93,34 @@ export abstract class BaseCliAdapter implements AgentAdapter {
   /** Credential variables this provider's CLI needs; nothing else is forwarded. */
   protected providerEnvAllow(): string[] {
     return [];
+  }
+
+  /**
+   * Runs this CLI once, outside any assignment, and returns what it printed. Same binary, same
+   * environment policy as real work (only this provider's credentials are forwarded). A provider
+   * quota failure is recorded so the agent is not offered again until it resets.
+   */
+  protected async runForStructuredAnswer(args: string[], request: StructuredQueryRequest): Promise<string> {
+    const result = await ProcessRunner.run({
+      command: this.commandBinary,
+      args,
+      cwd: request.cwd,
+      closeStdinOnSpawn: true,
+      env: { ...this.options.env },
+      envPolicy: {
+        inherit: false,
+        allow: buildAgentEnvAllowlist(this.providerEnvAllow(), this.options.passEnv),
+        denyPatterns: ['*PASSWORD*', '*SECRET*'],
+      },
+      abortSignal: request.abortSignal,
+      timeoutMs: request.timeoutMs,
+    });
+    if (result.timedOut) throw new Error(`${this.name} did not answer within ${Math.round(request.timeoutMs / 1000)}s`);
+    if (result.exitCode !== 0 && result.stdout.trim() === '') {
+      AgentQuotaTracker.getInstance().recordFailure(this.id, result.stderr);
+      throw new Error(result.stderr.trim() || `${this.name} exited with code ${result.exitCode}`);
+    }
+    return result.stdout;
   }
 
   get commandBinary(): string {

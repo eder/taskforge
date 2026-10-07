@@ -4,6 +4,11 @@ import {
 } from '@taskforge/shared';
 
 import { BaseCliAdapter, CliAdapterOptions } from './base-cli-adapter.js';
+import {
+  parseClaudeStructuredOutput,
+  type StructuredQueryRequest,
+  type StructuredQueryResult,
+} from './structured-output.js';
 
 export class ClaudeCodeAdapter extends BaseCliAdapter {
   readonly id = 'claude';
@@ -64,5 +69,31 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
       permissionProtocol: 'structured',
       questionProtocol: 'structured',
     };
+  }
+
+  /**
+   * `claude -p` with only the read tools and a turn limit, the answer shape enforced by `--json-schema`.
+   * The success output has not been checked against a signed-in install (see the parser).
+   */
+  async structuredQuery(request: StructuredQueryRequest): Promise<StructuredQueryResult> {
+    const stdout = await this.runForStructuredAnswer(
+      [
+        '-p',
+        request.prompt,
+        '--output-format',
+        'json',
+        '--json-schema',
+        JSON.stringify(request.schema),
+        '--allowedTools',
+        'Read',
+        'Grep',
+        'Glob',
+        '--max-turns',
+        '8',
+        '--no-session-persistence',
+      ],
+      request,
+    );
+    return parseClaudeStructuredOutput(stdout);
   }
 }

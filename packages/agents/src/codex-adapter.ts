@@ -1,9 +1,17 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   AgentCapabilities,
   AgentContext,
 } from '@taskforge/shared';
 
 import { BaseCliAdapter, CliAdapterOptions } from './base-cli-adapter.js';
+import {
+  parseCodexStructuredOutput,
+  type StructuredQueryRequest,
+  type StructuredQueryResult,
+} from './structured-output.js';
 
 export class CodexAdapter extends BaseCliAdapter {
   readonly id = 'codex';
@@ -55,5 +63,33 @@ export class CodexAdapter extends BaseCliAdapter {
       permissionProtocol: 'provider_native',
       questionProtocol: 'unsupported',
     };
+  }
+
+  /** `codex exec` in a read-only sandbox with the answer shape enforced by `--output-schema`. */
+  async structuredQuery(request: StructuredQueryRequest): Promise<StructuredQueryResult> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-structured-'));
+    try {
+      const schemaFile = path.join(dir, 'schema.json');
+      fs.writeFileSync(schemaFile, JSON.stringify(request.schema));
+      const stdout = await this.runForStructuredAnswer(
+        [
+          'exec',
+          '--skip-git-repo-check',
+          '--ephemeral',
+          '-s',
+          'read-only',
+          '--output-schema',
+          schemaFile,
+          '--json',
+          '-C',
+          request.cwd,
+          request.prompt,
+        ],
+        request,
+      );
+      return parseCodexStructuredOutput(stdout);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 }

@@ -1,3 +1,4 @@
+import type { StructuredQueryRequest, StructuredQueryResult } from './structured-output.js';
 import {
   AgentAssignment,
   AgentCapabilities,
@@ -12,6 +13,8 @@ export interface AgentAdapter {
   readonly name: string;
 
   detect(): Promise<boolean>;
+  /** Answer one question with JSON matching a schema, read-only (planning). Only some CLIs support it. */
+  structuredQuery?(request: StructuredQueryRequest): Promise<StructuredQueryResult>;
   capabilities(): Promise<AgentCapabilities>;
   execute(assignment: AgentAssignment, context: AgentContext): Promise<AgentResult>;
   createSession?(assignment: AgentAssignment, context: AgentContext): Promise<AgentSession>;
