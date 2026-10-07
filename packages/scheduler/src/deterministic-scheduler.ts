@@ -356,6 +356,30 @@ export class DeterministicScheduler {
     return available[0]?.id;
   }
 
+  /**
+   * Another agent that can take `task` right now when the one chosen for it is
+   * busy. Without this, independent tasks that all prefer the same agent wait
+   * for it one after another while other healthy agents sit idle, which defeats
+   * running them in parallel. The same limits as the first choice apply: not an
+   * agent that already failed this task, one out of quota, or one the ownership
+   * policy does not allow to write this scope.
+   */
+  private idleAlternativeAgentId(task: Task, busyAgentId: string): string | undefined {
+    const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
+    const quotaTracker = AgentQuotaTracker.getInstance();
+    const allowedWriters = allowedWritersForTask(task, this.ctx.config);
+    return this.ctx.agentRegistry
+      .list()
+      .find(
+        (agent) =>
+          agent.id !== busyAgentId &&
+          !failed.has(agent.id) &&
+          quotaTracker.isAvailable(agent.id) &&
+          (allowedWriters === undefined || allowedWriters.has(agent.id)) &&
+          this.concurrency.canSchedule(agent.id),
+      )?.id;
+  }
+
   private objectiveWithDependencyEvidence(task: Task): string {
     const baseObjective = task.contract.objective || task.description;
     const dependencyEvidence = task.dependencies
@@ -1070,11 +1094,20 @@ export class DeterministicScheduler {
           this.ctx.taskRepo.updateStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
           continue;
         }
-        if (this.concurrency.canSchedule(agentId)) {
-          this.concurrency.acquire(task.id, agentId);
+        // Another task already holds the chosen agent: use an idle one instead of waiting.
+        const slotAgentId = this.concurrency.canSchedule(agentId)
+          ? agentId
+          : this.idleAlternativeAgentId(task, agentId);
+        if (slotAgentId) {
+          if (slotAgentId !== agentId) {
+            this.ctx.onProgress?.(
+              `[${task.id}] ${agentId} is busy; running it on ${slotAgentId} so independent tasks proceed together.`,
+            );
+          }
+          this.concurrency.acquire(task.id, slotAgentId);
 
-          const taskPromise = this.executeTask(task, agentId).finally(() => {
-            this.concurrency.release(task.id, agentId);
+          const taskPromise = this.executeTask(task, slotAgentId).finally(() => {
+            this.concurrency.release(task.id, slotAgentId);
             runningPromises.delete(task.id);
           });
 
