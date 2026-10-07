@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import {
   TaskForgeConfig,
   loadConfig,
+  GIT_WORKFLOW_KINDS,
+  setProjectConfigValue,
   DeliveryError,
   ConversationState,
   generateRunId,
@@ -1255,6 +1257,22 @@ export class InteractiveShell {
       case 'pause_execution': {
         this.isPaused = true;
         return this.operator.formatResponse(intent, {});
+      }
+
+      case 'set_workflow': {
+        const current = this.config.git.workflow;
+        const kinds = GIT_WORKFLOW_KINDS.join(', ');
+        if (!intent.workflow) return `Git workflow: ${colors.bold}${current}${colors.reset}. Change it with /workflow <${kinds.replaceAll(', ', '|')}>.`;
+        const chosen = GIT_WORKFLOW_KINDS.find((kind) => kind === intent.workflow);
+        if (!chosen) return `${colors.red}✖${colors.reset} Unknown workflow "${intent.workflow}". Choose one of: ${kinds}.`;
+        if (!this.inRepo) return `${colors.red}✖${colors.reset} /workflow needs a Git repository.`;
+        try {
+          const { file } = setProjectConfigValue(this.repoRoot, ['git', 'workflow'], chosen);
+          this.config.git.workflow = chosen;
+          return `${colors.green}✔${colors.reset} Git workflow set to ${colors.bold}${chosen}${colors.reset} and saved to ${file}.`;
+        } catch (err) {
+          return `${colors.red}✖ Could not save the workflow:${colors.reset} ${(err as Error).message}`;
+        }
       }
 
       case 'undo_run': {

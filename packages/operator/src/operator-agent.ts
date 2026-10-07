@@ -40,6 +40,7 @@ export type OperatorIntent =
   | { type: 'inspect_runs' }
   | { type: 'apply_run'; runId?: string; confirmed?: boolean }
   | { type: 'undo_run'; runId?: string }
+  | { type: 'set_workflow'; workflow?: string }
   | { type: 'diff_run'; runId?: string }
   | { type: 'create_pr'; runId?: string }
   | { type: 'discard_run'; runId?: string }
@@ -144,6 +145,9 @@ export class OperatorIntentParser {
     }
     if (text === '/undo' || text.startsWith('/undo ')) {
       return { type: 'undo_run', runId: text.split(/\s+/)[1] };
+    }
+    if (text === '/workflow' || text.startsWith('/workflow ')) {
+      return { type: 'set_workflow', workflow: text.split(/\s+/)[1] };
     }
     if (text.startsWith('/diff')) {
       const parts = text.split(/\s+/);

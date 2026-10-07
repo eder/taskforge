@@ -36,6 +36,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   { cmd: '/diff', desc: 'Inspect changes from a completed run' },
   { cmd: '/apply', desc: 'Apply a completed run to its target branch; asks for --yes when it was not fully verified' },
   { cmd: '/undo', desc: 'Undo the last applied run with a revert commit (nothing is rewritten)' },
+  { cmd: '/workflow', desc: 'Show or set the Git workflow (trunk, github-flow, gitflow, current-branch) and save it to .taskforge/config.yaml' },
   { cmd: '/pr', desc: 'Create a pull request for a completed run' },
   { cmd: '/discard', desc: 'Discard delivery while keeping the integration branch' },
   { cmd: '/clean', desc: 'Clean temporary worktrees and branches' },
