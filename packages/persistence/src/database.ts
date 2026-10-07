@@ -30,6 +30,56 @@ export interface DatabaseHealthReport {
   error?: string;
 }
 
+interface Migration {
+  version: number;
+  up(db: TaskForgeDatabase): void;
+}
+
+const MIGRATIONS: Migration[] = [
+  {
+    // Baseline: brings every pre-versioning database to the current shape.
+    version: 1,
+    up(db) {
+      // verification_results.task_id used to be a strict FK; verification of a run has no task.
+      const legacy = db
+        .prepare("SELECT sql FROM sqlite_master WHERE name = 'verification_results'")
+        .get() as { sql?: string } | undefined;
+      if (legacy?.sql?.includes('FOREIGN KEY(task_id) REFERENCES tasks(id)')) {
+        db.exec(`
+          CREATE TABLE verification_results_new (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            task_id TEXT,
+            passed INTEGER NOT NULL,
+            checks_json TEXT,
+            failure_reason TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+          );
+          INSERT INTO verification_results_new SELECT id, run_id, task_id, passed, checks_json, failure_reason, created_at FROM verification_results;
+          DROP TABLE verification_results;
+          ALTER TABLE verification_results_new RENAME TO verification_results;
+        `);
+      }
+
+      const columns: Array<[table: string, column: string, definition: string]> = [
+        ['assignments', 'completion_reason', 'TEXT'],
+        ['cost_tracking', 'assignment_id', 'TEXT'],
+        ['cost_tracking', 'role', 'TEXT'],
+        ['cost_tracking', 'cached_input_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+        ['cost_tracking', 'total_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+        ['cost_tracking', 'usage_source', "TEXT NOT NULL DEFAULT 'provider_reported'"],
+        ['cost_tracking', 'planned_estimated_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+      ];
+      for (const [table, column, definition] of columns) {
+        if (!db.hasColumn(table, column)) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+        }
+      }
+    },
+  },
+];
+
 export class TaskForgeDatabase {
   private db: IDatabaseSync;
   public readonly dbPath: string;
@@ -364,54 +414,49 @@ export class TaskForgeDatabase {
       CREATE INDEX IF NOT EXISTS idx_interaction_resp_req ON interaction_responses(request_id);
     `);
 
-    // Migrate legacy verification_results schema if it enforces strict FOREIGN KEY on task_id
-    try {
-      const tableInfo = this.db
-        .prepare("SELECT sql FROM sqlite_master WHERE name = 'verification_results'")
-        .get() as { sql?: string } | undefined;
-      if (tableInfo?.sql && tableInfo.sql.includes('FOREIGN KEY(task_id) REFERENCES tasks(id)')) {
-        this.db.exec('PRAGMA foreign_keys = OFF;');
-        this.db.exec(`
-          CREATE TABLE verification_results_new (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            task_id TEXT,
-            passed INTEGER NOT NULL,
-            checks_json TEXT,
-            failure_reason TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
-          );
-          INSERT INTO verification_results_new SELECT id, run_id, task_id, passed, checks_json, failure_reason, created_at FROM verification_results;
-          DROP TABLE verification_results;
-          ALTER TABLE verification_results_new RENAME TO verification_results;
-        `);
-        this.db.exec('PRAGMA foreign_keys = ON;');
-      }
-    } catch {
-      // Ignore migration errors on transient databases
-    }
+    this.migrate();
+  }
 
+  /**
+   * Applies pending schema migrations in order, atomically, tracked by
+   * `PRAGMA user_version`. Databases created before versioning report 0 and
+   * run every migration, so each one must be idempotent.
+   *
+   * To change the schema, append a migration; never edit one that has shipped.
+   */
+  private migrate(): void {
+    const latest = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+    // foreign_keys cannot be toggled inside a transaction, and table rebuilds need it off.
+    this.db.exec('PRAGMA foreign_keys = OFF;');
     try {
-      this.db.exec('ALTER TABLE assignments ADD COLUMN completion_reason TEXT;');
-    } catch {
-      // Column may already exist
-    }
-
-    for (const migration of [
-      'ALTER TABLE cost_tracking ADD COLUMN assignment_id TEXT;',
-      'ALTER TABLE cost_tracking ADD COLUMN role TEXT;',
-      'ALTER TABLE cost_tracking ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0;',
-      'ALTER TABLE cost_tracking ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;',
-      "ALTER TABLE cost_tracking ADD COLUMN usage_source TEXT NOT NULL DEFAULT 'provider_reported';",
-      'ALTER TABLE cost_tracking ADD COLUMN planned_estimated_tokens INTEGER NOT NULL DEFAULT 0;',
-    ]) {
+      this.db.exec('BEGIN IMMEDIATE;');
       try {
-        this.db.exec(migration);
-      } catch {
-        // Column may already exist
+        // Read inside the write lock: another process may have migrated meanwhile.
+        const current = Number(this.db.prepare('PRAGMA user_version;').get()?.user_version ?? 0);
+        if (current > latest) {
+          throw new Error(
+            `Database schema version ${current} was created by a newer TaskForge (this build supports up to ${latest}). Upgrade TaskForge instead of opening it with this version.`,
+          );
+        }
+        for (const migration of MIGRATIONS) {
+          if (migration.version > current) migration.up(this);
+        }
+        if (current < latest) this.db.exec(`PRAGMA user_version = ${latest};`);
+        this.db.exec('COMMIT;');
+      } catch (error) {
+        this.db.exec('ROLLBACK;');
+        throw error;
       }
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON;');
     }
+  }
+
+  public hasColumn(table: string, column: string): boolean {
+    return this.db
+      .prepare(`PRAGMA table_info(${table});`)
+      .all()
+      .some((row) => row.name === column);
   }
 
   public exec(sql: string): void {
@@ -426,14 +471,12 @@ export class TaskForgeDatabase {
     const start = performance.now();
     try {
       const integrityRow = this.db.prepare('PRAGMA integrity_check;').get() as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const integrityValue = integrityRow ? Object.values(integrityRow)[0] : undefined;
       const integrityOk = integrityValue === 'ok';
 
       const jmRow = this.db.prepare('PRAGMA journal_mode;').get() as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const journalMode = jmRow ? String(Object.values(jmRow)[0]).toUpperCase() : undefined;
 
       const tablesRow = this.db
@@ -442,13 +485,11 @@ export class TaskForgeDatabase {
       const tables = Number(tablesRow?.cnt ?? 0);
 
       const runsRow = this.db.prepare('SELECT count(*) as cnt FROM runs;').get() as
-        | { cnt?: number }
-        | undefined;
+        { cnt?: number } | undefined;
       const totalRuns = Number(runsRow?.cnt ?? 0);
 
       const tasksRow = this.db.prepare('SELECT count(*) as cnt FROM tasks;').get() as
-        | { cnt?: number }
-        | undefined;
+        { cnt?: number } | undefined;
       const totalTasks = Number(tasksRow?.cnt ?? 0);
 
       const latencyMs = Math.round((performance.now() - start) * 100) / 100;
