@@ -3,6 +3,8 @@ import {
   RunRepository,
   EventRepository,
   CostRepository,
+  ExecutionRepository,
+  ExecutionRecord,
 } from '@taskforge/persistence';
 
 /**
@@ -25,6 +27,25 @@ export interface InsightsReport {
   stopCauses: Array<{ cause: string; label: string; count: number }>;
   tokens: { total: number; averagePerRun?: number; runsWithUsage: number };
   costUsd: { total: number; averagePerRun?: number };
+  /** How each agent did, most executions first. */
+  agents: AgentInsight[];
+  /**
+   * How much the work of different tasks overlapped in time, over runs where at
+   * least two tasks ran: seconds of task work divided by wall-clock seconds
+   * (1 = one task at a time; a bit below 1 means idle gaps between tasks). Agents working together on one task are counted
+   * once, so redundancy is not mistaken for parallel work.
+   */
+  parallelism?: { factor: number; runs: number };
+}
+
+export interface AgentInsight {
+  agentId: string;
+  executions: number;
+  succeeded: number;
+  failed: number;
+  /** Mean duration of the finished executions. */
+  averageSeconds?: number;
+  tokens: number;
 }
 
 const CAUSE_LABELS: Record<string, string> = {
@@ -38,6 +59,28 @@ const CAUSE_LABELS: Record<string, string> = {
   review_rejected: 'an independent reviewer rejected the change',
 };
 
+const seconds = (iso: string): number => new Date(iso).getTime() / 1000;
+
+/** Task-level work and wall time of a run, or undefined when fewer than two tasks ran. */
+function taskOverlap(executions: ExecutionRecord[]): { work: number; wall: number } | undefined {
+  const byTask = new Map<string, { start: number; end: number }>();
+  for (const e of executions) {
+    if (!e.finishedAt) continue;
+    const start = seconds(e.startedAt);
+    const end = seconds(e.finishedAt);
+    const known = byTask.get(e.taskId);
+    byTask.set(e.taskId, {
+      start: Math.min(known?.start ?? start, start),
+      end: Math.max(known?.end ?? end, end),
+    });
+  }
+  if (byTask.size < 2) return undefined;
+  const spans = [...byTask.values()];
+  const wall = Math.max(...spans.map((x) => x.end)) - Math.min(...spans.map((x) => x.start));
+  const work = spans.reduce((total, x) => total + (x.end - x.start), 0);
+  return wall > 0 ? { work, wall } : undefined;
+}
+
 export function computeInsights(
   db: TaskForgeDatabase,
   options: { sinceDays?: number; now?: Date } = {},
@@ -46,8 +89,11 @@ export function computeInsights(
   const cutoff = (options.now ?? new Date()).getTime() - sinceDays * 86_400_000;
   const eventRepo = new EventRepository(db);
   const costRepo = new CostRepository(db);
+  const executionRepo = new ExecutionRepository(db);
 
-  const runs = new RunRepository(db).listAll().filter((r) => new Date(r.createdAt).getTime() >= cutoff);
+  const runs = new RunRepository(db)
+    .listAll()
+    .filter((r) => new Date(r.createdAt).getTime() >= cutoff);
 
   const byStatus: Record<string, number> = {};
   const causes = new Map<string, number>();
@@ -56,6 +102,26 @@ export function computeInsights(
   let totalTokens = 0;
   let totalCost = 0;
   let runsWithUsage = 0;
+  const agents = new Map<string, AgentInsight & { totalSeconds: number; finished: number }>();
+  const agentOf = (agentId: string) => {
+    let entry = agents.get(agentId);
+    if (!entry) {
+      entry = {
+        agentId,
+        executions: 0,
+        succeeded: 0,
+        failed: 0,
+        tokens: 0,
+        totalSeconds: 0,
+        finished: 0,
+      };
+      agents.set(agentId, entry);
+    }
+    return entry;
+  };
+  let overlapWork = 0;
+  let overlapWall = 0;
+  let overlapRuns = 0;
 
   for (const run of runs) {
     byStatus[run.status] = (byStatus[run.status] ?? 0) + 1;
@@ -72,6 +138,24 @@ export function computeInsights(
       else if (e.type === 'DUAL_REVIEW_REJECTED') bump('review_rejected');
     }
 
+    const executions = executionRepo.listByRun(run.id);
+    for (const e of executions) {
+      if (!e.finishedAt) continue;
+      const entry = agentOf(e.agentId);
+      entry.executions++;
+      if (e.status === 'success') entry.succeeded++;
+      else entry.failed++;
+      entry.totalSeconds += seconds(e.finishedAt) - seconds(e.startedAt);
+      entry.finished++;
+    }
+    for (const c of costRepo.listByRun(run.id)) agentOf(c.agentId).tokens += c.totalTokens ?? 0;
+    const overlap = taskOverlap(executions);
+    if (overlap) {
+      overlapWork += overlap.work;
+      overlapWall += overlap.wall;
+      overlapRuns++;
+    }
+
     const cost = costRepo.getTotalCostByRun(run.id);
     if (cost.totalTokens > 0) {
       runsWithUsage++;
@@ -80,7 +164,10 @@ export function computeInsights(
     }
   }
 
-  const ended = ['completed', 'failed', 'cancelled', 'abandoned'].reduce((n, s) => n + (byStatus[s] ?? 0), 0);
+  const ended = ['completed', 'failed', 'cancelled', 'abandoned'].reduce(
+    (n, s) => n + (byStatus[s] ?? 0),
+    0,
+  );
   return {
     sinceDays,
     runs: runs.length,
@@ -100,6 +187,16 @@ export function computeInsights(
       total: totalCost,
       averagePerRun: runsWithUsage > 0 ? totalCost / runsWithUsage : undefined,
     },
+    agents: [...agents.values()]
+      .sort((a, b) => b.executions - a.executions)
+      .map(({ totalSeconds, finished, ...agent }) => ({
+        ...agent,
+        averageSeconds: finished > 0 ? Math.round(totalSeconds / finished) : undefined,
+      })),
+    parallelism:
+      overlapRuns > 0
+        ? { factor: Math.round((overlapWork / overlapWall) * 100) / 100, runs: overlapRuns }
+        : undefined,
   };
 }
 
@@ -108,14 +205,18 @@ export function formatInsights(report: InsightsReport): string[] {
   if (report.runs === 0) {
     return [`No runs in the last ${report.sinceDays} days.`];
   }
-  const lines: string[] = [`Last ${report.sinceDays} days: ${report.runs} run${report.runs === 1 ? '' : 's'}`];
+  const lines: string[] = [
+    `Last ${report.sinceDays} days: ${report.runs} run${report.runs === 1 ? '' : 's'}`,
+  ];
   const status = Object.entries(report.byStatus)
     .sort((a, b) => b[1] - a[1])
     .map(([s, c]) => `${c} ${s}`)
     .join(', ');
   lines.push(`  Outcomes: ${status}`);
   if (report.completionRate !== undefined) {
-    lines.push(`  Finished successfully: ${Math.round(report.completionRate * 100)}% of the runs that ended`);
+    lines.push(
+      `  Finished successfully: ${Math.round(report.completionRate * 100)}% of the runs that ended`,
+    );
   }
   if (report.resumedRuns > 0) lines.push(`  Needed tf resume: ${report.resumedRuns}`);
   if (report.undoneRuns > 0) lines.push(`  Applied, then undone: ${report.undoneRuns}`);
@@ -130,6 +231,20 @@ export function formatInsights(report: InsightsReport): string[] {
   } else {
     lines.push('  Tokens: no usage was reported by the agents in this period.');
   }
-  lines.push('  Computed from this project\'s local history only; nothing is sent anywhere.');
+  if (report.parallelism) {
+    lines.push(
+      `  Parallel work: ${report.parallelism.factor.toFixed(2)}x across ${report.parallelism.runs} multi-task run${report.parallelism.runs === 1 ? '' : 's'} (1.00x = one task at a time)`,
+    );
+  }
+  if (report.agents.length > 0) {
+    lines.push('  By agent:');
+    for (const a of report.agents) {
+      const time = a.averageSeconds !== undefined ? `, ${a.averageSeconds}s on average` : '';
+      lines.push(
+        `    ${a.agentId}: ${a.succeeded}/${a.executions} succeeded${time}, ${n(a.tokens)} tokens`,
+      );
+    }
+  }
+  lines.push("  Computed from this project's local history only; nothing is sent anywhere.");
   return lines;
 }
