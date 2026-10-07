@@ -389,6 +389,8 @@ export interface RepositoryProfile {
   buildCommands: string[];
   hasECC: boolean;
   summary: string;
+  /** Where the code lives (directories with file counts), so plans can use real, non-overlapping scopes. */
+  repositoryMap?: string[];
   /**
    * Repository-authored Markdown instructions discovered from files such as
    * AGENTS.md/CLAUDE.md/GEMINI.md and documents they explicitly reference.

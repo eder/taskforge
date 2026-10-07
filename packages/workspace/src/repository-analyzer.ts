@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { RepositoryProfile } from '@taskforge/shared';
 import { GitService } from './git-service.js';
 import { ProjectInstructionResolver } from './project-instructions.js';
+import { buildRepositoryMap } from './repository-map.js';
 
 export class RepositoryAnalyzer {
   constructor(
@@ -143,6 +144,10 @@ export class RepositoryAnalyzer {
 
     const summary = `Repository at ${this.repoRoot}: ${Array.from(languages).join(', ') || 'unknown language'}${packageManager ? ` using ${packageManager}` : ''}${hasECC ? ' (ECC detected)' : ''}`;
 
+    // Not a repository (or git unavailable): plan without a map rather than fail.
+    const tracked = await this.gitService!.exec(['-c', 'core.quotepath=off', 'ls-files']).catch(() => '');
+    const repositoryMap = tracked.trim() ? buildRepositoryMap(tracked.split('\n').filter(Boolean)) : undefined;
+
     const instructions = new ProjectInstructionResolver(this.repoRoot).resolve(['*']);
 
     return {
@@ -155,6 +160,7 @@ export class RepositoryAnalyzer {
       buildCommands,
       hasECC,
       summary,
+      repositoryMap,
       projectInstructions: instructions.documents,
       instructionWarnings: instructions.warnings,
     };
