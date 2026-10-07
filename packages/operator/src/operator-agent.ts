@@ -37,6 +37,7 @@ export type OperatorIntent =
     }
   | { type: 'deny_interaction'; requestId?: string; reason?: string }
   | { type: 'inspect_pending_interactions' }
+  | { type: 'answer_interaction'; text: string }
   | { type: 'inspect_runs' }
   | { type: 'apply_run'; runId?: string; confirmed?: boolean }
   | { type: 'undo_run'; runId?: string }
@@ -137,6 +138,10 @@ export class OperatorIntentParser {
     }
     if (text === '/clear' || text.startsWith('/clear ')) return { type: 'clear_context' };
     if (text.startsWith('/pending')) return { type: 'inspect_pending_interactions' };
+    // The text may start with a request id; only the shell knows which ids are pending.
+    if (text === '/answer' || text.startsWith('/answer ')) {
+      return { type: 'answer_interaction', text: text.slice('/answer'.length).trim() };
+    }
 
     if (text.startsWith('/apply')) {
       const parts = text.split(/\s+/).slice(1);

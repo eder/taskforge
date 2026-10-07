@@ -1693,6 +1693,26 @@ export class InteractiveShell {
         return CockpitPanels.interactionResolved(target, 'deny', 'once');
       }
 
+      case 'answer_interaction': {
+        const questions = this.interactionGateway
+          .getPendingRequests()
+          .filter((request) => request.type === 'question');
+        if (questions.length === 0) return 'No agent is waiting for an answer. Use /pending to see what is waiting.';
+
+        // "/answer <id> text" targets one question; plain "/answer text" answers the oldest.
+        const [first = '', ...rest] = intent.text.split(/\s+/);
+        const byId = questions.find((request) => request.id === first);
+        const target = byId ?? questions[0];
+        const answer = (byId ? rest.join(' ') : intent.text).trim();
+        if (!answer) return `Usage: /answer ${questions.length > 1 ? '<request-id> ' : ''}<your answer>`;
+        if (!byId && questions.length > 1) {
+          return `${questions.length} agents are waiting. Say which one: /answer <request-id> <your answer> (ids are in /pending).`;
+        }
+
+        this.interactionGateway.resolve(target.id, 'answer', answer, 'once');
+        return CockpitPanels.answerSent(target, answer);
+      }
+
       case 'inspect_pending_interactions': {
         const pending = this.interactionGateway.getPendingRequests();
         return this.operator.formatResponse(intent, { pending });

@@ -27,6 +27,20 @@ export class CockpitPanels {
       ? '  ' + colors.dim + 'Category:' + colors.reset + '  ' + attention.category
       : '';
 
+    if (attention.type === 'question') {
+      return theme.box('QUESTION FROM AGENT', [
+        colors.yellow + colors.bold + '? An agent is waiting for your answer' + colors.reset,
+        '',
+        colors.dim + 'Agent:' + colors.reset + '     ' + colors.bold + state.agentName + colors.reset + ' ' + colors.dim + '(' + state.role + ')' + colors.reset,
+        colors.dim + 'Task:' + colors.reset + '      ' + state.taskId + ' — ' + state.taskTitle,
+        colors.dim + 'Asks:' + colors.reset + '      ' + attention.prompt,
+        '',
+        colors.bold + 'Respond' + colors.reset,
+        '  ' + colors.green + '/answer ' + requestId + ' <your answer>' + colors.reset,
+        '  ' + colors.cyan + '/pending' + colors.reset + '   view everything waiting',
+      ], 72);
+    }
+
     return theme.box('ACTION REQUIRED', [
       colors.yellow + colors.bold + '▲ Human decision needed' + colors.reset,
       '',
@@ -42,6 +56,15 @@ export class CockpitPanels {
       '  ' + colors.red + '/deny ' + requestId + colors.reset + '             deny',
       '  ' + colors.cyan + '/pending' + colors.reset + '                       view context',
     ].filter(Boolean), 72);
+  }
+
+  public static answerSent(request: InteractionRequest, answer: string): string {
+    return theme.box('ANSWER SENT', [
+      colors.green + colors.bold + '✓ The agent has your answer' + colors.reset,
+      colors.dim + 'Agent:' + colors.reset + '     ' + request.agentId,
+      colors.dim + 'Task:' + colors.reset + '      ' + request.taskId,
+      colors.dim + 'Answer:' + colors.reset + '    ' + answer,
+    ], 64);
   }
 
   public static interactionResolved(
