@@ -36,6 +36,25 @@ export interface InsightsReport {
    * once, so redundancy is not mistaken for parallel work.
    */
   parallelism?: { factor: number; runs: number };
+  /**
+   * Where the wall-clock time of finished runs went, over runs that used a real agent. The slices do not
+   * overlap: a moment counts as agent work if any agent was running, else as verification if a check was
+   * running, else as TaskForge's own steps (preflight, routing, setting up worktrees, integrating, waiting).
+   */
+  time?: TimeBreakdown;
+}
+
+export interface TimeBreakdown {
+  runs: number;
+  totalSeconds: number;
+  agentSeconds: number;
+  verificationSeconds: number;
+  /** What is left: everything that was neither an agent working nor a check running. */
+  otherSeconds: number;
+  /** Mean time from the run starting to the first agent starting. */
+  averageSecondsBeforeFirstAgent: number;
+  /** Mean time from the last agent finishing to the run ending (checks, integration, wrap-up). */
+  averageSecondsAfterLastAgent: number;
 }
 
 export interface AgentInsight {
@@ -81,6 +100,101 @@ function taskOverlap(executions: ExecutionRecord[]): { work: number; wall: numbe
   return wall > 0 ? { work, wall } : undefined;
 }
 
+type Interval = [start: number, end: number];
+
+/** Merges overlapping intervals, so parallel work is counted once. */
+function mergeIntervals(intervals: Interval[]): Interval[] {
+  const sorted = intervals.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+  const merged: Interval[] = [];
+  for (const [start, end] of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
+}
+
+const total = (intervals: Interval[]): number => intervals.reduce((n, [a, b]) => n + (b - a), 0);
+
+/** The parts of `intervals` not already inside `covered` (both merged). */
+function subtractIntervals(intervals: Interval[], covered: Interval[]): Interval[] {
+  const result: Interval[] = [];
+  for (const [start, end] of intervals) {
+    let cursor = start;
+    for (const [cs, ce] of covered) {
+      if (ce <= cursor || cs >= end) continue;
+      if (cs > cursor) result.push([cursor, cs]);
+      cursor = Math.max(cursor, ce);
+    }
+    if (cursor < end) result.push([cursor, end]);
+  }
+  return result;
+}
+
+/** Verification spans of a run: each VERIFY_STARTED up to the next VERIFY_COMPLETED of the same task. */
+function verificationIntervals(
+  events: Array<{ type: string; taskId?: string; timestamp: Date }>,
+): Interval[] {
+  const open = new Map<string, number>();
+  const spans: Interval[] = [];
+  for (const e of events) {
+    const key = e.taskId ?? '';
+    if (e.type === 'VERIFY_STARTED') open.set(key, e.timestamp.getTime() / 1000);
+    else if (e.type === 'VERIFY_COMPLETED' && open.has(key)) {
+      spans.push([open.get(key)!, e.timestamp.getTime() / 1000]);
+      open.delete(key);
+    }
+  }
+  return spans;
+}
+
+interface RunTime {
+  totalSeconds: number;
+  agentSeconds: number;
+  verificationSeconds: number;
+  otherSeconds: number;
+  beforeFirst: number;
+  afterLast: number;
+}
+
+/** Time split of one finished run, or undefined when no real agent ran or the run has no end time. */
+function runTime(
+  run: { createdAt: string; completedAt?: string },
+  executions: ExecutionRecord[],
+  events: Array<{ type: string; taskId?: string; timestamp: Date }>,
+): RunTime | undefined {
+  if (!run.completedAt) return undefined;
+  const real = executions.filter((e) => e.finishedAt && e.agentId !== 'fake-agent');
+  if (real.length === 0) return undefined;
+
+  const start = seconds(run.createdAt);
+  const end = seconds(run.completedAt);
+  const clip = (intervals: Interval[]): Interval[] =>
+    intervals
+      .map(([a, b]): Interval => [Math.max(a, start), Math.min(b, end)])
+      .filter(([a, b]) => b > a);
+
+  const agent = mergeIntervals(
+    clip(real.map((e): Interval => [seconds(e.startedAt), seconds(e.finishedAt!)])),
+  );
+  const verification = subtractIntervals(
+    mergeIntervals(clip(verificationIntervals(events))),
+    agent,
+  );
+  if (agent.length === 0) return undefined;
+  const wall = end - start;
+  const agentSeconds = total(agent);
+  const verificationSeconds = total(verification);
+  return {
+    totalSeconds: wall,
+    agentSeconds,
+    verificationSeconds,
+    otherSeconds: Math.max(0, wall - agentSeconds - verificationSeconds),
+    beforeFirst: Math.max(0, agent[0][0] - start),
+    afterLast: Math.max(0, end - agent[agent.length - 1][1]),
+  };
+}
+
 export function computeInsights(
   db: TaskForgeDatabase,
   options: { sinceDays?: number; now?: Date } = {},
@@ -119,6 +233,7 @@ export function computeInsights(
     }
     return entry;
   };
+  const timed: RunTime[] = [];
   let overlapWork = 0;
   let overlapWall = 0;
   let overlapRuns = 0;
@@ -149,6 +264,8 @@ export function computeInsights(
       entry.finished++;
     }
     for (const c of costRepo.listByRun(run.id)) agentOf(c.agentId).tokens += c.totalTokens ?? 0;
+    const spent = runTime(run, executions, events);
+    if (spent) timed.push(spent);
     const overlap = taskOverlap(executions);
     if (overlap) {
       overlapWork += overlap.work;
@@ -193,6 +310,19 @@ export function computeInsights(
         ...agent,
         averageSeconds: finished > 0 ? Math.round(totalSeconds / finished) : undefined,
       })),
+    time:
+      timed.length > 0
+        ? {
+            runs: timed.length,
+            totalSeconds: timed.reduce((n, t) => n + t.totalSeconds, 0),
+            agentSeconds: timed.reduce((n, t) => n + t.agentSeconds, 0),
+            verificationSeconds: timed.reduce((n, t) => n + t.verificationSeconds, 0),
+            otherSeconds: timed.reduce((n, t) => n + t.otherSeconds, 0),
+            averageSecondsBeforeFirstAgent:
+              timed.reduce((n, t) => n + t.beforeFirst, 0) / timed.length,
+            averageSecondsAfterLastAgent: timed.reduce((n, t) => n + t.afterLast, 0) / timed.length,
+          }
+        : undefined,
     parallelism:
       overlapRuns > 0
         ? { factor: Math.round((overlapWork / overlapWall) * 100) / 100, runs: overlapRuns }
@@ -234,6 +364,16 @@ export function formatInsights(report: InsightsReport): string[] {
   if (report.parallelism) {
     lines.push(
       `  Parallel work: ${report.parallelism.factor.toFixed(2)}x across ${report.parallelism.runs} multi-task run${report.parallelism.runs === 1 ? '' : 's'} (1.00x = one task at a time)`,
+    );
+  }
+  if (report.time && report.time.totalSeconds > 0) {
+    const t = report.time;
+    const share = (part: number) => `${Math.round((part / t.totalSeconds) * 100)}%`;
+    lines.push(
+      `  Where the time went (${t.runs} run${t.runs === 1 ? '' : 's'} with a real agent): agents working ${share(t.agentSeconds)}, checks ${share(t.verificationSeconds)}, TaskForge's own steps ${share(t.otherSeconds)}`,
+    );
+    lines.push(
+      `    before the first agent starts: ${Math.round(t.averageSecondsBeforeFirstAgent)}s on average; after the last one finishes: ${Math.round(t.averageSecondsAfterLastAgent)}s (planning happens before the run and is not included)`,
     );
   }
   if (report.agents.length > 0) {
