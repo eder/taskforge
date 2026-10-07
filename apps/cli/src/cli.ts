@@ -61,6 +61,7 @@ import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@t
 import { TelemetryCollector, computeInsights, formatInsights } from '@taskforge/telemetry';
 import { runSetup } from './setup.js';
 import { runSelftest } from './selftest.js';
+import { isRunningInContainer } from './isolation.js';
 
 /**
  * Headless commands must survive Ctrl-C gracefully: the first SIGINT/SIGTERM
@@ -292,6 +293,17 @@ export function createCli(): Command {
       console.log(
         `  ${colors.bold}Node.js Runtime:${colors.reset}    ${nodeVer} (>= 22.0.0 required) - ${colors.green}✔ OK${colors.reset}`,
       );
+
+      // Where the agents run decides what they can read; say so before anything else.
+      if (isRunningInContainer()) {
+        console.log(
+          `  ${colors.bold}Isolation:${colors.reset}         container - agents do not see your host HOME - ${colors.green}✔ OK${colors.reset}`,
+        );
+      } else {
+        console.log(
+          `  ${colors.bold}Isolation:${colors.reset}         ${colors.yellow}none${colors.reset} - agents run as your user and can read ~/.ssh, ~/.aws, ... (use scripts/tf-container.sh; see SECURITY.md)`,
+        );
+      }
 
       // 2. Git check
       const repoRoot = process.cwd();

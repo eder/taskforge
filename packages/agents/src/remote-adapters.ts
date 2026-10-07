@@ -12,6 +12,11 @@ export interface DockerWorkerOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Experimental stub: it mounts the worktree and records a receipt, but does NOT
+ * run a coding agent inside the container. Do not rely on it for isolation; to
+ * isolate real agents run the whole TaskForge in a container (see Dockerfile).
+ */
 export class DockerWorkerAdapter implements AgentAdapter {
   readonly id: string;
   readonly name: string;
