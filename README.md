@@ -80,7 +80,7 @@ TaskForge proposes a plan before writable execution. You can approve it, revise 
 - Tested on macOS and in CI on Linux (Node 22 and 24). Windows is not supported or tested.
 - Deciding whether a request is read-only, and whether it refers to an earlier run, uses your planner model and works in any language. Without a model (no `OPENAI_API_KEY`) only English and Portuguese phrases are recognised for read-only requests, and only very short messages count as follow-ups.
 - Conversational commands ("yes", "no", "pause", "who is available?") are keyword-based and understood in English and Portuguese only. Anything else is treated as a new request for the planner, so in other languages use the slash commands (`/approve`, `/reject`, `/pause`, `/apply`, …). A bare constraint such as "do not change .env files" typed while nothing is running is still recorded as a constraint rather than as a request.
-- `tf doctor` reports an agent as **ready** when its CLI is installed; it does not prove you are signed in. If an agent fails to authenticate, sign in with that CLI (for example run `claude` once) and retry.
+- `tf doctor` (and the agent list at startup) asks Claude Code (`claude auth status`) and Codex (`codex login status`) whether they are signed in, with no model call, and shows a signed-out agent as not ready with the command to sign in. Antigravity has no status command, so it is reported as installed only, and a quota that has not failed yet cannot be known without a real call: quota is shown from failures TaskForge has already seen.
 - Verification only helps if the project has check commands. `tf setup` / `tf init --check` configure and test them; a change that passed with no checks run is reported as **not verified**.
 
 ## What happens after a prompt

@@ -7,6 +7,7 @@ import {
 } from '@taskforge/shared';
 
 import { BaseCliAdapter, CliAdapterOptions } from './base-cli-adapter.js';
+import { parseCodexLoginStatus, type AuthStatus } from './auth-status.js';
 import {
   parseCodexStructuredOutput,
   type StructuredQueryRequest,
@@ -63,6 +64,15 @@ export class CodexAdapter extends BaseCliAdapter {
       permissionProtocol: 'provider_native',
       questionProtocol: 'unsupported',
     };
+  }
+
+  async authStatus(): Promise<AuthStatus> {
+    try {
+      const { stdout, exitCode } = await this.runQuickCommand(['login', 'status']);
+      return parseCodexLoginStatus(stdout, exitCode);
+    } catch {
+      return { state: 'unknown' };
+    }
   }
 
   /** `codex exec` in a read-only sandbox with the answer shape enforced by `--output-schema`. */
