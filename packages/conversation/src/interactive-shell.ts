@@ -41,6 +41,7 @@ import {
   AgentDetector,
   AgentActivityTracker,
   AgentQuotaTracker,
+  createAgentModelCaller,
 } from '@taskforge/agents';
 import { OperatorAgent } from '@taskforge/operator';
 import {
@@ -158,6 +159,9 @@ export interface ShellOptions {
   freshSession?: boolean;
 }
 
+/** An agent reading the repository to plan can take a minute or more (measured: 25-60 s with Codex). */
+const AGENT_PLANNING_TIMEOUT_MS = 180_000;
+
 export class InteractiveShell {
   private repoRoot: string;
   private config: TaskForgeConfig;
@@ -250,6 +254,12 @@ export class InteractiveShell {
       model: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o',
       timeoutMs: (this.config.router.timeoutSeconds ?? 60) * 1000,
       maxTasks: this.config.planner?.maxTasks,
+      agentPlanning: this.config.planner?.agentPlanning,
+      // Used only when there is no OpenAI key. Planning by an agent is slower than a model call.
+      agentCaller: createAgentModelCaller(this.agentRegistry, {
+        cwd: this.repoRoot,
+        timeoutMs: AGENT_PLANNING_TIMEOUT_MS,
+      }),
     });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);

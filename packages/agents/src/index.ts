@@ -7,3 +7,5 @@ export * from './agent-registry.js';
 export * from './quota-tracker.js';
 export * from './activity-tracker.js';
 export * from './stream-event-parser.js';
+export * from './structured-output.js';
+export * from './agent-model-caller.js';

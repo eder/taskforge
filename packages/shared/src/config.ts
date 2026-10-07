@@ -66,8 +66,14 @@ export const TaskForgeConfigSchema = z.object({
       agent: z.string().default('claude'),
       /** The planner is asked for at most this many tasks; tests and docs belong inside the task that changes the code. */
       maxTasks: z.number().int().positive().default(6),
+      /**
+       * With no OpenAI key, plan with the user's own coding agent (read-only). `auto` skips it for
+       * small goals, because it costs tens of thousands of tokens per plan; `never` always uses the
+       * built-in plan.
+       */
+      agentPlanning: z.enum(['auto', 'always', 'never']).default('auto'),
     })
-    .default({ agent: 'claude', maxTasks: 6 }),
+    .default({ agent: 'claude', maxTasks: 6, agentPlanning: 'auto' }),
   router: z
     .object({
       provider: z.enum(['openai', 'static', 'adaptive']).default('openai'),

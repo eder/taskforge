@@ -4,6 +4,7 @@ import {
   SemanticPlanner,
   TaskGraphValidator,
   RawPlanOutput,
+  isSmallGoal,
 } from '../src/index.js';
 
 describe('TaskGraphValidator', () => {
@@ -615,5 +616,94 @@ describe('SemanticPlanner', () => {
       promptVersion: 'v1.0',
       schemaVersion: 'v1.0',
     });
+  });
+});
+
+describe('planning with the user\'s own agent when there is no OpenAI key', () => {
+  const plan: RawPlanOutput = {
+    summary: 'two parts',
+    tasks: [
+      {
+        taskId: 'T1',
+        title: 'Change storage',
+        description: 'Change storage',
+        type: 'implementation',
+        dependencies: [],
+        objective: 'Change storage',
+        allowedScope: ['packages/storage/'],
+        forbiddenChanges: [],
+        acceptanceCriteria: ['storage changed'],
+      },
+    ],
+  };
+  const goalOf = (description: string): Goal => ({
+    id: 'goal-agent',
+    description,
+    repository: '/fake/repo',
+    constraints: [],
+    acceptanceCriteria: [],
+    createdAt: new Date(),
+  });
+  const bigGoal = 'Log SQLite queries slower than 200 ms and show how many there were in the insights command, with tests';
+
+  it('classifies small goals: one line, short, at most one extra part', () => {
+    expect(isSmallGoal('Fix typos across the docs folder and add a CHANGELOG entry')).toBe(true);
+    expect(isSmallGoal('Rename the helper')).toBe(true);
+    expect(isSmallGoal(bigGoal)).toBe(false);
+    expect(isSmallGoal('Fix a, b, and c')).toBe(false);
+    expect(isSmallGoal('first line\nsecond line')).toBe(false);
+  });
+
+  it('uses the agent for a goal that is not small, and says so in the plan\'s provenance', async () => {
+    const agentCaller = vi.fn().mockResolvedValue(plan);
+    const planner = new SemanticPlanner({ apiKey: undefined, agentCaller });
+
+    const graph = await planner.plan(goalOf(bigGoal));
+
+    expect(agentCaller).toHaveBeenCalledTimes(1);
+    expect(graph.metadata?.planner).toMatchObject({ source: 'semantic_model', provider: 'agent' });
+    expect(graph.getAllTasks()[0].contract.allowedScope).toEqual(['packages/storage/']);
+  });
+
+  it('keeps a small goal on the built-in plan unless told to always use the agent', async () => {
+    const small = 'Fix typos in the docs';
+    const agentCaller = vi.fn().mockResolvedValue(plan);
+
+    await new SemanticPlanner({ apiKey: undefined, agentCaller }).plan(goalOf(small));
+    expect(agentCaller).not.toHaveBeenCalled();
+
+    await new SemanticPlanner({ apiKey: undefined, agentCaller, agentPlanning: 'always' }).plan(goalOf(small));
+    expect(agentCaller).toHaveBeenCalledTimes(1);
+  });
+
+  it('never uses the agent when planning by agent is turned off', async () => {
+    const agentCaller = vi.fn().mockResolvedValue(plan);
+    const graph = await new SemanticPlanner({ apiKey: undefined, agentCaller, agentPlanning: 'never' }).plan(
+      goalOf(bigGoal),
+    );
+    expect(agentCaller).not.toHaveBeenCalled();
+    expect(graph.metadata?.planner?.source).not.toBe('semantic_model');
+  });
+
+  it('leaves the OpenAI path alone when there is a key', async () => {
+    const agentCaller = vi.fn().mockResolvedValue(plan);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401 });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await new SemanticPlanner({ apiKey: 'key', model: 'm', agentCaller }).plan(goalOf(bigGoal));
+      expect(fetchMock).toHaveBeenCalled();
+      expect(agentCaller).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('falls back to the built-in plan, with the reason, when the agent fails or returns junk', async () => {
+    for (const agentCaller of [vi.fn().mockRejectedValue(new Error('codex did not answer')), vi.fn().mockResolvedValue({ nope: true })]) {
+      const graph = await new SemanticPlanner({ apiKey: undefined, agentCaller }).plan(goalOf(bigGoal));
+      expect(graph.metadata?.planner?.source).not.toBe('semantic_model');
+      expect(graph.metadata?.planner?.fallbackReason).toBe('model_unresponsive_or_invalid');
+      expect(graph.getAllTasks().length).toBeGreaterThan(0);
+    }
   });
 });
