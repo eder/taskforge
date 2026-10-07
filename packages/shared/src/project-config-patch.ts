@@ -37,3 +37,25 @@ export function addToProjectConfigList(
   fs.writeFileSync(file, doc.toString());
   return { file, added };
 }
+
+/**
+ * Sets one scalar in the project's `.taskforge/config.yaml`, keeping the rest of
+ * the file (comments included) as it is. Written to a temporary file and
+ * renamed, so an interrupted write cannot leave a truncated config behind.
+ */
+export function setProjectConfigValue(
+  repoRoot: string,
+  keyPath: string[],
+  value: string | number | boolean,
+): { file: string } {
+  const file = path.join(repoRoot, CONFIG_PATH);
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const doc: Document = text.trim() ? parseDocument(text) : new Document({});
+  doc.setIn(keyPath, value);
+
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, doc.toString());
+  fs.renameSync(temp, file);
+  return { file };
+}

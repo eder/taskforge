@@ -5,6 +5,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { ConfigurationError } from './errors.js';
 
+/** Single source of truth for `git.workflow`; also used to validate `/workflow`. */
+export const GIT_WORKFLOW_KINDS = ['trunk', 'github-flow', 'gitflow', 'current-branch'] as const;
+
 export const AgentConfigSchema = z.object({
   enabled: z.boolean().default(true),
   maxParallel: z.number().int().positive().default(1),
@@ -330,7 +333,7 @@ export const TaskForgeConfigSchema = z.object({
     }),
   git: z
     .object({
-      workflow: z.enum(['trunk', 'github-flow', 'gitflow', 'current-branch']).default('trunk'),
+      workflow: z.enum(GIT_WORKFLOW_KINDS).default('trunk'),
       targetBranch: z.string().optional(),
       branches: z
         .object({

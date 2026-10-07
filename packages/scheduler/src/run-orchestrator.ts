@@ -1005,7 +1005,7 @@ export class RunOrchestrator {
           );
           if (suggestion) {
             options.onProgress?.(
-              `TaskForge detected ${suggestion.reason} — this looks like GitFlow. Set git.workflow: ${suggestion.suggested} in .taskforge/config.yaml to enable it.`,
+              `TaskForge detected ${suggestion.reason} — this looks like GitFlow. Run /workflow ${suggestion.suggested} to enable it (saved to .taskforge/config.yaml).`,
             );
           }
         }
