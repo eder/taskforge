@@ -90,7 +90,7 @@ sqlite3 <db> "SELECT run_id,
 # Plans where independent tasks were forced to run in turn (their scopes may overlap)
 sqlite3 <db> "SELECT run_id, payload_json FROM events WHERE type='PLAN_PARALLELISM_LIMITED';"
 
-tf insights --since 7        # completion rate, what stopped work, tokens and cost per run
+tf insights --since 7        # completion rate, what stopped work, tokens and cost, how each agent did, and parallel work (x times)
 ```
 
 How to read it:
