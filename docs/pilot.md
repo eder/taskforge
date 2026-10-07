@@ -71,6 +71,37 @@ Pass criteria: no `TASKFORGE_OPENAI_API_KEY`, `OPENAI_API_KEY`, `GITHUB_TOKEN` o
 
 Enable `verification.dualReview` with a sensitive scope and run a task in it. Pass criteria: a *different* agent reviews, a missing verdict blocks integration, and `/inspect` lists the review assignment.
 
+## 9. Measure parallelism, time and tokens
+
+TaskForge exists to get several agents working at once, cheaper and faster than one agent working alone. Steps 1-8 check that it is safe; this step checks that it pays off. Run it on 3 to 5 real tasks that touch more than one area of the project (for example storage + HTTP layer), and once with `execution.profile: economy` (the default). Replace `<db>` with `.taskforge/taskforge.db` (the `execution.databasePath` of the project).
+
+```bash
+# Tokens the agents used, per run
+sqlite3 <db> "SELECT run_id, sum(total_tokens) AS tokens FROM cost_tracking GROUP BY run_id ORDER BY rowid DESC LIMIT 10;"
+
+# Parallelism achieved: agent-seconds divided by wall-clock seconds (1.0 = no overlap)
+sqlite3 <db> "SELECT run_id,
+  round(sum((julianday(finished_at)-julianday(started_at))*86400),1) AS agent_s,
+  round((julianday(max(finished_at))-julianday(min(started_at)))*86400,1) AS wall_s,
+  round(sum((julianday(finished_at)-julianday(started_at))*86400) /
+        ((julianday(max(finished_at))-julianday(min(started_at)))*86400),2) AS parallelism
+  FROM executions WHERE finished_at IS NOT NULL GROUP BY run_id ORDER BY max(finished_at) DESC LIMIT 10;"
+
+# Plans where independent tasks were forced to run in turn (their scopes may overlap)
+sqlite3 <db> "SELECT run_id, payload_json FROM events WHERE type='PLAN_PARALLELISM_LIMITED';"
+
+tf insights --since 7        # completion rate, what stopped work, tokens and cost per run
+```
+
+How to read it:
+
+- **parallelism** well above 1.0 on a multi-area task means agents really overlapped; around 1.0 on such a task means the plan was serialized or the task was not splittable.
+- A `PLAN_PARALLELISM_LIMITED` event on a task you expected to split is the thing to look at: open `tf inspect <run>` and compare the tasks' `allowedScope` with the project's directories.
+- Compare `tokens` with the plan's *Estimated usage* line. A large, repeated gap means the estimate (and the cap) cannot be trusted yet.
+- To judge the benefit of parallel work, run one of the same tasks as a single-agent task and compare `wall_s` and `tokens`.
+
+Record the numbers in the table below. They are the evidence for the parallelism and cost claims, not the test count.
+
 ## Results
 
 | Step | Agent(s) | Pass? | Notes / run id |
@@ -83,5 +114,11 @@ Enable `verification.dualReview` with a sensitive scope and run a task in it. Pa
 | 6 Cleanup | | | |
 | 7 Credentials | | | |
 | 8 Dual review | | | |
+
+Measurements (step 9):
+
+| Task | Areas touched | Tokens | Wall s | Parallelism | Serialized? | Single-agent tokens / wall s |
+| --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | |
 
 A release candidate is ready for wider use when steps 1–7 pass with at least two different agents and no step produced an unreviewed change on your base branch.
