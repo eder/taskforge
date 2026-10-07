@@ -95,6 +95,26 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     return [];
   }
 
+  /** Runs a quick, free subcommand of this CLI (a status check) under the same environment policy as real work. */
+  protected async runQuickCommand(
+    args: string[],
+    timeoutMs = 10_000,
+  ): Promise<{ stdout: string; exitCode: number }> {
+    const result = await ProcessRunner.run({
+      command: this.commandBinary,
+      args,
+      closeStdinOnSpawn: true,
+      env: { ...this.options.env },
+      envPolicy: {
+        inherit: false,
+        allow: buildAgentEnvAllowlist(this.providerEnvAllow(), this.options.passEnv),
+        denyPatterns: ['*PASSWORD*', '*SECRET*'],
+      },
+      timeoutMs,
+    });
+    return { stdout: result.stdout, exitCode: result.exitCode };
+  }
+
   /**
    * Runs this CLI once, outside any assignment, and returns what it printed. Same binary, same
    * environment policy as real work (only this provider's credentials are forwarded). A provider

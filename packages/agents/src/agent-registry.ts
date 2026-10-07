@@ -10,6 +10,7 @@ import {
   CliAdapterOptions,
 } from './real-adapters.js';
 import { AgentQuotaTracker, AgentQuotaStatus } from './quota-tracker.js';
+import type { AuthStatus } from './auth-status.js';
 
 export interface AgentDetectionReport {
   id: string;
@@ -18,14 +19,46 @@ export interface AgentDetectionReport {
   quotaStatus?: AgentQuotaStatus;
   quotaReason?: string;
   resetAt?: Date;
+  /** What the CLI itself says about being signed in (absent when it cannot say). */
+  auth?: AuthStatus;
+}
+
+/** Status commands start a process each; the banner, doctor and every run all ask, so remember briefly. */
+const AUTH_CACHE_TTL_MS = 60_000;
+const authCache = new Map<string, { at: number; status: AuthStatus }>();
+
+async function authStatusOf(adapter: AgentAdapter): Promise<AuthStatus | undefined> {
+  if (typeof adapter.authStatus !== 'function') return undefined;
+  const cached = authCache.get(adapter.id);
+  if (cached && Date.now() - cached.at < AUTH_CACHE_TTL_MS) return cached.status;
+  const status = await adapter.authStatus();
+  authCache.set(adapter.id, { at: Date.now(), status });
+  return status;
 }
 
 export class AgentDetector {
+  /** For tests: forget remembered sign-in checks. */
+  public static resetAuthCache(): void {
+    authCache.clear();
+  }
+
   public static async detect(adapters: AgentAdapter[]): Promise<AgentDetectionReport[]> {
     const results = await Promise.all(
       adapters.map(async (adapter) => {
         const installed = await adapter.detect();
         const quotaInfo = AgentQuotaTracker.getInstance().getQuotaStatus(adapter.id);
+        const auth = installed ? await authStatusOf(adapter) : undefined;
+        // A CLI that says it is signed out will fail every task; report it as such rather than "ready".
+        if (installed && quotaInfo.status === 'ready' && auth?.state === 'signed_out') {
+          return {
+            id: adapter.id,
+            name: adapter.name,
+            ready: false,
+            quotaStatus: 'auth_failed' as AgentQuotaStatus,
+            quotaReason: auth.signInCommand ? `not signed in; run "${auth.signInCommand}"` : 'not signed in',
+            auth,
+          };
+        }
         const ready = installed && quotaInfo.status === 'ready';
         return {
           id: adapter.id,
@@ -34,6 +67,7 @@ export class AgentDetector {
           quotaStatus: installed ? quotaInfo.status : 'not_installed',
           quotaReason: quotaInfo.reason,
           resetAt: quotaInfo.resetAt,
+          auth,
         };
       }),
     );

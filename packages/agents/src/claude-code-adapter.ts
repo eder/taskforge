@@ -4,6 +4,7 @@ import {
 } from '@taskforge/shared';
 
 import { BaseCliAdapter, CliAdapterOptions } from './base-cli-adapter.js';
+import { parseClaudeAuthStatus, type AuthStatus } from './auth-status.js';
 import {
   parseClaudeStructuredOutput,
   type StructuredQueryRequest,
@@ -69,6 +70,15 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
       permissionProtocol: 'structured',
       questionProtocol: 'structured',
     };
+  }
+
+  async authStatus(): Promise<AuthStatus> {
+    try {
+      const { stdout } = await this.runQuickCommand(['auth', 'status', '--json']);
+      return parseClaudeAuthStatus(stdout);
+    } catch {
+      return { state: 'unknown' };
+    }
   }
 
   /**

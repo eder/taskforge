@@ -1,4 +1,5 @@
 import type { StructuredQueryRequest, StructuredQueryResult } from './structured-output.js';
+import type { AuthStatus } from './auth-status.js';
 import {
   AgentAssignment,
   AgentCapabilities,
@@ -13,6 +14,8 @@ export interface AgentAdapter {
   readonly name: string;
 
   detect(): Promise<boolean>;
+  /** Whether the CLI is signed in, from its own status command; free, no model call. Absent = unknown. */
+  authStatus?(): Promise<AuthStatus>;
   /** Answer one question with JSON matching a schema, read-only (planning). Only some CLIs support it. */
   structuredQuery?(request: StructuredQueryRequest): Promise<StructuredQueryResult>;
   capabilities(): Promise<AgentCapabilities>;

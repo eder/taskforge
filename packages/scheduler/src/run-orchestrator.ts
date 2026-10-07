@@ -14,6 +14,7 @@ import {
   ExecutionIntentDecision,
   getGlobalStateDatabasePath,
   AgentStreamBus,
+  AgentUnavailableError,
 } from '@taskforge/shared';
 import {
   TaskForgeDatabase,
@@ -732,6 +733,19 @@ export class RunOrchestrator {
     // 5. Check Agent Availability / Fallback
     const detected = await AgentDetector.detect(this.agentRegistry.list());
     const hasReadyAgents = detected.some((d) => d.ready);
+
+    // Agents are installed but none can work (signed out, out of quota): stopping is the truth.
+    // The deterministic FakeAgent below is for "no harness installed" and for tests; letting it run
+    // here would report fake work as if a real agent had done it.
+    const installedButUnusable = detected.filter((d) => d.quotaStatus !== 'not_installed' && !d.ready);
+    if (!hasReadyAgents && !options.fakeFallback && installedButUnusable.length > 0) {
+      throw new AgentUnavailableError(
+        `No agent can work right now: ${installedButUnusable
+          .map((d) => `${d.name} (${d.quotaReason ?? d.quotaStatus ?? 'not ready'})`)
+          .join('; ')}. Fix that and retry, or use \`tf doctor\` to see the state of each agent.`,
+        { agents: installedButUnusable.map((d) => d.id) },
+      );
+    }
 
     if (!hasReadyAgents || options.fakeFallback) {
       if (options.fakeFallback) {
