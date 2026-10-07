@@ -344,6 +344,14 @@ or deny it:
 /deny <request-id>
 ```
 
+When the agent is asking a question (the panel is titled **QUESTION FROM AGENT**), give the answer itself. `/approve` and `/deny` only send yes or no:
+
+```text
+/answer <request-id> <your answer>
+```
+
+With a single question waiting the id can be left out. With several, TaskForge asks which one instead of guessing.
+
 Do not treat provider exit success as proof that the engineering task finished. TaskForge separately evaluates completion evidence and verification.
 
 ## 8. What happens when a task fails
