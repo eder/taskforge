@@ -28,6 +28,22 @@ function task(scope: string[]): Task {
 }
 
 describe('task policy', () => {
+  it('treats a repository-wide rule written as ** like *', () => {
+    const config = getDefaultConfig();
+    config.ownership.rules = [{ scope: '**', writers: ['codex'] }];
+
+    expect([...allowedWritersForTask(task(['src/**']), config)!]).toEqual(['codex']);
+    expect([...allowedWritersForTask(task(['src/a.ts']), config)!]).toEqual(['codex']);
+  });
+
+  it('does not let a narrower rule govern a task whose scope is ** (the whole repository)', () => {
+    const config = getDefaultConfig();
+    config.ownership.rules = [{ scope: 'ios/**', writers: ['codex'] }];
+
+    expect(allowedWritersForTask(task(['**']), config)).toBeUndefined();
+  });
+
+
   it('restricts writers using the most-specific matching scope', () => {
     const config = getDefaultConfig();
     config.ownership.rules = [

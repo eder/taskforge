@@ -2,7 +2,9 @@ import { TaskForgeConfig } from '@taskforge/shared';
 import { Task } from '@taskforge/core';
 
 function normalizeScope(scope: string): string {
-  return scope.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  const normalized = scope.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  // `**` and `*` both mean the whole repository everywhere else (plan-parallelism treats them alike).
+  return normalized === '**' ? '*' : normalized;
 }
 
 export function ruleMatchesScope(ruleScope: string, taskScope: string): boolean {
