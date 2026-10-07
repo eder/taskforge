@@ -95,6 +95,7 @@ tf insights --since 7        # completion rate, what stopped work, tokens and co
 
 How to read it:
 
+- `tf insights` also prints **where the time went** (agents / checks / TaskForge's own steps, and the wait before the first agent): that is the overhead TaskForge adds on top of the agents' own time.
 - **parallelism** well above 1.0 on a multi-area task means agents really overlapped; around 1.0 on such a task means the plan was serialized or the task was not splittable.
 - A `PLAN_PARALLELISM_LIMITED` event on a task you expected to split is the thing to look at: open `tf inspect <run>` and compare the tasks' `allowedScope` with the project's directories.
 - Compare `tokens` with the plan's *Estimated usage* line. A large, repeated gap means the estimate (and the cap) cannot be trusted yet.

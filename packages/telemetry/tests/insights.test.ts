@@ -207,4 +207,114 @@ describe('computeInsights', () => {
       db.close();
     });
   });
+
+  describe('where the time went', () => {
+    const T0 = Date.parse('2026-01-01T10:00:00Z');
+    const at = (seconds: number) => new Date(T0 + seconds * 1000);
+
+    /** A finished run from second 0 to `end`, with agents, checks and events placed on a timeline. */
+    function timeline(
+      end: number,
+      agents: Array<[task: string, agent: string, start: number, finish: number]>,
+      checks: Array<[task: string, start: number, finish: number]> = [],
+    ) {
+      const { db, addRun } = setup();
+      addRun('run-t', 'completed');
+      db.prepare('UPDATE runs SET created_at = ?, completed_at = ? WHERE id = ?').run(
+        at(0).toISOString(),
+        at(end).toISOString(),
+        'run-t',
+      );
+      const now = new Date().toISOString();
+      const events = new EventRepository(db);
+      agents.forEach(([task, agent, start, finish], n) => {
+        if (!db.prepare('SELECT 1 FROM tasks WHERE id = ?').get(task)) {
+          db.prepare(
+            'INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
+          ).run(task, 'run-t', 't', 't', 'implementation', 'integrated', now, now);
+        }
+        db.prepare(
+          'INSERT INTO assignments (id, task_id, run_id, agent_id, role, objective, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(`as-${n}`, task, 'run-t', agent, 'implementer', 'o', 'completed', now, now);
+        db.prepare(
+          'INSERT INTO executions (id, run_id, task_id, assignment_id, agent_id, started_at, finished_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(
+          `ex-${n}`,
+          'run-t',
+          task,
+          `as-${n}`,
+          agent,
+          at(start).toISOString(),
+          at(finish).toISOString(),
+          'success',
+        );
+      });
+      for (const [task, start, finish] of checks) {
+        events.append({
+          id: `v1-${task}-${start}`,
+          runId: 'run-t',
+          taskId: task,
+          type: 'VERIFY_STARTED' as never,
+          payload: {},
+          timestamp: at(start),
+        });
+        events.append({
+          id: `v2-${task}-${start}`,
+          runId: 'run-t',
+          taskId: task,
+          type: 'VERIFY_COMPLETED' as never,
+          payload: {},
+          timestamp: at(finish),
+        });
+      }
+      return { db, time: computeInsights(db, { sinceDays: 3650 }).time };
+    }
+
+    it("splits one run into agents, checks and TaskForge's own steps, and says what is before and after the agents", () => {
+      // 0-10 setup, 10-70 agent, 70-80 checks, 80-100 integrating and wrap-up
+      const { db, time } = timeline(100, [['T1', 'codex', 10, 70]], [['T1', 70, 80]]);
+      expect(time).toMatchObject({
+        runs: 1,
+        totalSeconds: 100,
+        agentSeconds: 60,
+        verificationSeconds: 10,
+        otherSeconds: 30,
+        averageSecondsBeforeFirstAgent: 10,
+        averageSecondsAfterLastAgent: 30,
+      });
+      db.close();
+    });
+
+    it('counts agents that overlap once, and a check that runs while another agent works as agent time', () => {
+      // two agents 10-60 and 30-80 (union 70 s); a check 70-90 overlaps agent work until 80 (10 s left)
+      const { db, time } = timeline(
+        100,
+        [
+          ['T1', 'codex', 10, 60],
+          ['T2', 'claude', 30, 80],
+        ],
+        [['T1', 70, 90]],
+      );
+      expect(time).toMatchObject({ agentSeconds: 70, verificationSeconds: 10, otherSeconds: 20 });
+      db.close();
+    });
+
+    it('does not report time for a run with no real agent, or one that has not ended', () => {
+      expect(timeline(100, [['T1', 'fake-agent', 10, 50]]).time).toBeUndefined();
+
+      const { db, addRun } = setup();
+      addRun('running', 'running');
+      expect(computeInsights(db, { sinceDays: 3650 }).time).toBeUndefined();
+      db.close();
+    });
+
+    it('reads in plain words, and says planning is not part of it', () => {
+      const { db } = timeline(100, [['T1', 'codex', 10, 70]], [['T1', 70, 80]]);
+      const text = formatInsights(computeInsights(db, { sinceDays: 3650 })).join('\n');
+      expect(text).toContain("agents working 60%, checks 10%, TaskForge's own steps 30%");
+      expect(text).toContain('before the first agent starts: 10s');
+      expect(text).toContain('planning happens before the run');
+      db.close();
+    });
+  });
 });
