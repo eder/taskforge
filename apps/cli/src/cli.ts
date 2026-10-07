@@ -377,6 +377,36 @@ export function createCli(): Command {
       );
     });
 
+  // tf agents reset <agent>
+  program
+    .command('agents')
+    .description('Agent availability: `tf agents reset <agent>` forgets a failure TaskForge recorded for it')
+    .argument('<action>', 'reset')
+    .argument('[agent]', 'agent id, as shown by tf doctor (claude, codex, agy, ...)')
+    .action((action: string, agentId?: string) => {
+      if (action !== 'reset' || !agentId) {
+        console.error('Usage: tf agents reset <agent>   (agent ids are shown by `tf doctor`)');
+        process.exitCode = 1;
+        return;
+      }
+      const availabilityDb = new TaskForgeDatabase(getGlobalStateDatabasePath());
+      try {
+        const tracker = AgentQuotaTracker.getInstance();
+        tracker.configureStore(new AgentAvailabilityRepository(availabilityDb));
+        const before = tracker.getQuotaStatus(agentId);
+        if (before.status === 'ready') {
+          console.log(`\n  ${agentId} has no recorded failure; nothing to reset.\n`);
+          return;
+        }
+        tracker.recordSuccess(agentId);
+        console.log(
+          `\n  ${colors.green}✔${colors.reset} Forgot the recorded ${before.status.replace('_', ' ')} for ${colors.bold}${agentId}${colors.reset}. It will be tried again on the next task; if it really fails, TaskForge records it again.\n`,
+        );
+      } finally {
+        availabilityDb.close();
+      }
+    });
+
   // tf setup
   program
     .command('setup')
