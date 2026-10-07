@@ -57,7 +57,7 @@ import {
   planRunRepair,
   repairRun,
 } from '@taskforge/scheduler';
-import { InteractiveShell, TuiDashboard, theme, colors, summarizeGoal } from '@taskforge/conversation';
+import { InteractiveShell, TuiDashboard, runDashStream, theme, colors, summarizeGoal } from '@taskforge/conversation';
 import { TelemetryCollector, computeInsights, formatInsights } from '@taskforge/telemetry';
 import { runSetup } from './setup.js';
 import { runSelftest } from './selftest.js';
@@ -1073,9 +1073,19 @@ export function createCli(): Command {
     .description(
       'Display rich visual TUI dashboard of repository state, agents, worktrees, and tasks',
     )
-    .action(async () => {
+    .option('--stream', 'Live view of the agents running now: keys 1-9 pick the agent to watch, q quits', false)
+    .action(async (options: { stream?: boolean }) => {
       const repoRoot = process.cwd();
       const config = loadConfig();
+      if (options.stream) {
+        const streamDb = new TaskForgeDatabase(config.execution.databasePath);
+        try {
+          await runDashStream(streamDb);
+        } finally {
+          streamDb.close();
+        }
+        return;
+      }
       const gitService = new GitService(repoRoot);
       const gitStatus = await gitService.getStatus().catch(() => ({
         currentBranch: 'unknown',
