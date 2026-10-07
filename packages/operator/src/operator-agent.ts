@@ -10,6 +10,7 @@ export interface IntentParsingContext {
 export type OperatorIntent =
   | { type: 'inspect_tasks'; taskId?: string }
   | { type: 'inspect_agents' }
+  | { type: 'reset_agent'; agentId?: string }
   | { type: 'inspect_plan' }
   | { type: 'inspect_cost' }
   | { type: 'inspect_stats' }
@@ -114,6 +115,7 @@ export class OperatorIntentParser {
       const parts = text.split(/\s+/);
       return { type: 'inspect_tasks', taskId: parts[1] };
     }
+    if (/^\/agents\s+reset\b/.test(text)) return { type: 'reset_agent', agentId: text.split(/\s+/)[2] };
     if (text.startsWith('/agents')) return { type: 'inspect_agents' };
     if (
       text.startsWith('/health') ||

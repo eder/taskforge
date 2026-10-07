@@ -46,8 +46,10 @@ export class AgentDetector {
     const results = await Promise.all(
       adapters.map(async (adapter) => {
         const installed = await adapter.detect();
-        const quotaInfo = AgentQuotaTracker.getInstance().getQuotaStatus(adapter.id);
         const auth = installed ? await authStatusOf(adapter) : undefined;
+        // The CLI says it is signed in: an authentication failure recorded earlier is stale.
+        if (auth?.state === 'signed_in') AgentQuotaTracker.getInstance().clearAuthFailure(adapter.id);
+        const quotaInfo = AgentQuotaTracker.getInstance().getQuotaStatus(adapter.id);
         // A CLI that says it is signed out will fail every task; report it as such rather than "ready".
         if (installed && quotaInfo.status === 'ready' && auth?.state === 'signed_out') {
           return {

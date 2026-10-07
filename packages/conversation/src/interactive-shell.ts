@@ -911,6 +911,15 @@ export class InteractiveShell {
     }
 
     switch (intent.type) {
+      case 'reset_agent': {
+        if (!intent.agentId) return 'Usage: /agents reset <agent-id> (see /agents for the ids).';
+        const tracker = AgentQuotaTracker.getInstance();
+        const before = tracker.getQuotaStatus(intent.agentId);
+        if (before.status === 'ready') return `${intent.agentId} has no recorded failure; nothing to reset.`;
+        tracker.recordSuccess(intent.agentId);
+        return `${colors.green}✔${colors.reset} Forgot the recorded ${before.status.replace('_', ' ')} for ${colors.bold}${intent.agentId}${colors.reset}. It will be tried again on the next task; if it really fails, TaskForge records it again.`;
+      }
+
       case 'inspect_agents': {
         const reports = await AgentDetector.detect(this.agentRegistry.list());
         return this.operator.formatResponse(intent, { agents: reports });

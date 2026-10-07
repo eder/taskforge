@@ -41,6 +41,40 @@ export interface AgentQuotaStore {
   delete(agentId: string): void;
 }
 
+/**
+ * An authentication failure may be a transient glitch or something the user has since fixed, and a
+ * blocked agent is never scheduled again, so nothing would ever prove it healthy. Retry after this long.
+ */
+const AUTH_RETRY_MS = 30 * 60 * 1000;
+
+/** Provider errors are at the end of a failed run; the start is the prompt and whatever the agent echoed. */
+const AUTH_FAILURE_WINDOW_CHARS = 4000;
+
+/**
+ * Phrases that mean "you are not signed in / the key is not accepted". A bare "forbidden" or
+ * "unauthorized" is not one: TaskForge's own task contract says `forbiddenChanges`, and agents quote
+ * source code, so those words appear in healthy output. An HTTP status next to the word is required.
+ */
+const AUTH_FAILURE_PATTERNS = [
+  /failed to authenticate/,
+  /oauth session expired/,
+  /authentication[_ ]failed/,
+  /authentication_error/,
+  /invalid[ _]api[ _-]?key/,
+  /invalid x-api-key/,
+  /incorrect api key/,
+  /not logged in/,
+  /please (?:log|sign) ?in/,
+  /\b(?:401|403)\b[^\n]{0,40}\b(?:unauthori[sz]ed|forbidden)\b/,
+  /\b(?:unauthori[sz]ed|forbidden)\b[^\n]{0,40}\b(?:401|403)\b/,
+];
+
+/** Exported for tests. */
+export function looksLikeAuthFailure(output: string): boolean {
+  const tail = output.slice(-AUTH_FAILURE_WINDOW_CHARS).toLowerCase();
+  return AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(tail));
+}
+
 const PERSISTABLE_STATUSES = new Set<AgentQuotaStatus>([
   'quota_exhausted',
   'rate_limited',
@@ -87,7 +121,8 @@ export class AgentQuotaTracker {
           source: persisted.source === 'manual' ? 'manual' : 'runtime',
         };
 
-        if (record.resetAt && Date.now() >= record.resetAt) {
+        const expiry = this.expiresAt(record);
+        if (expiry && Date.now() >= expiry) {
           // Cooldown is already over. Remove the durable OPEN circuit so the
           // next selection is the single real probe of the provider.
           this.safeDelete(record.agentId);
@@ -110,14 +145,7 @@ export class AgentQuotaTracker {
     if (!output || typeof output !== 'string') return false;
 
     const lower = output.toLowerCase();
-    const isAuthFailure =
-      lower.includes('failed to authenticate') ||
-      lower.includes('oauth session expired') ||
-      lower.includes('authentication_failed') ||
-      lower.includes('authentication failed') ||
-      lower.includes('invalid api key') ||
-      lower.includes('unauthorized') ||
-      lower.includes('forbidden');
+    const isAuthFailure = looksLikeAuthFailure(output);
 
     if (isAuthFailure) {
       this.setRecord({
@@ -235,6 +263,25 @@ export class AgentQuotaTracker {
     });
   }
 
+  /** When a record stops blocking: its reset time, or for a runtime auth failure the retry delay. */
+  private expiresAt(record: AgentQuotaRecord): number | undefined {
+    if (record.resetAt) return record.resetAt;
+    if (record.status === 'auth_failed' && record.source !== 'manual') return record.recordedAt + AUTH_RETRY_MS;
+    return undefined;
+  }
+
+  /**
+   * The agent's own sign-in check says it is signed in, so a recorded authentication failure is stale.
+   * A failure the user set by hand is left alone.
+   */
+  clearAuthFailure(agentId: string): void {
+    const record = this.records.get(agentId);
+    if (record?.status === 'auth_failed' && record.source !== 'manual') {
+      this.records.delete(agentId);
+      this.safeDelete(agentId);
+    }
+  }
+
   getQuotaStatus(agentId: string): { status: AgentQuotaStatus; reason?: string; resetAt?: Date } {
     const record = this.records.get(agentId);
     if (!record) {
@@ -244,7 +291,8 @@ export class AgentQuotaTracker {
     // OPEN circuit cooldown expired. Forget the block and let the next actual
     // assignment act as the provider probe; success keeps it READY, another
     // quota failure re-opens the circuit with the provider's new reset time.
-    if (record.resetAt && Date.now() >= record.resetAt) {
+    const expiry = this.expiresAt(record);
+    if (expiry && Date.now() >= expiry) {
       this.records.delete(agentId);
       this.safeDelete(agentId);
       return { status: 'ready' };

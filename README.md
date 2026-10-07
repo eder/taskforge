@@ -277,7 +277,7 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/inspect` | Inspect run → task → assignment history; accepts an optional run id |
 | `/tasks` | Show task and assignment status; accepts an optional task id |
 | `/status` | Open the full TUI dashboard |
-| `/agents` | Show detected agent harnesses and availability |
+| `/agents` | Show detected agent harnesses and availability; `/agents reset <id>` forgets a recorded failure (also `tf agents reset <id>`) |
 | `/stream` | Enter live output; accepts an optional task id |
 | `/focus` | Focus one active agent by index, for example `/focus 2` |
 | `/back` | Leave agent Focus Mode |
