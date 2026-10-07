@@ -288,6 +288,14 @@ or:
 /stream TASK-02
 ```
 
+### Watch the agents from a second terminal
+
+```bash
+tf dash --stream
+```
+
+Shows the agents running right now, one tab each (`1`-`9` switch, `q` quits). It reads only the project database and the agents' log files, so it can stay open next to the terminal that runs the work.
+
 ### Focus one agent
 
 ```text

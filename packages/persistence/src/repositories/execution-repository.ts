@@ -105,6 +105,27 @@ export class ExecutionRepository {
     }));
   }
 
+  /** Executions the database still records as running (a crashed run can leave stale ones). */
+  listRunning(): ExecutionRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM executions WHERE status = 'running' ORDER BY started_at")
+      .all() as Array<Record<string, string | number | null>>;
+    return rows.map((r) => ({
+      id: String(r.id),
+      runId: String(r.run_id),
+      taskId: String(r.task_id),
+      assignmentId: String(r.assignment_id),
+      agentId: String(r.agent_id),
+      pid: r.pid === null ? undefined : Number(r.pid),
+      startedAt: String(r.started_at),
+      finishedAt: r.finished_at === null ? undefined : String(r.finished_at),
+      exitCode: r.exit_code === null ? undefined : Number(r.exit_code),
+      status: r.status as ExecutionStatus,
+      logPath: r.log_path === null ? undefined : String(r.log_path),
+      errorMessage: r.error_message === null ? undefined : String(r.error_message),
+    }));
+  }
+
   listByRun(runId: string): ExecutionRecord[] {
     const rows = this.db
       .prepare('SELECT * FROM executions WHERE run_id = ?')
