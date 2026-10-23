@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   StaticRoutingProvider,
   AdaptiveRoutingProvider,
@@ -43,6 +43,55 @@ describe('Router Health Checks', () => {
     expect(health.status).toBe('healthy');
     expect(health.provider).toBe('openai');
     expect(health.model).toBe('gpt-5.6-luna');
+  });
+
+  it('uses the configured gateway for health and routing with a dedicated bearer key', async () => {
+    const seen: Array<{ url: string; authorization: string | null }> = [];
+    const fetchMock = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      const headers = new Headers(init.headers);
+      seen.push({ url, authorization: headers.get('Authorization') });
+      if (url.endsWith('/models')) {
+        return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+      }
+      return Promise.resolve(new Response('gateway unavailable', { status: 503 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const provider = new OpenAIRoutingProvider('freellmapi-unit-test', 'auto', 1000, {
+        baseUrl: 'http://localhost:3001/v1/',
+      });
+      expect((await provider.healthCheck({ validateKey: true })).status).toBe('healthy');
+      await provider.route({
+        task: {
+          id: 'TASK-01',
+          goalId: 'test',
+          title: 'Fix authentication',
+          description: 'Implement auth',
+          type: 'implementation',
+          status: 'proposed',
+          dependencies: [],
+          contract: {
+            objective: 'Implement auth',
+            allowedScope: ['src/**'],
+            forbiddenChanges: [],
+            acceptanceCriteria: ['Auth tests pass'],
+            dependencies: [],
+          },
+          acceptanceCriteria: ['Auth tests pass'],
+          reworkCount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        availableAgents: ['codex'],
+      });
+      expect(seen.map((r) => r.url)).toEqual([
+        'http://localhost:3001/v1/models',
+        'http://localhost:3001/v1/chat/completions',
+      ]);
+      expect(seen.every((r) => r.authorization === 'Bearer freellmapi-unit-test')).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('OpenAIRoutingProvider reports degraded when API key is missing', async () => {
