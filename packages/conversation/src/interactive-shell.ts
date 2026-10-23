@@ -15,6 +15,8 @@ import {
   generateRunId,
   PlannerProvenance,
   resolveOpenAIApiKey,
+  resolveOpenAIBaseUrl,
+  DEFAULT_OPENAI_BASE_URL,
   getGlobalStateDatabasePath,
   AgentStreamBus,
   AgentMessage,
@@ -245,8 +247,10 @@ export class InteractiveShell {
     this.agentRegistry = new AgentRegistry(true, this.config.agents);
     this.gitService = new GitService(this.repoRoot);
     const openaiApiKey = resolveOpenAIApiKey(this.config);
+    const openaiBaseUrl = resolveOpenAIBaseUrl(this.config);
     this.planner = new SemanticPlanner({
       apiKey: openaiApiKey,
+      baseUrl: openaiBaseUrl,
       // Keep Planner and Router on the same configured model by default.
       // PLANNER_MODEL remains an explicit override, but TaskForge should not
       // silently route with one model while planning with a different hidden
@@ -270,7 +274,7 @@ export class InteractiveShell {
         openaiApiKey,
         this.config.router.model,
         15000,
-        { performanceEngine },
+        { performanceEngine, baseUrl: openaiBaseUrl },
       );
     } else {
       this.router = new StaticRoutingProvider();
@@ -756,6 +760,9 @@ export class InteractiveShell {
         }`
       : `${colors.gray}unavailable${colors.reset}`;
     const apiKey = resolveOpenAIApiKey(this.config);
+    const gatewayLabel = resolveOpenAIBaseUrl(this.config) === DEFAULT_OPENAI_BASE_URL
+      ? 'OpenAI'
+      : 'OpenAI-compatible gateway';
     let routerStatus: string;
     if (this.config.router.provider === 'openai') {
       if (!apiKey) {
@@ -768,7 +775,7 @@ export class InteractiveShell {
             ? await this.router.healthCheck({ validateKey: true })
             : { status: 'healthy' as const };
         if (report.status === 'healthy') {
-          routerStatus = `${colors.green}● ready${colors.reset} ${colors.dim}(OpenAI ${this.config.router.model})${colors.reset}`;
+          routerStatus = `${colors.green}● ready${colors.reset} ${colors.dim}(${gatewayLabel} ${this.config.router.model})${colors.reset}`;
         } else if (report.details?.includes('invalid') || report.details?.includes('401')) {
           routerStatus = `${colors.red}○ invalid key${colors.reset} ${colors.dim}(static fallback)${colors.reset}`;
         } else {
