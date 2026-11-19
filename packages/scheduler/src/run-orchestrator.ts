@@ -29,7 +29,7 @@ import {
   InteractionRepository,
   AgentAvailabilityRepository,
 } from '@taskforge/persistence';
-import { GitService, WorktreeManager, parseAgeSpec } from '@taskforge/workspace';
+import { GitService, WorktreeManager, RepositoryAnalyzer, parseAgeSpec } from '@taskforge/workspace';
 import {
   AgentRegistry,
   AgentDetector,
@@ -395,7 +395,11 @@ export class RunOrchestrator {
 
     // 4. Planning
     options.onProgress?.('Generating structured task graph...');
-    let rawGraph = options.preplannedGraph ?? (await this.planner.plan(goal));
+    let rawGraph = options.preplannedGraph;
+    if (!rawGraph) {
+      const repoProfile = await new RepositoryAnalyzer(this.repoRoot).analyze().catch(() => undefined);
+      rawGraph = await this.planner.plan(goal, repoProfile);
+    }
 
     // Task ids must be unique across runs (see task-id-allocation.ts).
     const idRemap = planTaskIdRemap(

@@ -18,7 +18,12 @@ export function classifyTeamMemberFailure(
   cancelled: boolean,
 ): TeamMemberFailureClass {
   if (cancelled) return 'cancelled';
-  if (completionReason === 'PROVIDER_QUOTA_EXCEEDED') return 'provider_unavailable';
+  if (
+    completionReason === 'PROVIDER_QUOTA_EXCEEDED' ||
+    completionReason === 'PROVIDER_AUTH_FAILED'
+  ) {
+    return 'provider_unavailable';
+  }
   if (completionReason === 'REQUIRED_ACTION_DENIED') return 'permission_failure';
   return 'task_failure';
 }

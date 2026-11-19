@@ -73,6 +73,7 @@ const CAUSE_LABELS: Record<string, string> = {
   environment: 'the environment could not run the checks',
   policy: 'a policy stopped the run',
   provider_quota: 'an agent ran out of quota',
+  provider_auth: 'an agent was not signed in',
   token_budget: 'the token budget was reached',
   scope_violation: 'an agent changed files outside its allowed scope',
   review_rejected: 'an independent reviewer rejected the change',

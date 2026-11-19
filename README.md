@@ -400,6 +400,31 @@ tf doctor
 
 to inspect your local setup.
 
+### Optional OpenAI-compatible gateway (FreeLLMAPI)
+
+TaskForge can use a local OpenAI-compatible gateway for **planning, intent classification, and agent staffing**, without changing the interactive `tf` experience. This is complementary to TaskForge's task decomposition, parallel scheduling, worktrees, verification, and explicit delivery.
+
+After installing and configuring [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi), set its unified API key in your shell:
+
+```bash
+export TASKFORGE_OPENAI_API_KEY="<your FreeLLMAPI unified API key>"
+```
+
+Then add this to `.taskforge/config.yaml` or `~/.taskforge/config.yaml`:
+
+```yaml
+router:
+  provider: openai
+  baseUrl: http://localhost:3001/v1
+  model: auto
+```
+
+Launch `tf` as usual. The endpoint is also configurable with `TASKFORGE_OPENAI_BASE_URL` (higher priority than `router.baseUrl`). The gateway must support OpenAI-style `/v1/chat/completions` with JSON-schema structured responses and `/v1/models` for health checks. A model/profile such as `auto` is interpreted by the gateway, not TaskForge.
+
+**Credential safety:** For non-default endpoints, TaskForge requires an explicitly configured key (`TASKFORGE_OPENAI_API_KEY` or `router.apiKey`). It will **not** forward an unrelated global `OPENAI_API_KEY` automatically. Keep keys outside committed project config whenever possible; use a local or HTTPS endpoint you trust.
+
+**Agent processes are separate:** This integration routes the TaskForge *planner and staff selector*, not the underlying Claude Code/Codex/Antigravity CLIs. To route coding-agent inference through FreeLLMAPI as well, configure each compatible CLI using the [FreeLLMAPI agent setup guide](https://github.com/tashfeenahmed/freellmapi/blob/main/docs/en/clients/01-agent-clients.md), then confirm it works with the TaskForge adapter before using it for writable tasks. Free model tiers and support for tool calls/structured output differ across upstream providers; TaskForge keeps its deterministic fallback if a planning/routing response is invalid.
+
 ## Architecture
 
 TaskForge is a TypeScript monorepo with explicit control-plane boundaries.

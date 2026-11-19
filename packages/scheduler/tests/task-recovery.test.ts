@@ -27,6 +27,13 @@ describe('task recovery policy', () => {
     expect(decideTaskRecovery(0, 2, 'provider_quota').action).toBe('reassign');
   });
 
+  it('reassigns provider auth failures without retrying the same agent', () => {
+    expect(decideTaskRecovery(0, 2, 'provider_auth').action).toBe('reassign');
+    expect(classifyExecutionFailure('PROVIDER_AUTH_FAILED', 'oauth_org_not_allowed')).toBe(
+      'provider_auth',
+    );
+  });
+
 
   it('injects concrete prior failure evidence into the next attempt', () => {
     const text = formatRecoveryContext([

@@ -14,6 +14,7 @@ import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
+import { cloneTemplateRepo } from './helpers/git-sandbox.js';
 
 class FlakyDownstreamAgent implements AgentAdapter {
   readonly id = 'flaky-downstream';
@@ -99,16 +100,10 @@ describe('RunOrchestrator.resume', () => {
   let gitService: GitService;
   let worktreeManager: WorktreeManager;
 
-  beforeEach(async () => {
-    fs.rmSync(testRepoRoot, { recursive: true, force: true });
-    fs.mkdirSync(testRepoRoot, { recursive: true });
-    gitService = new GitService(testRepoRoot);
-    await gitService.exec(['init', '-b', 'main'], testRepoRoot);
-    await gitService.exec(['config', 'user.name', 'TaskForge Resume Test'], testRepoRoot);
-    await gitService.exec(['config', 'user.email', 'resume@taskforge.dev'], testRepoRoot);
-    fs.writeFileSync(path.join(testRepoRoot, 'README.md'), '# resume test\n', 'utf8');
-    await gitService.stageAndCommit('Initial commit', testRepoRoot);
-    worktreeManager = new WorktreeManager(testRepoRoot, '.taskforge/worktrees');
+  beforeEach(() => {
+    const sandbox = cloneTemplateRepo(testRepoRoot);
+    gitService = sandbox.git;
+    worktreeManager = sandbox.worktrees;
   });
 
   afterEach(async () => {

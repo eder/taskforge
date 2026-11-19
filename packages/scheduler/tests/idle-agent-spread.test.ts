@@ -20,6 +20,27 @@ class Concurrency {
   active = 0;
   peak = 0;
   readonly agentsUsed = new Set<string>();
+  private releaseBarrier?: () => void;
+  readonly barrier: Promise<void>;
+
+  constructor(readonly waitForConcurrentCount: number) {
+    this.barrier =
+      waitForConcurrentCount <= 1
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            this.releaseBarrier = resolve;
+            setTimeout(resolve, 1500);
+          });
+  }
+
+  enter(agentId: string): void {
+    this.active += 1;
+    this.peak = Math.max(this.peak, this.active);
+    this.agentsUsed.add(agentId);
+    if (this.active >= this.waitForConcurrentCount) {
+      this.releaseBarrier?.();
+    }
+  }
 }
 
 class SlowWritingAgent implements AgentAdapter {
@@ -46,11 +67,9 @@ class SlowWritingAgent implements AgentAdapter {
   }
 
   async execute(assignment: AgentAssignment, context: AgentContext): Promise<AgentResult> {
-    this.seen.active += 1;
-    this.seen.peak = Math.max(this.seen.peak, this.seen.active);
-    this.seen.agentsUsed.add(this.id);
+    this.seen.enter(this.id);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await this.seen.barrier;
       const dir = path.join(context.worktreePath, assignment.taskId.toLowerCase());
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, 'file.ts'), `export const owner = '${this.id}';\n`, 'utf8');
@@ -58,7 +77,7 @@ class SlowWritingAgent implements AgentAdapter {
         `feat: ${assignment.taskId}`,
         context.worktreePath,
       );
-      return { success: true, message: 'done', output: 'done', durationMs: 400, commitHash };
+      return { success: true, message: 'done', output: 'done', durationMs: 10, commitHash };
     } finally {
       this.seen.active -= 1;
     }
@@ -112,7 +131,7 @@ describe('independent tasks use every idle agent', () => {
   });
 
   function setup(onlyWriter?: string) {
-    const seen = new Concurrency();
+    const seen = new Concurrency(onlyWriter ? 1 : 3);
     const registry = new AgentRegistry(false);
     for (const id of ['alpha', 'beta', 'gamma']) registry.register(new SlowWritingAgent(id, seen));
 

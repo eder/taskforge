@@ -28,6 +28,8 @@ describe('looksLikeAuthFailure', () => {
       'Incorrect API key provided: sk-...',
       '{"type":"authentication_error"}',
       'Not logged in. Please run login',
+      'oauth_org_not_allowed',
+      'Your organization has disabled Claude subscription access for Claude Code',
     ]) {
       expect(looksLikeAuthFailure(text), text).toBe(true);
     }
