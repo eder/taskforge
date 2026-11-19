@@ -20,30 +20,20 @@ import { getDefaultConfig } from '@taskforge/shared';
 import { ConcurrencyManager, TeamMemberReservation } from '../src/concurrency-manager.js';
 import { executeGovernedAssignment } from '../src/governed-assignment.js';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
+import { cloneTemplateRepo } from './helpers/git-sandbox.js';
 
 describe('TaskForge Multi-Agent Runtime Hardening', () => {
   const testRepoRoot = path.resolve(__dirname, '../test-sandbox-hardening');
   let gitService: GitService;
   let worktreeManager: WorktreeManager;
 
-  beforeEach(async () => {
-    if (fs.existsSync(testRepoRoot)) {
-      fs.rmSync(testRepoRoot, { recursive: true, force: true });
-    }
-    fs.mkdirSync(testRepoRoot, { recursive: true });
-
-    gitService = new GitService(testRepoRoot);
-    await gitService['exec'](['init', '-b', 'main'], testRepoRoot);
-    await gitService['exec'](['config', 'user.name', 'Hardening Bot'], testRepoRoot);
-    await gitService['exec'](['config', 'user.email', 'hardening@taskforge.dev'], testRepoRoot);
-
-    fs.writeFileSync(path.join(testRepoRoot, 'README.md'), '# Hardening Test\n', 'utf8');
-    await gitService.stageAndCommit('Initial commit', testRepoRoot);
-    worktreeManager = new WorktreeManager(testRepoRoot, '.taskforge/worktrees');
+  beforeEach(() => {
+    const sandbox = cloneTemplateRepo(testRepoRoot);
+    gitService = sandbox.git;
+    worktreeManager = sandbox.worktrees;
   });
 
-  afterEach(async () => {
-    await worktreeManager.prune().catch(() => {});
+  afterEach(() => {
     if (fs.existsSync(testRepoRoot)) {
       try {
         fs.rmSync(testRepoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

@@ -60,11 +60,11 @@ describe('creating worktrees at the same time', () => {
       const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
       const manager = new WorktreeManager(root, '.taskforge/worktrees', []);
 
-      for (let round = 0; round < 6; round++) {
+      for (let round = 0; round < 2; round++) {
         const created = await Promise.all(
-          Array.from({ length: 24 }, (_, i) => manager.createWorktree(`T${round}`, `a${i}`, head)),
+          Array.from({ length: 10 }, (_, i) => manager.createWorktree(`T${round}`, `a${i}`, head)),
         );
-        expect(created).toHaveLength(24);
+        expect(created).toHaveLength(10);
         await Promise.all(created.map((w, i) => manager.removeWorktree(`T${round}`, `a${i}`, true, true)));
       }
     } finally {

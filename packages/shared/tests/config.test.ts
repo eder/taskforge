@@ -1,12 +1,22 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   getDefaultConfig,
+  loadConfig,
+  EXECUTION_PROFILES,
   TaskForgeConfigSchema,
   getGlobalStateDatabasePath,
 } from '../src/config.js';
 import { ConfigurationError, TaskForgeError } from '../src/errors.js';
+import { parseTokenCount } from '../src/token-count.js';
+import { setProjectConfigValue } from '../src/project-config-patch.js';
+import {
+  SECURITY_NOTICE,
+  shouldShowSecurityNotice,
+  markSecurityNoticeShown,
+} from '../src/security-notice.js';
 
 describe('Shared - Config', () => {
   it('loads default config successfully', () => {
@@ -80,5 +90,116 @@ describe('Shared - Errors', () => {
       path.resolve(os.homedir(), '.taskforge/state.db'),
     );
     expect(path.isAbsolute(getGlobalStateDatabasePath())).toBe(true);
+  });
+});
+
+describe('parseTokenCount', () => {
+  it('reads plain numbers and k/m suffixes', () => {
+    expect(parseTokenCount('500000')).toBe(500000);
+    expect(parseTokenCount('500k')).toBe(500000);
+    expect(parseTokenCount('1.5m')).toBe(1500000);
+    expect(parseTokenCount('1,200,000')).toBe(1200000);
+    expect(parseTokenCount(250000)).toBe(250000);
+  });
+
+  it('rejects anything that is not a positive amount', () => {
+    for (const bad of ['', 'abc', '-5', '0', '0k', '12x', '1.2.3']) {
+      expect(parseTokenCount(bad)).toBeUndefined();
+    }
+    expect(parseTokenCount(1.5)).toBeUndefined();
+    expect(parseTokenCount(undefined)).toBeUndefined();
+  });
+});
+
+describe('setProjectConfigValue', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-patch-test-'));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('creates the file when there is none and leaves no temporary file behind', () => {
+    const { file } = setProjectConfigValue(dir, ['git', 'workflow'], 'gitflow');
+    expect(fs.readFileSync(file, 'utf8')).toContain('workflow: gitflow');
+    expect(fs.readdirSync(path.dirname(file))).toEqual(['config.yaml']);
+  });
+
+  it('changes only the named key while preserving comments', () => {
+    const file = path.join(dir, '.taskforge', 'config.yaml');
+    fs.mkdirSync(path.dirname(file));
+    fs.writeFileSync(file, 'git:\n  workflow: trunk # default\n  targetBranch: main\n');
+    setProjectConfigValue(dir, ['git', 'workflow'], 'gitflow');
+    expect(fs.readFileSync(file, 'utf8')).toBe(
+      'git:\n  workflow: gitflow # default\n  targetBranch: main\n',
+    );
+  });
+});
+
+describe('execution profiles and token budget', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-profile-'));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const write = (yaml: string) => {
+    const file = path.join(dir, 'config.yaml');
+    fs.writeFileSync(file, yaml);
+    return file;
+  };
+
+  it('a project with no settings gets economy: one agent per task and a 1M cap', () => {
+    const config = loadConfig(write('version: 1\n'));
+    expect(config.execution.profile).toBe('economy');
+    expect(config.collaboration.maxAgentsPerTask).toBe(1);
+    expect(config.execution.tokenBudget).toBe(1_000_000);
+  });
+
+  it('standard and thorough raise both, and explicit overrides win', () => {
+    const standard = loadConfig(write('execution:\n  profile: standard\n'));
+    expect([standard.collaboration.maxAgentsPerTask, standard.execution.tokenBudget]).toEqual([2, 2_000_000]);
+    const thorough = loadConfig(write('execution:\n  profile: thorough\n'));
+    expect([thorough.collaboration.maxAgentsPerTask, thorough.execution.tokenBudget]).toEqual([3, 4_000_000]);
+    const override = loadConfig(
+      write('execution:\n  profile: economy\n  tokenBudget: 0\ncollaboration:\n  maxAgentsPerTask: 3\n'),
+    );
+    expect(override.execution.tokenBudget).toBe(0);
+    expect(override.collaboration.maxAgentsPerTask).toBe(3);
+  });
+
+  it('rejects invalid profiles and negative token budgets', () => {
+    expect(() => loadConfig(write('execution:\n  profile: ludicrous\n'))).toThrow(/profile/);
+    expect(getDefaultConfig().collaboration.maxAgentsPerTask).toBe(3);
+    expect(getDefaultConfig().execution.tokenBudget).toBe(2_000_000);
+    expect(EXECUTION_PROFILES.economy).toEqual({ maxAgentsPerTask: 1, tokenBudget: 1_000_000 });
+    expect(TaskForgeConfigSchema.parse({ execution: { tokenBudget: 0 } }).execution.tokenBudget).toBe(0);
+    expect(() => TaskForgeConfigSchema.parse({ execution: { tokenBudget: -5 } })).toThrow();
+  });
+});
+
+describe('security notice', () => {
+  let home: string;
+  let previous: string | undefined;
+  beforeEach(() => {
+    previous = process.env.HOME;
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-notice-'));
+    process.env.HOME = home;
+  });
+  afterEach(() => {
+    process.env.HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('states the key safety boundaries and records first-run dismissal', () => {
+    const text = SECURITY_NOTICE.join('\n');
+    expect(text).toContain('experimental');
+    expect(text).toContain('container or VM');
+    expect(text).toContain('no sandbox');
+    expect(text).toContain('~/.ssh');
+    expect(text).toContain('never applies changes to your branch on its own');
+
+    expect(shouldShowSecurityNotice()).toBe(true);
+    markSecurityNoticeShown();
+    expect(shouldShowSecurityNotice()).toBe(false);
+    expect(fs.existsSync(path.join(home, '.taskforge', 'security-notice-shown'))).toBe(true);
   });
 });

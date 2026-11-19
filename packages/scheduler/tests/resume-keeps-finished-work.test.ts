@@ -14,6 +14,7 @@ import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
+import { cloneTemplateRepo } from './helpers/git-sandbox.js';
 
 const REPORT = '## Analysis\n\n' + 'The repository was inspected in detail and the findings are recorded here. '.repeat(6);
 
@@ -88,16 +89,10 @@ describe('tf resume keeps finished work', () => {
   let git: GitService;
   let worktrees: WorktreeManager;
 
-  beforeEach(async () => {
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.mkdirSync(root, { recursive: true });
-    git = new GitService(root);
-    await git.exec(['init', '-b', 'main'], root);
-    await git.exec(['config', 'user.name', 'Resume Reports'], root);
-    await git.exec(['config', 'user.email', 'resume@taskforge.dev'], root);
-    fs.writeFileSync(path.join(root, 'README.md'), '# resume\n');
-    await git.stageAndCommit('Initial commit', root);
-    worktrees = new WorktreeManager(root, '.taskforge/worktrees');
+  beforeEach(() => {
+    const sandbox = cloneTemplateRepo(root);
+    git = sandbox.git;
+    worktrees = sandbox.worktrees;
   });
 
   afterEach(async () => {

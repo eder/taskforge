@@ -90,7 +90,7 @@ function task(): Task {
 }
 
 // Fails like a test does until the agents have produced ok.flag.
-const CHECK = `node -e "if(!require('fs').existsSync('ok.flag')){console.error('AssertionError: ok.flag is missing');process.exit(1)}"`;
+const CHECK = `test -f ok.flag || { echo "AssertionError: ok.flag is missing" >&2; exit 1; }`;
 
 describe('a team that continues from kept work must integrate cleanly', () => {
   const root = path.resolve(__dirname, '../test-sandbox-team-resume');

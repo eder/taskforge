@@ -70,12 +70,26 @@ describe('VerificationRunner shell execution and environment', () => {
     expect(verificationEnvPolicy(['TASKFORGE_OPENAI_API_KEY']).allow).not.toContain('TASKFORGE_OPENAI_API_KEY');
   });
 
-  it('honors verification.commandTimeoutSeconds instead of a fixed 60s', async () => {
+  it('includes the exit code, command, and last output lines in failureReason', async () => {
+    const detailed = await run([
+      'echo first; echo "ModuleNotFoundError: No module named boto3" >&2; exit 2',
+    ]);
+    expect(detailed.passed).toBe(false);
+    expect(detailed.failureReason).toContain("Check 'explicit-1' failed with exit code 2");
+    expect(detailed.failureReason).toContain('Command: echo first');
+    expect(detailed.failureReason).toContain('ModuleNotFoundError: No module named boto3');
+
+    const bare = await run(['exit 1']);
+    expect(bare.failureReason?.startsWith("Check 'explicit-1' failed with exit code 1")).toBe(true);
+  });
+
+  it('honors verification.commandTimeoutSeconds and marks timed-out checks', async () => {
     const started = Date.now();
     const result = await run(['sleep 5'], (c) => {
       c.verification.commandTimeoutSeconds = 1;
     });
     expect(result.passed).toBe(false);
+    expect(result.failureReason).toContain('(timed out)');
     expect(Date.now() - started).toBeLessThan(4500);
   });
 });

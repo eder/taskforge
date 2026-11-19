@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TaskForgeDatabase } from '@taskforge/persistence';
-import { CostEstimator, TelemetryCollector, PerformanceEngine } from '../src/index.js';
+import { TaskForgeDatabase, RunRepository } from '@taskforge/persistence';
+import { Task } from '@taskforge/core';
+import { CostEstimator, TelemetryCollector, PerformanceEngine, TaskTokenEstimator } from '../src/index.js';
 
 describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
   let db: TaskForgeDatabase;
@@ -487,6 +488,78 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       const formatted = engine.formatAgentReport(stats);
       expect(formatted).toContain('MEDIUM confidence');
       expect(formatted).toContain('Success Rate: 100.0%');
+    });
+  });
+
+  describe('observedAssignmentTokens & TaskTokenEstimator', () => {
+    it('requires at least 3 samples before reporting average and high assignment tokens', () => {
+      const seed = (totals: number[]) => {
+        const localDb = new TaskForgeDatabase(':memory:');
+        new RunRepository(localDb).create('run-1', undefined, {});
+        const telemetry = new TelemetryCollector(localDb);
+        totals.forEach((total, i) => {
+          localDb
+            .prepare(
+              'INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
+            )
+            .run(`T${i}`, 'run-1', 't', 't', 'implementation', 'integrated', new Date().toISOString(), new Date().toISOString());
+          telemetry.recordTaskTokens({
+            runId: 'run-1',
+            taskId: `T${i}`,
+            assignmentId: `asgn-${i}`,
+            agentId: 'a',
+            modelName: 'm',
+            inputTokens: total,
+            outputTokens: 0,
+          });
+        });
+        return { localDb, telemetry };
+      };
+
+      const few = seed([100, 200]);
+      expect(few.telemetry.observedAssignmentTokens()).toBeUndefined();
+      few.localDb.close();
+
+      const many = seed([100_000, 200_000, 300_000, 400_000, 1_000_000]);
+      const observed = many.telemetry.observedAssignmentTokens()!;
+      expect(observed.samples).toBe(5);
+      expect(observed.average).toBe(400_000);
+      expect(observed.high).toBe(1_000_000);
+      many.localDb.close();
+    });
+
+    it('classifies documentation tasks as lightweight and architecture migrations as heavy', () => {
+      const makeTask = (id: string, title: string, description: string, objective: string): Task => ({
+        id,
+        goalId: 'g',
+        title,
+        description,
+        type: 'implementation',
+        status: 'proposed',
+        dependencies: [],
+        contract: { objective, allowedScope: ['*'], forbiddenChanges: [], acceptanceCriteria: [], dependencies: [] },
+        acceptanceCriteria: [],
+        reworkCount: 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const docEstimate = TaskTokenEstimator.estimateTask(
+        makeTask('TASK-01', 'Documentation and Content Update', 'Update README.md to English', 'Update README'),
+      );
+      expect(docEstimate.complexity).toBe('lightweight');
+      expect(docEstimate.totalEstimatedTokens).toBeLessThan(3000);
+
+      const heavyEstimate = TaskTokenEstimator.estimateTask(
+        makeTask(
+          'TASK-02',
+          'Full Database Migration and Architecture Refactor',
+          'Perform major refactor and migration from sqlite to postgres',
+          'Refactor database architecture',
+        ),
+      );
+      expect(heavyEstimate.complexity).toBe('heavy');
+      expect(heavyEstimate.totalEstimatedTokens).toBeGreaterThan(4000);
     });
   });
 });
