@@ -866,10 +866,23 @@ async function runConcurrentTeam(
           return;
         }
 
-        const replacement = await agentSelector.selectAgentForRole(roleRequest, {
-          excludeAgentIds: triedAgentIds,
-          selectionKey: `${ctx.repoRoot}:${task.id}:failover:${asgn.role}`,
-        });
+        // Prefer a distinct healthy agent not already staffed on another role
+        // of this task (such as the implementer) so failover preserves an
+        // independent perspective; fall back to teammates only when no spare
+        // healthy agent remains.
+        const distinctExclude = new Set<string>([
+          ...triedAgentIds,
+          ...selected.map((s) => s.agent.id),
+        ]);
+        const replacement =
+          (await agentSelector.selectAgentForRole(roleRequest, {
+            excludeAgentIds: distinctExclude,
+            selectionKey: `${ctx.repoRoot}:${task.id}:failover:${asgn.role}`,
+          })) ??
+          (await agentSelector.selectAgentForRole(roleRequest, {
+            excludeAgentIds: triedAgentIds,
+            selectionKey: `${ctx.repoRoot}:${task.id}:failover:${asgn.role}`,
+          }));
 
         if (!replacement) {
           const triedList = Array.from(triedAgentIds).join(', ');
