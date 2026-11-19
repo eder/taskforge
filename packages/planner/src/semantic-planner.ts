@@ -204,7 +204,7 @@ export class SemanticPlanner implements Planner {
       'apiKey' in options
         ? options.apiKey
         : process.env.TASKFORGE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-    this.model = options.model ?? 'gpt-5.6-luna';
+    this.model = options.model ?? 'gpt-4o-mini';
     // Planning a long, multi-part goal with a strict JSON schema routinely takes
     // longer than 15s; a timeout here silently downgrades to the fallback plan.
     this.timeoutMs = options.timeoutMs ?? 60000;

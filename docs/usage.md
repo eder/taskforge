@@ -942,7 +942,7 @@ Example:
 ```yaml
 router:
   provider: openai
-  model: gpt-5.6-luna
+  model: gpt-4o-mini
   fallback: static
   # timeoutSeconds: 60   # how long the planner waits for the model before using a simpler plan
 

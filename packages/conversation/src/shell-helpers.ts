@@ -58,7 +58,7 @@ export function plannerSourceLabel(
 
   if (plannerMeta?.source === 'semantic_model') {
     const providerLabel = plannerMeta.provider === 'custom' ? 'Custom' : 'Semantic';
-    return `${providerLabel} / ${plannerMeta.model || 'gpt-5.6-luna'}`;
+    return `${providerLabel} / ${plannerMeta.model || 'gpt-4o-mini'}`;
   }
 
   if (plannerMeta?.source === 'deterministic_decomposition') {
@@ -70,7 +70,7 @@ export function plannerSourceLabel(
   }
 
   if (graphMetadata?.source === 'semantic') {
-    return `Semantic / ${String(graphMetadata.model ?? 'gpt-5.6-luna')}`;
+    return `Semantic / ${String(graphMetadata.model ?? 'gpt-4o-mini')}`;
   }
 
   return `Heuristic fallback${graphMetadata?.fallbackReason ? ` (${String(graphMetadata.fallbackReason)})` : ''}`;
@@ -82,7 +82,7 @@ export function routerSourceLabel(
   lightweightFastPath: boolean,
 ): string {
   if (routing.source === 'openai') {
-    return `OpenAI / ${model || 'gpt-5.6-luna'}`;
+    return `OpenAI / ${model || 'gpt-4o-mini'}`;
   }
   if (routing.source === 'adaptive') {
     return 'Adaptive structure / deterministic agent fit';

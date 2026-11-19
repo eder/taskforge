@@ -1,6 +1,6 @@
 {
   "name": "@taskforge/integration",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "description": "TaskForge integration package.",
   "license": "MIT",
   "type": "module",

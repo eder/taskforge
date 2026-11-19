@@ -364,7 +364,7 @@ A typical project configuration looks like:
 ```yaml
 router:
   provider: openai
-  model: gpt-5.6-luna
+  model: gpt-4o-mini
   fallback: static
 
 execution:
@@ -459,7 +459,7 @@ For a small edit where one agent already has everything it needs, using that cod
 
 ## Current status
 
-TaskForge is currently **v0.1.x, beta** and under active development. Releases are published to npm under the `beta` tag (`npm install -g @taskforge/cli@beta`) until 1.0.
+TaskForge is currently **v1.0.0-rc.1 (release candidate)** and undergoing real-agent pilot validation (see [docs/release-criteria-1.0.md](docs/release-criteria-1.0.md) and [docs/pilot.md](docs/pilot.md)). Pre-releases are published to npm under the `beta` tag (`npm install -g @taskforge/cli@beta`) until `1.0.0`.
 
 It is already dogfooded on real repositories, but users should expect interfaces and configuration to evolve while the control plane is hardened.
 
