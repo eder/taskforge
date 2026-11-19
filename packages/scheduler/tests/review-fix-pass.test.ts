@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -10,11 +10,12 @@ import {
 } from '@taskforge/shared';
 import { type AgentAdapter, AgentRegistry } from '@taskforge/agents';
 import { TaskForgeDatabase } from '@taskforge/persistence';
-import { GitService, WorktreeManager } from '@taskforge/workspace';
+import { GitService } from '@taskforge/workspace';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
 import { reviewChangesFrom, REVIEW_CONTRACT, reviewFixObjective } from '../src/review-verdict.js';
+import { withGitSandbox } from './helpers/git-sandbox.js';
 
 class Researcher implements AgentAdapter {
   readonly id = 'res';
@@ -121,96 +122,91 @@ describe('review verdict parsing', () => {
   });
 });
 
-describe('a reviewer that asks for changes gets them fixed without anyone asking', () => {
-  const root = path.resolve(__dirname, '../test-sandbox-review-fix');
-  let git: GitService;
-  let worktrees: WorktreeManager;
-
-  beforeEach(async () => {
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.mkdirSync(root, { recursive: true });
-    git = new GitService(root);
-    await git.exec(['init', '-b', 'main'], root);
-    await git.exec(['config', 'user.name', 'T'], root);
-    await git.exec(['config', 'user.email', 't@taskforge.dev'], root);
-    fs.writeFileSync(path.join(root, 'README.md'), '# x\n');
-    await git.stageAndCommit('Initial commit', root);
-    worktrees = new WorktreeManager(root, '.taskforge/worktrees');
-  });
-  afterEach(async () => {
-    await worktrees.prune().catch(() => undefined);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  async function run(reviewerReply: string, fixPasses?: number, withImplementer = true, maxAgents?: number) {
-    const db = new TaskForgeDatabase(':memory:');
-    const implementer = new Implementer();
-    const reviewer = new Reviewer(reviewerReply);
-    const researcher = new Researcher();
-    const registry = new AgentRegistry(false);
-    registry.register(researcher);
-    registry.register(implementer);
-    registry.register(reviewer);
-    const router: RoutingProvider = {
-      id: 'r',
-      route: async () => ({
-        strategy: 'collaborative',
-        complexity: 'high',
-        risk: 'high',
-        uncertainty: 'high',
-        teamSize: 3,
-        roles: [
-          { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Study', preferredAgent: 'res' },
-          ...(withImplementer
-            ? [{ role: 'implementer' as const, requiredCapabilities: ['canWrite'], objective: 'Implement', preferredAgent: 'impl' }]
-            : []),
-          { role: 'architecture_reviewer', requiredCapabilities: ['canRead'], objective: 'Review the change', preferredAgent: 'rev' },
-        ],
-        communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
-        reason: 'test',
-      }),
-    };
-    const config = getDefaultConfig();
-    config.verification.tests = false;
-    config.verification.lint = false;
-    config.verification.typecheck = false;
-    config.verification.review = false;
-    if (fixPasses !== undefined) config.collaboration.reviewFixPasses = fixPasses;
-    if (maxAgents !== undefined) config.collaboration.maxAgentsPerTask = maxAgents;
-    const orchestrator = new RunOrchestrator({
-      repoRoot: root,
-      config,
-      database: db,
-      agentRegistry: registry,
-      router,
-      gitService: git,
-      worktreeManager: worktrees,
+describe.concurrent('a reviewer that asks for changes gets them fixed without anyone asking', () => {
+  async function run(
+    reviewerReply: string,
+    fixPasses?: number,
+    withImplementer = true,
+    maxAgents?: number,
+    afterRun?: (ctx: { git: GitService; root: string; integrationBranch?: string }) => Promise<void>,
+  ) {
+    return withGitSandbox(async ({ root, git, worktrees }) => {
+      const db = new TaskForgeDatabase(':memory:');
+      const implementer = new Implementer();
+      const reviewer = new Reviewer(reviewerReply);
+      const researcher = new Researcher();
+      const registry = new AgentRegistry(false);
+      registry.register(researcher);
+      registry.register(implementer);
+      registry.register(reviewer);
+      const router: RoutingProvider = {
+        id: 'r',
+        route: async () => ({
+          strategy: 'collaborative',
+          complexity: 'high',
+          risk: 'high',
+          uncertainty: 'high',
+          teamSize: 3,
+          roles: [
+            { role: 'researcher', requiredCapabilities: ['canRead'], objective: 'Study', preferredAgent: 'res' },
+            ...(withImplementer
+              ? [{ role: 'implementer' as const, requiredCapabilities: ['canWrite'], objective: 'Implement', preferredAgent: 'impl' }]
+              : []),
+            { role: 'architecture_reviewer', requiredCapabilities: ['canRead'], objective: 'Review the change', preferredAgent: 'rev' },
+          ],
+          communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
+          reason: 'test',
+        }),
+      };
+      const config = getDefaultConfig();
+      config.verification.tests = false;
+      config.verification.lint = false;
+      config.verification.typecheck = false;
+      config.verification.review = false;
+      if (fixPasses !== undefined) config.collaboration.reviewFixPasses = fixPasses;
+      if (maxAgents !== undefined) config.collaboration.maxAgentsPerTask = maxAgents;
+      const orchestrator = new RunOrchestrator({
+        repoRoot: root,
+        config,
+        database: db,
+        agentRegistry: registry,
+        router,
+        gitService: git,
+        worktreeManager: worktrees,
+      });
+      const progress: string[] = [];
+      const reportTask: Task = {
+        ...task(),
+        type: 'investigation',
+        contract: { ...task().contract, completionMode: 'report', allowedScope: [], forbiddenChanges: ['*'] },
+      };
+      const result = await orchestrator.run('Add feature.txt', {
+        preplannedGraph: new TaskGraph([withImplementer ? task() : reportTask]),
+        onProgress: (m) => progress.push(m),
+      });
+      await afterRun?.({ git, root, integrationBranch: result.integrationBranch });
+      db.close();
+      return { result, implementer, reviewer, researcher, progress };
     });
-    const progress: string[] = [];
-    const reportTask: Task = {
-      ...task(),
-      type: 'investigation',
-      contract: { ...task().contract, completionMode: 'report', allowedScope: [], forbiddenChanges: ['*'] },
-    };
-    const result = await orchestrator.run('Add feature.txt', {
-      preplannedGraph: new TaskGraph([withImplementer ? task() : reportTask]),
-      onProgress: (m) => progress.push(m),
-    });
-    db.close();
-    return { result, implementer, reviewer, researcher, progress };
   }
 
   it('sends the reviewer’s findings to the implementer once, and the fixed work is what is delivered', async () => {
+    let delivered = '';
     const { result, implementer, reviewer, progress } = await run(
       'Two problems.\n- feature.txt is only a draft\n- no content check\nREVIEW_VERDICT: REJECTED',
+      undefined,
+      true,
+      undefined,
+      async ({ git, root, integrationBranch }) => {
+        delivered = await git.exec(['show', `${integrationBranch}:feature.txt`], root);
+      },
     );
-    expect(reviewer.objectives[0]).toContain('REVIEW_VERDICT: APPROVED'); // asked in the agreed format
+    expect(reviewer.objectives[0]).toContain('REVIEW_VERDICT: APPROVED');
     expect(reviewer.objectives[0]).toContain('REVIEW_VERDICT: REJECTED');
-    expect(implementer.objectives).toHaveLength(2); // original work + one fix pass
+    expect(implementer.objectives).toHaveLength(2);
     expect(implementer.objectives[1]).toContain('- feature.txt is only a draft');
     expect(progress.join('\n')).toContain('The reviewer asked for 2 change(s)');
     expect(result.status).toBe('completed');
-    const delivered = await git.exec(['show', `${result.integrationBranch}:feature.txt`], root);
     expect(delivered.trim()).toBe('fixed');
   });
 
@@ -235,10 +231,10 @@ describe('a reviewer that asks for changes gets them fixed without anyone asking
 
   it('sends the reviewer’s changes back to the lead when the task has no implementer (a written analysis)', async () => {
     const { researcher, result, progress } = await run('Missing a section.\n- add the rollback plan\nREVIEW_VERDICT: REJECTED', undefined, false);
-    expect(researcher.objectives).toHaveLength(2); // the analysis, then one fix pass
+    expect(researcher.objectives).toHaveLength(2);
     expect(researcher.objectives[1]).toContain('- add the rollback plan');
     expect(progress.join('\n')).toContain('The reviewer asked for 1 change(s)');
-    console.log(progress.join('\n'), result.status, result.error);
+    expect(result.status).toBe('completed');
   });
 
   it('hands the reviewer the diff of the change, so it does not have to explore the repository', async () => {

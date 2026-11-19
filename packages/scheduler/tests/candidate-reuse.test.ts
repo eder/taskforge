@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -10,10 +10,11 @@ import {
 } from '@taskforge/shared';
 import { type AgentAdapter, AgentRegistry } from '@taskforge/agents';
 import { TaskForgeDatabase, EventRepository, RunRepository } from '@taskforge/persistence';
-import { GitService, WorktreeManager } from '@taskforge/workspace';
+import { GitService } from '@taskforge/workspace';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
+import { type GitSandbox, withGitSandbox } from './helpers/git-sandbox.js';
 
 class CountingWriter implements AgentAdapter {
   readonly id = 'writer';
@@ -64,30 +65,14 @@ function featureTask(): Task {
   };
 }
 
-describe('blocked work is kept and reused by tf resume', () => {
-  const root = path.resolve(__dirname, '../test-sandbox-candidate-reuse');
-  let git: GitService;
-  let worktrees: WorktreeManager;
-
-  beforeEach(async () => {
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.mkdirSync(root, { recursive: true });
-    git = new GitService(root);
-    await git.exec(['init', '-b', 'main'], root);
-    await git.exec(['config', 'user.name', 'Candidate Reuse'], root);
-    await git.exec(['config', 'user.email', 'candidate@taskforge.dev'], root);
-    fs.writeFileSync(path.join(root, 'README.md'), '# candidate\n');
-    await git.stageAndCommit('Initial commit', root);
-    worktrees = new WorktreeManager(root, '.taskforge/worktrees');
-  });
-
-  afterEach(async () => {
-    await worktrees.prune().catch(() => {});
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
+describe.concurrent('blocked work is kept and reused by tf resume', () => {
   /** Same repo and database for both "processes", like two tf invocations. */
-  function orchestrator(db: TaskForgeDatabase, agent: AgentAdapter, verificationCommands: string[]) {
+  function orchestrator(
+    sandbox: GitSandbox,
+    db: TaskForgeDatabase,
+    agent: AgentAdapter,
+    verificationCommands: string[],
+  ) {
     const registry = new AgentRegistry(false);
     registry.register(agent);
     const router: RoutingProvider = {
@@ -106,120 +91,124 @@ describe('blocked work is kept and reused by tf resume', () => {
     const config = getDefaultConfig();
     config.verification.commands = verificationCommands;
     config.verification.review = false;
-    // These tests exercise what happens after the agent worked; the preflight (tested in
-    // preflight-and-fix.test.ts) would stop a misconfigured check before any agent runs.
     config.verification.preflight = false;
     return new RunOrchestrator({
-      repoRoot: root,
+      repoRoot: sandbox.root,
       config,
       database: db,
       agentRegistry: registry,
       router,
-      gitService: git,
-      worktreeManager: worktrees,
+      gitService: sandbox.git,
+      worktreeManager: sandbox.worktrees,
     });
   }
 
-  // The exact failure from a real run: the verification command is unsuitable for the project.
   const BROKEN_VERIFICATION =
     'echo "FAILED t.py::t - async def functions are not natively supported." >&2; exit 2';
 
   it('keeps the agent work on a named branch when verification is misconfigured, and says so', async () => {
-    const db = new TaskForgeDatabase(':memory:');
-    const agent = new CountingWriter();
-    const progress: string[] = [];
-    const result = await orchestrator(db, agent, [BROKEN_VERIFICATION]).run('Add feature', {
-      preplannedGraph: new TaskGraph([featureTask()]),
-      onProgress: (m) => progress.push(m),
+    await withGitSandbox(async (sandbox) => {
+      const db = new TaskForgeDatabase(':memory:');
+      const agent = new CountingWriter();
+      const progress: string[] = [];
+      const result = await orchestrator(sandbox, db, agent, [BROKEN_VERIFICATION]).run('Add feature', {
+        preplannedGraph: new TaskGraph([featureTask()]),
+        onProgress: (m) => progress.push(m),
+      });
+
+      expect(result.status).toBe('failed');
+      expect(agent.calls).toBe(1);
+
+      const branch = `taskforge/candidate/${result.runId.replace(/^run-/, '')}/TASK-FEATURE`;
+      expect(await sandbox.git.branchExists(branch)).toBe(true);
+      expect(await sandbox.git.exec(['show', `${branch}:feature.txt`], sandbox.root)).toContain('done');
+      expect(progress.join('\n')).toContain(`Work kept on branch ${branch}`);
+      expect(progress.join('\n')).toContain('without calling any agent');
+
+      const events = new EventRepository(db).listByRun(result.runId);
+      expect(events.some((e) => e.type === 'TASK_CANDIDATE_PRESERVED')).toBe(true);
+      db.close();
     });
-
-    expect(result.status).toBe('failed');
-    expect(agent.calls).toBe(1); // a misconfigured check is not retried with agents
-
-    const branch = `taskforge/candidate/${result.runId.replace(/^run-/, '')}/TASK-FEATURE`;
-    expect(await git.branchExists(branch)).toBe(true);
-    expect(await git.exec(['show', `${branch}:feature.txt`], root)).toContain('done');
-    expect(progress.join('\n')).toContain(`Work kept on branch ${branch}`);
-    expect(progress.join('\n')).toContain('without calling any agent');
-
-    const events = new EventRepository(db).listByRun(result.runId);
-    expect(events.some((e) => e.type === 'TASK_CANDIDATE_PRESERVED')).toBe(true);
-    db.close();
   });
 
   it('after the config is fixed, resume finishes the task WITHOUT calling any agent', async () => {
-    const db = new TaskForgeDatabase(':memory:');
-    const firstAgent = new CountingWriter();
-    const first = await orchestrator(db, firstAgent, [BROKEN_VERIFICATION]).run('Add feature', {
-      preplannedGraph: new TaskGraph([featureTask()]),
+    await withGitSandbox(async (sandbox) => {
+      const db = new TaskForgeDatabase(':memory:');
+      const firstAgent = new CountingWriter();
+      const first = await orchestrator(sandbox, db, firstAgent, [BROKEN_VERIFICATION]).run('Add feature', {
+        preplannedGraph: new TaskGraph([featureTask()]),
+      });
+      expect(first.status).toBe('failed');
+
+      const secondAgent = new CountingWriter();
+      const progress: string[] = [];
+      const resumed = await orchestrator(sandbox, db, secondAgent, ['true']).resume(first.runId, {
+        onProgress: (m) => progress.push(m),
+      });
+
+      expect(resumed.status).toBe('completed');
+      expect(secondAgent.calls).toBe(0);
+      expect(progress.join('\n')).toContain('Work from an earlier attempt is kept for TASK-FEATURE');
+      expect(progress.join('\n')).toContain('no agent call');
+      const files = await sandbox.git.exec(['ls-tree', '-r', '--name-only', resumed.integrationBranch!], sandbox.root);
+      expect(files).toContain('feature.txt');
+
+      const metadata = JSON.parse(new RunRepository(db).get(first.runId)!.metadataJson!);
+      expect(Object.keys(metadata.candidates ?? {})).toEqual([]);
+      db.close();
     });
-    expect(first.status).toBe('failed');
-
-    // "Fix tf init's mistake": a verification command that works.
-    const secondAgent = new CountingWriter();
-    const progress: string[] = [];
-    const resumed = await orchestrator(db, secondAgent, ['true']).resume(first.runId, {
-      onProgress: (m) => progress.push(m),
-    });
-
-    expect(resumed.status).toBe('completed');
-    expect(secondAgent.calls).toBe(0); // zero tokens spent
-    expect(progress.join('\n')).toContain('Work from an earlier attempt is kept for TASK-FEATURE');
-    expect(progress.join('\n')).toContain('no agent call');
-    const files = await git.exec(['ls-tree', '-r', '--name-only', resumed.integrationBranch!], root);
-    expect(files).toContain('feature.txt');
-
-    // Nothing left dangling in the run metadata.
-    const metadata = JSON.parse(new RunRepository(db).get(first.runId)!.metadataJson!);
-    expect(Object.keys(metadata.candidates ?? {})).toEqual([]);
-    db.close();
   });
 
   it('a candidate that fails the check again stays blocked, still kept, with no agent call', async () => {
-    const db = new TaskForgeDatabase(':memory:');
-    const first = await orchestrator(db, new CountingWriter(), [BROKEN_VERIFICATION]).run('Add feature', {
-      preplannedGraph: new TaskGraph([featureTask()]),
+    await withGitSandbox(async (sandbox) => {
+      const db = new TaskForgeDatabase(':memory:');
+      const first = await orchestrator(sandbox, db, new CountingWriter(), [BROKEN_VERIFICATION]).run('Add feature', {
+        preplannedGraph: new TaskGraph([featureTask()]),
+      });
+      const agent = new CountingWriter();
+      const resumed = await orchestrator(sandbox, db, agent, [BROKEN_VERIFICATION]).resume(first.runId);
+      expect(resumed.status).toBe('failed');
+      expect(agent.calls).toBe(0);
+      expect(await sandbox.git.branchExists(`taskforge/candidate/${first.runId.replace(/^run-/, '')}/TASK-FEATURE`)).toBe(true);
+      db.close();
     });
-    const agent = new CountingWriter();
-    const resumed = await orchestrator(db, agent, [BROKEN_VERIFICATION]).resume(first.runId);
-    expect(resumed.status).toBe('failed');
-    expect(agent.calls).toBe(0);
-    expect(await git.branchExists(`taskforge/candidate/${first.runId.replace(/^run-/, '')}/TASK-FEATURE`)).toBe(true);
-    db.close();
   });
 
   it('--fresh discards the kept work and starts the task over with an agent', async () => {
-    const db = new TaskForgeDatabase(':memory:');
-    const first = await orchestrator(db, new CountingWriter(), [BROKEN_VERIFICATION]).run('Add feature', {
-      preplannedGraph: new TaskGraph([featureTask()]),
+    await withGitSandbox(async (sandbox) => {
+      const db = new TaskForgeDatabase(':memory:');
+      const first = await orchestrator(sandbox, db, new CountingWriter(), [BROKEN_VERIFICATION]).run('Add feature', {
+        preplannedGraph: new TaskGraph([featureTask()]),
+      });
+      const agent = new CountingWriter();
+      const resumed = await orchestrator(sandbox, db, agent, ['true']).resume(first.runId, { freshStart: true });
+      expect(resumed.status).toBe('completed');
+      expect(agent.calls).toBe(1);
+      db.close();
     });
-    const agent = new CountingWriter();
-    const resumed = await orchestrator(db, agent, ['true']).resume(first.runId, { freshStart: true });
-    expect(resumed.status).toBe('completed');
-    expect(agent.calls).toBe(1);
-    db.close();
   });
 
   it('when the work itself was wrong, the agent continues from the kept commit instead of from scratch', async () => {
-    const db = new TaskForgeDatabase(':memory:');
-    // Check passes only when the file says DONE. The first agent never writes it.
-    const check = 'grep -q DONE feature.txt';
-    const firstAgent = new CountingWriter(() => 'not yet\n');
-    const first = await orchestrator(db, firstAgent, [check]).run('Add feature', {
-      preplannedGraph: new TaskGraph([featureTask()]),
+    await withGitSandbox(async (sandbox) => {
+      const db = new TaskForgeDatabase(':memory:');
+      const check = 'grep -q DONE feature.txt';
+      const firstAgent = new CountingWriter(() => 'not yet\n');
+      const first = await orchestrator(sandbox, db, firstAgent, [check]).run('Add feature', {
+        preplannedGraph: new TaskGraph([featureTask()]),
+      });
+      expect(first.status).toBe('failed');
+      expect(firstAgent.sawExisting[0]).toBe(false);
+
+      const secondAgent = new CountingWriter((_call, existing) => (existing ? 'DONE\n' : 'not yet\n'));
+      const resumed = await orchestrator(sandbox, db, secondAgent, [check]).resume(first.runId);
+
+      expect(secondAgent.sawExisting[0]).toBe(true);
+      expect(resumed.status).toBe('completed');
+      db.close();
     });
-    expect(first.status).toBe('failed');
-    expect(firstAgent.sawExisting[0]).toBe(false); // first ever attempt starts from nothing
-
-    const secondAgent = new CountingWriter((_call, existing) => (existing ? 'DONE\n' : 'not yet\n'));
-    const resumed = await orchestrator(db, secondAgent, [check]).resume(first.runId);
-
-    expect(secondAgent.sawExisting[0]).toBe(true); // it found the earlier attempt's file
-    expect(resumed.status).toBe('completed');
-    db.close();
   });
 
-  describe('team (pair) execution, the path of the reported run', () => {
+  describe.concurrent('team (pair) execution, the path of the reported run', () => {
     class Reviewer implements AgentAdapter {
       readonly id = 'checker';
       readonly name = 'Checker';
@@ -236,7 +225,13 @@ describe('blocked work is kept and reused by tf resume', () => {
       }
     }
 
-    function pairOrchestrator(db: TaskForgeDatabase, writer: AgentAdapter, reviewer: AgentAdapter, commands: string[]) {
+    function pairOrchestrator(
+      sandbox: GitSandbox,
+      db: TaskForgeDatabase,
+      writer: AgentAdapter,
+      reviewer: AgentAdapter,
+      commands: string[],
+    ) {
       const registry = new AgentRegistry(false);
       registry.register(writer);
       registry.register(reviewer);
@@ -261,43 +256,45 @@ describe('blocked work is kept and reused by tf resume', () => {
       config.verification.review = false;
       config.verification.preflight = false;
       return new RunOrchestrator({
-        repoRoot: root,
+        repoRoot: sandbox.root,
         config,
         database: db,
         agentRegistry: registry,
         router,
-        gitService: git,
-        worktreeManager: worktrees,
+        gitService: sandbox.git,
+        worktreeManager: sandbox.worktrees,
       });
     }
 
     it('keeps the team result when verification is misconfigured and resume re-checks it with no agent call', async () => {
-      const db = new TaskForgeDatabase(':memory:');
-      const writer = new CountingWriter();
-      const reviewer = new Reviewer();
-      const progress: string[] = [];
-      const first = await pairOrchestrator(db, writer, reviewer, [BROKEN_VERIFICATION]).run('Add feature', {
-        preplannedGraph: new TaskGraph([featureTask()]),
-        onProgress: (m) => progress.push(m),
+      await withGitSandbox(async (sandbox) => {
+        const db = new TaskForgeDatabase(':memory:');
+        const writer = new CountingWriter();
+        const reviewer = new Reviewer();
+        const progress: string[] = [];
+        const first = await pairOrchestrator(sandbox, db, writer, reviewer, [BROKEN_VERIFICATION]).run('Add feature', {
+          preplannedGraph: new TaskGraph([featureTask()]),
+          onProgress: (m) => progress.push(m),
+        });
+
+        expect(first.status).toBe('failed');
+        expect(progress.join('\n')).toMatch(/Collaborative (task BLOCKED|verification failed)/);
+        const branch = `taskforge/candidate/${first.runId.replace(/^run-/, '')}/TASK-FEATURE`;
+        expect(await sandbox.git.branchExists(branch)).toBe(true);
+        const callsAfterFirstRun = { writer: writer.calls, reviewer: reviewer.calls };
+        expect(callsAfterFirstRun.writer).toBeGreaterThan(0);
+
+        const writer2 = new CountingWriter();
+        const reviewer2 = new Reviewer();
+        const resumed = await pairOrchestrator(sandbox, db, writer2, reviewer2, ['true']).resume(first.runId);
+
+        expect(resumed.status).toBe('completed');
+        expect(writer2.calls).toBe(0);
+        expect(reviewer2.calls).toBe(0);
+        const files = await sandbox.git.exec(['ls-tree', '-r', '--name-only', resumed.integrationBranch!], sandbox.root);
+        expect(files).toContain('feature.txt');
+        db.close();
       });
-
-      expect(first.status).toBe('failed');
-      expect(progress.join('\n')).toMatch(/Collaborative (task BLOCKED|verification failed)/);
-      const branch = `taskforge/candidate/${first.runId.replace(/^run-/, '')}/TASK-FEATURE`;
-      expect(await git.branchExists(branch)).toBe(true);
-      const callsAfterFirstRun = { writer: writer.calls, reviewer: reviewer.calls };
-      expect(callsAfterFirstRun.writer).toBeGreaterThan(0);
-
-      const writer2 = new CountingWriter();
-      const reviewer2 = new Reviewer();
-      const resumed = await pairOrchestrator(db, writer2, reviewer2, ['true']).resume(first.runId);
-
-      expect(resumed.status).toBe('completed');
-      expect(writer2.calls).toBe(0);
-      expect(reviewer2.calls).toBe(0);
-      const files = await git.exec(['ls-tree', '-r', '--name-only', resumed.integrationBranch!], root);
-      expect(files).toContain('feature.txt');
-      db.close();
     });
   });
 });

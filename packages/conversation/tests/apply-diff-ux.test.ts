@@ -44,7 +44,7 @@ describe('/apply and /diff result UX', () => {
     }
   });
 
-  it('/diff shows a summary-first view: total files/insertions/deletions, then a per-file M/A/D list', async () => {
+  it('/diff shows a summary-first view and /apply reports the branch transition and commit', async () => {
     const shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
     shellsToClean.push(shell);
 
@@ -55,14 +55,6 @@ describe('/apply and /diff result UX', () => {
     expect(diff).toContain('Run Diff');
     expect(diff).toMatch(/\d+ files? changed/);
     expect(diff).toMatch(/^\s*\+\d+\s+-\d+/m);
-  });
-
-  it('/apply reports the branch transition, changed files and the applied commit', async () => {
-    const shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-    shellsToClean.push(shell);
-
-    await shell.handleInput('create application health endpoint');
-    await shell.handleInput('yes --fake');
 
     const applied = stripAnsi(await shell.handleInput('/apply --yes'));
     expect(applied).toContain('Applied successfully');

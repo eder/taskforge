@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -10,10 +10,11 @@ import {
 } from '@taskforge/shared';
 import { type AgentAdapter, AgentRegistry } from '@taskforge/agents';
 import { TaskForgeDatabase, EventRepository, AssignmentRepository } from '@taskforge/persistence';
-import { GitService, WorktreeManager } from '@taskforge/workspace';
+import { GitService } from '@taskforge/workspace';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
+import { type GitSandbox, withGitSandbox } from './helpers/git-sandbox.js';
 
 class ImplementerAgent implements AgentAdapter {
   readonly id = 'impl';
@@ -85,29 +86,8 @@ function authTask(): Task {
   };
 }
 
-describe('dual-review gate', () => {
-  const testRepoRoot = path.resolve(__dirname, '../test-sandbox-dual-review');
-  let gitService: GitService;
-  let worktreeManager: WorktreeManager;
-
-  beforeEach(async () => {
-    fs.rmSync(testRepoRoot, { recursive: true, force: true });
-    fs.mkdirSync(testRepoRoot, { recursive: true });
-    gitService = new GitService(testRepoRoot);
-    await gitService.exec(['init', '-b', 'main'], testRepoRoot);
-    await gitService.exec(['config', 'user.name', 'Dual Review Test'], testRepoRoot);
-    await gitService.exec(['config', 'user.email', 'review@taskforge.dev'], testRepoRoot);
-    fs.writeFileSync(path.join(testRepoRoot, 'README.md'), '# dual review\n', 'utf8');
-    await gitService.stageAndCommit('Initial commit', testRepoRoot);
-    worktreeManager = new WorktreeManager(testRepoRoot, '.taskforge/worktrees');
-  });
-
-  afterEach(async () => {
-    await worktreeManager.prune().catch(() => {});
-    fs.rmSync(testRepoRoot, { recursive: true, force: true });
-  });
-
-  function setup(agents: AgentAdapter[], policy: Record<string, unknown> = {}, enabled = true) {
+describe.concurrent('dual-review gate', () => {
+  function setup(sandbox: GitSandbox, agents: AgentAdapter[], policy: Record<string, unknown> = {}, enabled = true) {
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
     agents.forEach((a) => registry.register(a));
@@ -136,7 +116,6 @@ describe('dual-review gate', () => {
     config.verification.lint = false;
     config.verification.typecheck = false;
     config.verification.review = false;
-    // Only the implementer may write to src/auth: makes staffing deterministic.
     config.ownership = { rules: [{ scope: 'src/auth/**', writers: ['impl'] }] };
     config.verification.dualReview = {
       ...config.verification.dualReview,
@@ -145,13 +124,13 @@ describe('dual-review gate', () => {
       ...policy,
     };
     const orchestrator = new RunOrchestrator({
-      repoRoot: testRepoRoot,
+      repoRoot: sandbox.root,
       config,
       database: db,
       agentRegistry: registry,
       router,
-      gitService,
-      worktreeManager,
+      gitService: sandbox.git,
+      worktreeManager: sandbox.worktrees,
     });
     const graph = new TaskGraph();
     graph.addTask(authTask());
@@ -162,95 +141,106 @@ describe('dual-review gate', () => {
     new EventRepository(db).listByRun(runId).map((e) => e.type);
 
   it('integrates a sensitive change only after an independent agent approves it', async () => {
-    const impl = new ImplementerAgent();
-    const rev = new ReviewerAgent(() => 'Reads cleanly, no auth bypass found.\nREVIEW_VERDICT: APPROVED');
-    const { db, orchestrator, graph } = setup([impl, rev]);
+    await withGitSandbox(async (sandbox) => {
+      const impl = new ImplementerAgent();
+      const rev = new ReviewerAgent(() => 'Reads cleanly, no auth bypass found.\nREVIEW_VERDICT: APPROVED');
+      const { db, orchestrator, graph } = setup(sandbox, [impl, rev]);
 
-    const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
+      const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
 
-    expect(result.status).toBe('completed');
-    expect(rev.objectives).toHaveLength(1);
-    expect(rev.objectives[0]).toContain('INDEPENDENT REVIEWER');
-    expect(rev.sawCandidateFile).toBe(true); // reviewed the candidate commit, not the base
-    const types = eventTypes(db, result.runId);
-    expect(types).toContain('DUAL_REVIEW_REQUIRED');
-    expect(types).toContain('DUAL_REVIEW_APPROVED');
-    const reviewAssignments = new AssignmentRepository(db)
-      .listByTask('TASK-AUTH')
-      .filter((a) => a.id.includes('-review-'));
-    expect(reviewAssignments).toHaveLength(1);
-    expect(reviewAssignments[0].agentId).toBe('rev');
-    expect(reviewAssignments[0].agentId).not.toBe('impl');
-    const files = await gitService.exec(['ls-tree', '-r', '--name-only', result.integrationBranch!], testRepoRoot);
-    expect(files).toContain('src/auth/login.ts');
-    db.close();
+      expect(result.status).toBe('completed');
+      expect(rev.objectives).toHaveLength(1);
+      expect(rev.objectives[0]).toContain('INDEPENDENT REVIEWER');
+      expect(rev.sawCandidateFile).toBe(true);
+      const types = eventTypes(db, result.runId);
+      expect(types).toContain('DUAL_REVIEW_REQUIRED');
+      expect(types).toContain('DUAL_REVIEW_APPROVED');
+      const reviewAssignments = new AssignmentRepository(db)
+        .listByTask('TASK-AUTH')
+        .filter((a) => a.id.includes('-review-'));
+      expect(reviewAssignments).toHaveLength(1);
+      expect(reviewAssignments[0].agentId).toBe('rev');
+      expect(reviewAssignments[0].agentId).not.toBe('impl');
+      const files = await sandbox.git.exec(['ls-tree', '-r', '--name-only', result.integrationBranch!], sandbox.root);
+      expect(files).toContain('src/auth/login.ts');
+      db.close();
+    });
   });
 
   it('never integrates a change the reviewer rejects, and feeds findings back as evidence', async () => {
-    const impl = new ImplementerAgent();
-    const rev = new ReviewerAgent(() => '- login.ts: token never expires\nREVIEW_VERDICT: REJECTED');
-    const { db, orchestrator, graph } = setup([impl, rev]);
+    await withGitSandbox(async (sandbox) => {
+      const impl = new ImplementerAgent();
+      const rev = new ReviewerAgent(() => '- login.ts: token never expires\nREVIEW_VERDICT: REJECTED');
+      const { db, orchestrator, graph } = setup(sandbox, [impl, rev]);
 
-    const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
+      const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
 
-    expect(result.status).toBe('failed');
-    expect(result.tasksCompleted).toBe(0);
-    expect(result.integrationBranch).toBeUndefined();
-    expect(eventTypes(db, result.runId)).toContain('DUAL_REVIEW_REJECTED');
-    // The rework attempt was driven by the reviewer's findings.
-    const recovery = new EventRepository(db)
-      .listByRun(result.runId)
-      .find((e) => e.type === 'TASK_RECOVERY_SCHEDULED' || e.type === 'TASK_RECOVERY_BLOCKED');
-    expect(JSON.stringify(recovery?.payload)).toContain('token never expires');
-    expect(impl.calls).toBeGreaterThanOrEqual(1);
-    db.close();
+      expect(result.status).toBe('failed');
+      expect(result.tasksCompleted).toBe(0);
+      expect(result.integrationBranch).toBeUndefined();
+      expect(eventTypes(db, result.runId)).toContain('DUAL_REVIEW_REJECTED');
+      const recovery = new EventRepository(db)
+        .listByRun(result.runId)
+        .find((e) => e.type === 'TASK_RECOVERY_SCHEDULED' || e.type === 'TASK_RECOVERY_BLOCKED');
+      expect(JSON.stringify(recovery?.payload)).toContain('token never expires');
+      expect(impl.calls).toBeGreaterThanOrEqual(1);
+      db.close();
+    });
   });
 
   it('treats a missing verdict as a rejection (fail closed)', async () => {
-    const impl = new ImplementerAgent();
-    const rev = new ReviewerAgent(() => 'Everything looks fine to me!');
-    const { db, orchestrator, graph } = setup([impl, rev]);
+    await withGitSandbox(async (sandbox) => {
+      const impl = new ImplementerAgent();
+      const rev = new ReviewerAgent(() => 'Everything looks fine to me!');
+      const { db, orchestrator, graph } = setup(sandbox, [impl, rev]);
 
-    const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
+      const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
 
-    expect(result.status).toBe('failed');
-    expect(eventTypes(db, result.runId)).toContain('DUAL_REVIEW_REJECTED');
-    db.close();
+      expect(result.status).toBe('failed');
+      expect(eventTypes(db, result.runId)).toContain('DUAL_REVIEW_REJECTED');
+      db.close();
+    });
   });
 
   it('blocks when no independent reviewer exists (default policy)', async () => {
-    const impl = new ImplementerAgent();
-    const { db, orchestrator, graph } = setup([impl]);
+    await withGitSandbox(async (sandbox) => {
+      const impl = new ImplementerAgent();
+      const { db, orchestrator, graph } = setup(sandbox, [impl]);
 
-    const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
+      const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
 
-    expect(result.status).toBe('failed');
-    expect(result.integrationBranch).toBeUndefined();
-    expect(eventTypes(db, result.runId)).toContain('DUAL_REVIEW_UNAVAILABLE');
-    db.close();
+      expect(result.status).toBe('failed');
+      expect(result.integrationBranch).toBeUndefined();
+      expect(eventTypes(db, result.runId)).toContain('DUAL_REVIEW_UNAVAILABLE');
+      db.close();
+    });
   });
 
   it('can skip review explicitly when onNoIndependentReviewer is "skip"', async () => {
-    const impl = new ImplementerAgent();
-    const { db, orchestrator, graph } = setup([impl], { onNoIndependentReviewer: 'skip' });
+    await withGitSandbox(async (sandbox) => {
+      const impl = new ImplementerAgent();
+      const { db, orchestrator, graph } = setup(sandbox, [impl], { onNoIndependentReviewer: 'skip' });
 
-    const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
+      const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
 
-    expect(result.status).toBe('completed');
-    expect(eventTypes(db, result.runId)).toContain('DUAL_REVIEW_UNAVAILABLE');
-    db.close();
+      expect(result.status).toBe('completed');
+      expect(eventTypes(db, result.runId)).toContain('DUAL_REVIEW_UNAVAILABLE');
+      db.close();
+    });
   });
 
   it('does nothing when the gate is disabled (default)', async () => {
-    const impl = new ImplementerAgent();
-    const rev = new ReviewerAgent(() => 'REVIEW_VERDICT: REJECTED');
-    const { db, orchestrator, graph } = setup([impl, rev], {}, false);
+    await withGitSandbox(async (sandbox) => {
+      const impl = new ImplementerAgent();
+      const rev = new ReviewerAgent(() => 'REVIEW_VERDICT: REJECTED');
+      const { db, orchestrator, graph } = setup(sandbox, [impl, rev], {}, false);
 
-    const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
+      const result = await orchestrator.run('Add login handler', { preplannedGraph: graph });
 
-    expect(result.status).toBe('completed');
-    expect(rev.objectives).toHaveLength(0);
-    expect(eventTypes(db, result.runId)).not.toContain('DUAL_REVIEW_REQUIRED');
-    db.close();
+      expect(result.status).toBe('completed');
+      expect(rev.objectives).toHaveLength(0);
+      expect(eventTypes(db, result.runId)).not.toContain('DUAL_REVIEW_REQUIRED');
+      db.close();
+    });
   });
 });

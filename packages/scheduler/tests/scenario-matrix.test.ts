@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -10,11 +10,12 @@ import {
 } from '@taskforge/shared';
 import { type AgentAdapter, AgentRegistry } from '@taskforge/agents';
 import { TaskForgeDatabase, TaskRepository, EventRepository } from '@taskforge/persistence';
-import { GitService, WorktreeManager } from '@taskforge/workspace';
+import { GitService } from '@taskforge/workspace';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';
 import { RunOrchestrator } from '../src/run-orchestrator.js';
 import { describeRunFailures, formatRunFailureLines } from '../src/run-failure-report.js';
+import { withGitSandbox } from './helpers/git-sandbox.js';
 
 /**
  * The combinations that happen on real projects: how the work is staffed (one
@@ -27,7 +28,7 @@ import { describeRunFailures, formatRunFailureLines } from '../src/run-failure-r
 type Strategy = 'single' | 'team';
 type Fault = 'none' | 'checks_fail_then_pass' | 'agent_fails_then_ok' | 'token_cap_then_raised';
 
-const CHECK = `node -e "if(!require('fs').existsSync('ok.flag')){console.error('AssertionError: ok.flag is missing');process.exit(1)}"`;
+const CHECK = `test -f ok.flag || { echo "AssertionError: ok.flag is missing" >&2; exit 1; }`;
 
 interface World {
   /** Whether the implementer produces ok.flag (what the check needs). */
@@ -102,33 +103,14 @@ function task(id: string, dependencies: string[] = []): Task {
 }
 
 describe('scenario matrix: every way a run can go wrong ends in a clear, recoverable state', () => {
-  const root = path.resolve(__dirname, '../test-sandbox-matrix');
-  let git: GitService;
-  let worktrees: WorktreeManager;
-
-  beforeEach(async () => {
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.mkdirSync(root, { recursive: true });
-    git = new GitService(root);
-    await git.exec(['init', '-b', 'main'], root);
-    await git.exec(['config', 'user.name', 'T'], root);
-    await git.exec(['config', 'user.email', 't@taskforge.dev'], root);
-    fs.writeFileSync(path.join(root, 'README.md'), '# x\n');
-    await git.stageAndCommit('Initial commit', root);
-    worktrees = new WorktreeManager(root, '.taskforge/worktrees');
-  });
-  afterEach(async () => {
-    await worktrees.prune().catch(() => undefined);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
   const scenarios: Array<[Strategy, Fault]> = (['single', 'team'] as const).flatMap((strategy) =>
     (['none', 'checks_fail_then_pass', 'agent_fails_then_ok', 'token_cap_then_raised'] as const).map(
       (fault) => [strategy, fault] as [Strategy, Fault],
     ),
   );
 
-  it.each(scenarios)('%s staffing, fault: %s', async (strategy, fault) => {
+  it.concurrent.each(scenarios)('%s staffing, fault: %s', async (strategy, fault) => {
+    await withGitSandbox(async ({ root, git, worktrees }) => {
     const world: World = { writeFlag: fault !== 'checks_fail_then_pass', failNext: fault === 'agent_fails_then_ok', tokens: fault === 'token_cap_then_raised' ? 600 : 10, implCalls: 0 };
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
@@ -218,9 +200,11 @@ describe('scenario matrix: every way a run can go wrong ends in a clear, recover
       }
     }
     db.close();
+    });
   }, 180_000);
 
-  it('the token cap also stops a team between its members, not only between tasks', async () => {
+  it.concurrent('the token cap also stops a team between its members, not only between tasks', async () => {
+    await withGitSandbox(async ({ root, git, worktrees }) => {
     const world: World = { writeFlag: true, failNext: false, tokens: 600, implCalls: 0 };
     let reviewerCalls = 0;
     const reviewer = read('rev', 'Reviewer');
@@ -273,5 +257,6 @@ describe('scenario matrix: every way a run can go wrong ends in a clear, recover
     const resumed = await orchestrator.resume(first.runId, { tokenBudget: 1_000_000 });
     expect(resumed.status).toBe('completed');
     db.close();
+    });
   }, 120_000);
 });
