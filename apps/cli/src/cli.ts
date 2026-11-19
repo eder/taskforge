@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import {
   loadConfig,
   resolveOpenAIApiKey,
+  resolveOpenAIBaseUrl,
   getGlobalStateDatabasePath,
   TASKFORGE_VERSION,
   parseTokenCount,
@@ -129,8 +130,10 @@ export function buildHeadlessPlannerAndRouter(
   if (options.fake) return {};
   const agentRegistry = new AgentRegistry(true, config.agents);
   const openaiApiKey = resolveOpenAIApiKey(config);
+  const openaiBaseUrl = resolveOpenAIBaseUrl(config);
   const planner = new SemanticPlanner({
     apiKey: openaiApiKey,
+    baseUrl: openaiBaseUrl,
     model: process.env.PLANNER_MODEL || config.router.model || 'gpt-4o-mini',
     timeoutMs: (config.router.timeoutSeconds ?? 60) * 1000,
     maxTasks: config.planner?.maxTasks,
@@ -144,7 +147,9 @@ export function buildHeadlessPlannerAndRouter(
   if (config.router.adaptive && options.db) {
     router = new AdaptiveRoutingProvider(new PerformanceEngine(options.db));
   } else if (config.router.provider === 'openai' && openaiApiKey) {
-    router = new OpenAIRoutingProvider(openaiApiKey, config.router.model, 15000);
+    router = new OpenAIRoutingProvider(openaiApiKey, config.router.model, 15000, {
+      baseUrl: openaiBaseUrl,
+    });
   } else {
     router = new StaticRoutingProvider();
   }

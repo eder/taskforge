@@ -16,12 +16,16 @@ RUN npm install -g pnpm@12.4.2 @anthropic-ai/claude-code @openai/codex
 
 WORKDIR /opt/taskforge
 COPY . .
-RUN pnpm install --frozen-lockfile && pnpm build && npm link apps/cli
+RUN pnpm install --frozen-lockfile && pnpm build \
+ && chmod +x /opt/taskforge/apps/cli/dist/bin.js \
+ && ln -sf /opt/taskforge/apps/cli/dist/bin.js /usr/local/bin/tf \
+ && ln -sf /opt/taskforge/apps/cli/dist/bin.js /usr/local/bin/taskforge
 
 # /workspace is the repository to work on (mounted at run time). HOME is a
 # throwaway directory, so state and sign-ins do not leak in from the host.
 ENV TASKFORGE_ISOLATED=1 HOME=/home/tf
-RUN mkdir -p /home/tf /workspace && chmod 1777 /home/tf /workspace
+RUN mkdir -p /home/tf /workspace && chmod 1777 /home/tf /workspace \
+ && git config --system --add safe.directory '*'
 WORKDIR /workspace
 USER node
 ENTRYPOINT ["tf"]

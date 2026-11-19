@@ -4,7 +4,7 @@
 #
 # Only the current directory is mounted. Provider keys are passed by name, so
 # their values never appear on the command line. Set the ones you use:
-#   ANTHROPIC_API_KEY, OPENAI_API_KEY, TASKFORGE_OPENAI_API_KEY
+#   ANTHROPIC_API_KEY, OPENAI_API_KEY, TASKFORGE_OPENAI_API_KEY, TASKFORGE_OPENAI_BASE_URL
 set -eu
 
 image="${TASKFORGE_IMAGE:-taskforge}"
@@ -25,5 +25,5 @@ exec docker run --rm -it \
   -v taskforge-home:/home/tf \
   -e GIT_AUTHOR_NAME="$name" -e GIT_COMMITTER_NAME="$name" \
   -e GIT_AUTHOR_EMAIL="$email" -e GIT_COMMITTER_EMAIL="$email" \
-  -e ANTHROPIC_API_KEY -e OPENAI_API_KEY -e TASKFORGE_OPENAI_API_KEY \
+  -e ANTHROPIC_API_KEY -e OPENAI_API_KEY -e TASKFORGE_OPENAI_API_KEY -e TASKFORGE_OPENAI_BASE_URL \
   "$image" "$@"

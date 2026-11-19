@@ -68,3 +68,19 @@ jobs:
           name: coverage
           path: coverage/lcov.info
           if-no-files-found: ignore
+
+      - name: CLI selftest (--fake)
+        run: node apps/cli/dist/bin.js selftest --fake
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build TaskForge container image
+        run: docker build -t taskforge:ci .
+
+      - name: Verify tf binary and selftest inside Linux container
+        run: |
+          docker run --rm taskforge:ci --version
+          docker run --rm taskforge:ci selftest --fake
