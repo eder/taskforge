@@ -2,10 +2,12 @@ import * as path from 'node:path';
 import { Command } from 'commander';
 import {
   loadConfig,
+  resolveOpenAIApiKey,
   getGlobalStateDatabasePath,
   TASKFORGE_VERSION,
   parseTokenCount,
   markSecurityNoticeShown,
+  type TaskForgeConfig,
 } from '@taskforge/shared';
 import { ProcessRunner } from '@taskforge/execution';
 import {
@@ -35,14 +37,26 @@ import {
   hasProjectConfig,
   PROJECT_CONFIG_RELATIVE_PATH,
 } from '@taskforge/workspace';
-import { AgentRegistry, AgentDetector, FakeAgent, AgentQuotaTracker } from '@taskforge/agents';
+import {
+  AgentRegistry,
+  AgentDetector,
+  FakeAgent,
+  AgentQuotaTracker,
+  createAgentModelCaller,
+} from '@taskforge/agents';
+import { SemanticPlanner } from '@taskforge/planner';
+import {
+  OpenAIRoutingProvider,
+  AdaptiveRoutingProvider,
+  StaticRoutingProvider,
+  type RoutingProvider,
+} from '@taskforge/router';
 import { TaskGraph, Task } from '@taskforge/core';
-import { VerificationRunner, verificationEnvPolicy } from '@taskforge/verification';
+import { VerificationRunner } from '@taskforge/verification';
 import {
   IntegrationService,
   GitHubWorkflowService,
   DeliveryService,
-  integrationBranchName,
 } from '@taskforge/integration';
 import {
   DeterministicScheduler,
@@ -58,7 +72,7 @@ import {
   repairRun,
 } from '@taskforge/scheduler';
 import { InteractiveShell, TuiDashboard, runDashStream, theme, colors, summarizeGoal } from '@taskforge/conversation';
-import { TelemetryCollector, computeInsights, formatInsights } from '@taskforge/telemetry';
+import { TelemetryCollector, PerformanceEngine, computeInsights, formatInsights } from '@taskforge/telemetry';
 import { runSetup } from './setup.js';
 import { runSelftest } from './selftest.js';
 import { isRunningInContainer } from './isolation.js';
@@ -93,6 +107,48 @@ export function installGracefulAbort(label: string): { signal: AbortSignal; disp
       process.removeListener('SIGTERM', onTerm);
     },
   };
+}
+
+const AGENT_PLANNING_TIMEOUT_MS = 180_000;
+
+/**
+ * Builds the same semantic planner and router stack the interactive REPL uses,
+ * so headless `tf run` / `tf issue` split multi-area goals into real parallel
+ * tasks (using OpenAI or agent-backed planning) instead of falling back to the
+ * 2-task serial HeuristicPlanner. Skipped in `--fake` mode to stay offline.
+ */
+export function buildHeadlessPlannerAndRouter(
+  repoRoot: string,
+  config: TaskForgeConfig,
+  options: { fake?: boolean; db?: TaskForgeDatabase } = {},
+): {
+  agentRegistry?: AgentRegistry;
+  planner?: SemanticPlanner;
+  router?: RoutingProvider;
+} {
+  if (options.fake) return {};
+  const agentRegistry = new AgentRegistry(true, config.agents);
+  const openaiApiKey = resolveOpenAIApiKey(config);
+  const planner = new SemanticPlanner({
+    apiKey: openaiApiKey,
+    model: process.env.PLANNER_MODEL || config.router.model || 'gpt-4o-mini',
+    timeoutMs: (config.router.timeoutSeconds ?? 60) * 1000,
+    maxTasks: config.planner?.maxTasks,
+    agentPlanning: config.planner?.agentPlanning,
+    agentCaller: createAgentModelCaller(agentRegistry, {
+      cwd: repoRoot,
+      timeoutMs: AGENT_PLANNING_TIMEOUT_MS,
+    }),
+  });
+  let router: RoutingProvider;
+  if (config.router.adaptive && options.db) {
+    router = new AdaptiveRoutingProvider(new PerformanceEngine(options.db));
+  } else if (config.router.provider === 'openai' && openaiApiKey) {
+    router = new OpenAIRoutingProvider(openaiApiKey, config.router.model, 15000);
+  } else {
+    router = new StaticRoutingProvider();
+  }
+  return { agentRegistry, planner, router };
 }
 
 /** Shown by every command that needs a repository. */
@@ -905,6 +961,7 @@ export function createCli(): Command {
         repoRoot,
         config,
         gitService,
+        ...buildHeadlessPlannerAndRouter(repoRoot, config, { fake: options?.fake }),
       });
 
       let priorContext: { runId: string; text: string; chars: number } | undefined;
@@ -1348,6 +1405,7 @@ export function createCli(): Command {
           config,
           database: db,
           availabilityDatabase: availabilityDb,
+          ...buildHeadlessPlannerAndRouter(repoRoot, config, { fake: options?.fake, db }),
         });
 
         const result = await orchestrator.run(issue.goalText, {

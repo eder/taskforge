@@ -551,9 +551,11 @@ export class DeterministicScheduler {
       this.ctx.graph.updateTaskStatus(task.id, 'reassigned');
       this.ctx.taskRepo.updateStatus(task.id, 'reassigned');
       this.ctx.onProgress?.(
-        failureClass === 'provider_quota'
-          ? `[${task.id}] ↻ Provider unavailable/quota-limited: reassigning without consuming implementation rework budget.`
-          : `[${task.id}] ↻ Recovery ${rework}/${this.ctx.config.verification.maxReworkCycles}: reassigning with failure evidence.`,
+        failureClass === 'provider_auth'
+          ? `[${task.id}] ↻ Agent authentication failed: reassigning without consuming implementation rework budget.`
+          : failureClass === 'provider_quota'
+            ? `[${task.id}] ↻ Provider unavailable/quota-limited: reassigning without consuming implementation rework budget.`
+            : `[${task.id}] ↻ Recovery ${rework}/${this.ctx.config.verification.maxReworkCycles}: reassigning with failure evidence.`,
       );
     } else {
       this.ctx.graph.updateTaskStatus(task.id, 'retrying');
@@ -1083,12 +1085,16 @@ export class DeterministicScheduler {
               ? `[${task.id}] ✗ Task is BLOCKED: no healthy agent is authorized for scope ${task.contract.allowedScope.join(', ')}. Allowed writers: ${allowedWriters.size > 0 ? [...allowedWriters].join(', ') : '(none after policy intersection)'}.`
               : `[${task.id}] ✗ No healthy coding agent is currently available; task will not be sent to a known-unavailable provider.`,
           );
+          const lastIncident = this.recoveryIncidentsByTask.get(task.id)?.slice(-1)[0];
+          const unavailableReason = lastIncident
+            ? `${lastIncident.reason} (no other healthy coding agent was available)`
+            : 'No healthy coding agent was available (all unavailable or out of quota)';
           this.noteTaskFailure(
             task,
             'staffing',
             ownershipBlocked
               ? `No healthy agent is authorized to write ${task.contract.allowedScope.join(', ')} (ownership policy)`
-              : 'No healthy coding agent was available (all unavailable or out of quota)',
+              : unavailableReason,
           );
           graph.updateTaskStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
           this.ctx.taskRepo.updateStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
