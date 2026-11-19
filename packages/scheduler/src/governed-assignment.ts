@@ -97,12 +97,14 @@ export async function executeGovernedAssignment(
   if (quotaInfo.status !== 'ready') {
     const resetAt = quotaInfo.resetAt?.toISOString();
     const reason = quotaInfo.reason ?? quotaInfo.status;
+    const completionReason =
+      quotaInfo.status === 'auth_failed' ? 'PROVIDER_AUTH_FAILED' : 'PROVIDER_QUOTA_EXCEEDED';
     ctx.assignmentRepo.updateStatus(
       assignment.id,
       'failed',
       undefined,
       undefined,
-      'PROVIDER_QUOTA_EXCEEDED',
+      completionReason,
     );
     ctx.eventRepo.append({
       id: `evt-${randomUUID()}`,
@@ -123,7 +125,7 @@ export async function executeGovernedAssignment(
       message: `Provider unavailable before execution: ${reason}${resetAt ? ` (resets ${resetAt})` : ''}`,
       durationMs: 0,
       worktreePath: ctx.repoRoot,
-      completionReason: 'PROVIDER_QUOTA_EXCEEDED',
+      completionReason,
     };
   }
 

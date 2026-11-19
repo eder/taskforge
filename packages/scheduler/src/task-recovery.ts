@@ -8,6 +8,7 @@ export type RecoveryPhase =
 export type RecoveryFailureClass =
   | 'code_or_test'
   | 'provider_quota'
+  | 'provider_auth'
   | 'verification_configuration'
   | 'environment'
   | 'policy';
@@ -77,7 +78,7 @@ export function decideTaskRecovery(
     return { action: 'block', attempt: reworkCount, retriesRemaining };
   }
 
-  if (failureClass === 'provider_quota') {
+  if (failureClass === 'provider_quota' || failureClass === 'provider_auth') {
     return { action: 'reassign', attempt: reworkCount, retriesRemaining };
   }
 
@@ -132,6 +133,7 @@ export function classifyExecutionFailure(
   evidence?: string,
 ): RecoveryFailureClass {
   if (completionReason === 'PROVIDER_QUOTA_EXCEEDED') return 'provider_quota';
+  if (completionReason === 'PROVIDER_AUTH_FAILED') return 'provider_auth';
   const text = `${completionReason ?? ''}\n${evidence ?? ''}`;
   return looksLikeEnvironmentFailure(text) ? 'environment' : 'code_or_test';
 }
@@ -147,6 +149,7 @@ const COMPLETION_MESSAGES: Record<string, string> = {
   VERIFICATION_FAILED: 'The change failed automated verification.',
   ACCEPTANCE_NOT_MET: "The result did not meet the task's acceptance criteria.",
   PROVIDER_QUOTA_EXCEEDED: 'The provider ran out of quota.',
+  PROVIDER_AUTH_FAILED: 'The agent is not authenticated with its provider.',
 };
 
 /** Plain-language reason for a completion-gate code (the code itself means nothing to a user). */

@@ -12,7 +12,7 @@ import { ProcessRunner } from '@taskforge/execution';
 import { GitService } from '@taskforge/workspace';
 import { AgentAdapter } from './adapter-interface.js';
 import type { StructuredQueryRequest } from './structured-output.js';
-import { AgentQuotaTracker } from './quota-tracker.js';
+import { AgentQuotaTracker, looksLikeAuthFailure } from './quota-tracker.js';
 import { RealCliAgentSession } from './agent-session.js';
 import { parseAgentStreamEvents } from './stream-event-parser.js';
 import { usageFromObject } from './usage-extraction.js';
@@ -959,21 +959,21 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       return { message, completionReason: 'PROVIDER_QUOTA_EXCEEDED' };
     }
 
-    const authPattern = /oauth|authenticate|authentication|api[ _-]?key|unauthorized|forbidden/i;
-    const isAuthError =
-      outcome.errors.some((e) => authPattern.test(e)) || authPattern.test(rawStderr || rawStdout);
+    const authErrorLine = outcome.errors.find((e) => looksLikeAuthFailure(e));
+    const combinedOutput = [rawStderr, rawStdout].filter(Boolean).join('\n');
+    const isAuthError = Boolean(authErrorLine) || looksLikeAuthFailure(combinedOutput);
 
     if (isAuthError) {
-      const authErr = (
-        outcome.errors.find((e) => authPattern.test(e)) ||
-        rawStderr ||
-        rawStdout
-      )
-        .trim()
-        .split('\n')[0];
+      const source = authErrorLine || rawStderr || rawStdout;
+      const authErr =
+        source
+          .trim()
+          .split('\n')
+          .find((line) => looksLikeAuthFailure(line))
+          ?.trim() || source.trim().split('\n')[0];
       return {
         message: `${this.name} authentication failed: ${authErr}`,
-        completionReason: 'HARNESS_FAILED',
+        completionReason: 'PROVIDER_AUTH_FAILED',
       };
     }
 

@@ -58,6 +58,8 @@ const AUTH_FAILURE_WINDOW_CHARS = 4000;
 const AUTH_FAILURE_PATTERNS = [
   /failed to authenticate/,
   /oauth session expired/,
+  /oauth[_ ]org[_ ]not[_ ]allowed/,
+  /disabled [^\n]{0,40}subscription access/,
   /authentication[_ ]failed/,
   /authentication_error/,
   /invalid[ _]api[ _-]?key/,
