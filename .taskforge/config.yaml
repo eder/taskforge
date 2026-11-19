@@ -4,8 +4,8 @@
 # 1. Router Configuration (OpenAI Structured Outputs or Heuristic Fallback)
 router:
   provider: openai # 'openai' or 'static'
-  model: gpt-4o # Model name (e.g. gpt-4o, gpt-4o-mini, gpt-5.6-luna)
-  escalationModel: gpt-5.6-terra # Escalation model for high uncertainty tasks
+  model: gpt-4o-mini # Model name (e.g. gpt-4o-mini, gpt-4o)
+  escalationModel: gpt-4o # Escalation model for high uncertainty tasks
   fallback: static # Resilient fallback if OpenAI is unavailable
   adaptive: false # Enable historical performance-based adaptive routing
 

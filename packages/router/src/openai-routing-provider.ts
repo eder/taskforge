@@ -159,7 +159,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
 
   constructor(
     private apiKey?: string,
-    private model: string = 'gpt-5.6-luna',
+    private model: string = 'gpt-4o-mini',
     private timeoutMs: number = 15000,
     options: { performanceEngine?: PerformanceEngine; baseUrl?: string } = {},
   ) {

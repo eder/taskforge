@@ -77,8 +77,8 @@ export const TaskForgeConfigSchema = z.object({
   router: z
     .object({
       provider: z.enum(['openai', 'static', 'adaptive']).default('openai'),
-      model: z.string().default('gpt-5.6-luna'),
-      escalationModel: z.string().default('gpt-5.6-terra'),
+      model: z.string().default('gpt-4o-mini'),
+      escalationModel: z.string().default('gpt-4o'),
       fallback: z.enum(['static']).default('static'),
       adaptive: z.boolean().default(false),
       apiKey: z.string().optional(),
@@ -89,8 +89,8 @@ export const TaskForgeConfigSchema = z.object({
     })
     .default({
       provider: 'openai',
-      model: 'gpt-5.6-luna',
-      escalationModel: 'gpt-5.6-terra',
+      model: 'gpt-4o-mini',
+      escalationModel: 'gpt-4o',
       fallback: 'static',
       adaptive: false,
     }),

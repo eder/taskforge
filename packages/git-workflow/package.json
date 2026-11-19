@@ -1,6 +1,6 @@
 {
   "name": "@taskforge/git-workflow",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "description": "TaskForge git-workflow package.",
   "license": "MIT",
   "type": "module",

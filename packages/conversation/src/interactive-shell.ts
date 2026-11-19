@@ -1559,7 +1559,7 @@ export class InteractiveShell {
         const plannerSource = plannerSourceLabel(plannerMeta, graphMetadata);
         const routerSource = routerSourceLabel(
           routing,
-          this.config.router.model || 'gpt-5.6-luna',
+          this.config.router.model || 'gpt-4o-mini',
           lightweightFastPath,
         );
         const policyBadge = (routing as any).policyAdjustment

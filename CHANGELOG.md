@@ -7,12 +7,22 @@ All workspace packages are released in lockstep under a single version.
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-11-19
+
+First release candidate for 1.0. Published under the `beta` npm dist-tag while the real-agent pilot checklist (`docs/pilot.md`) and 1.0 criteria (`docs/release-criteria-1.0.md`) are validated.
+
 ### Changed
+- **Default OpenAI router/planner models are now real models.** `router.model` defaults to `gpt-4o-mini` and `router.escalationModel` defaults to `gpt-4o` (previously placeholder IDs `gpt-5.6-luna` / `gpt-5.6-terra`). Existing `CostEstimator` pricing entries for the previous names are kept for historical telemetry records.
 - **Independent tasks use every idle agent.** When the agent chosen for a task was already busy, the task waited for it even though other healthy agents were idle, so tasks that all preferred the same agent ran one after another. The scheduler now moves such a task to an idle agent that is healthy, has not failed that task and is allowed to write its scope by the ownership policy, and reports `X is busy; running it on Y`. Token use per task is unchanged; wall-clock time of a plan with independent tasks drops. A test with three independent tasks and three agents all preferring one of them went from a peak of 1 concurrent agent to 3.
 - **Independent parts of a plan run at the same time.** The planner is asked to split a change that covers parts touching different files (storage, domain rules, HTTP layer) into separate tasks with non-overlapping `allowedScope` and no dependency between them, and never to split work that edits the same files. Behind that request is a deterministic check: two tasks that change files, that nothing orders yet and whose writable scopes may overlap are run one after the other (`PLAN_PARALLELISM_LIMITED` event). The proposal says how many tasks run at once and that tokens add up.
 - **Cheaper defaults (profiles).** Loading a project's config now applies `execution.profile` (default `economy`): one agent per task and a 1,000,000-token cap, instead of up to three agents and 2,000,000. `standard` (2 agents, 2M) and `thorough` (3 agents, 4M) are opt-in; anything set explicitly wins. Teams were the main cost on a real project (2.7M tokens on a single task). When a team is cut to the cap the implementer is kept, then a reviewer (previously the first roles in the router's list, which could drop the implementer), and the plan proposal shows the capped team.
 - **Plans are asked to be small.** The planner prompt now asks for 2 to 5 tasks with tests and docs inside the task that changes the code, and a plan over `planner.maxTasks` (default 6) is sent back to be combined.
 - **Reviewers get the diff.** A reviewer is handed the diff of the change and told not to run the full test suite, instead of exploring the repository (a real review cost about a million tokens and ended up judging the project rather than the change).
+- Agent sessions are no longer left on disk: the Claude adapter passes `--no-session-persistence` and the Codex adapter `--ephemeral`, since TaskForge never resumes provider sessions (hundreds of stray sessions had piled up in `~/.claude/projects`). Override `defaultArgs` for an agent in `.taskforge/config.yaml` if you want them kept.
+- `agents.<id>.enabled: false` is now honored for every harness.
+- Large modules were split without API changes: `@taskforge/persistence` repositories, `@taskforge/agents` adapters, and the REPL's pure helpers/formatters.
+- The CLI and REPL banner read the version from a single source (`TASKFORGE_VERSION`).
+- Packages declare npm publish metadata (`files`, `license`, `repository`, `publishConfig`).
 
 ### Added
 - **`tf insights` shows where the time went.** For finished runs that used a real agent, the wall-clock time is split into agents working, checks running and TaskForge's own steps (preflight, routing, worktrees, integration, waiting), plus the average time before the first agent starts and after the last one finishes. Slices do not overlap (parallel agents count once). It uses what is already recorded, so older runs are included; planning happens before a run starts and is not part of it.
@@ -160,13 +170,6 @@ All workspace packages are released in lockstep under a single version.
 - A task completed after a recovery retry could fail to integrate: the retry's commit only holds the delta against the previous candidate and conflicted when cherry-picked alone. The attempt chain is now integrated as one commit.
 - `tf cleanup` (and orphan cleanup) removed every linked git worktree in the repository, including ones the user created. They now only touch worktrees under the configured TaskForge worktrees directory.
 - Agents received every provider's credentials plus TaskForge's own router key and `SSH_AUTH_SOCK`. Each agent now gets only its provider's variables (**breaking** for setups that relied on an agent using SSH agent forwarding; use `passEnv`).
-
-### Changed
-- Agent sessions are no longer left on disk: the Claude adapter passes `--no-session-persistence` and the Codex adapter `--ephemeral`, since TaskForge never resumes provider sessions (hundreds of stray sessions had piled up in `~/.claude/projects`). Override `defaultArgs` for an agent in `.taskforge/config.yaml` if you want them kept.
-- `agents.<id>.enabled: false` is now honored for every harness.
-- Large modules were split without API changes: `@taskforge/persistence` repositories, `@taskforge/agents` adapters, and the REPL's pure helpers/formatters.
-- The CLI and REPL banner read the version from a single source (`TASKFORGE_VERSION`).
-- Packages declare npm publish metadata (`files`, `license`, `repository`, `publishConfig`).
 
 ## [0.1.0]
 
