@@ -82,6 +82,8 @@ export const TaskForgeConfigSchema = z.object({
       fallback: z.enum(['static']).default('static'),
       adaptive: z.boolean().default(false),
       apiKey: z.string().optional(),
+      /** Optional OpenAI-compatible endpoint (e.g. http://localhost:3001/v1 for FreeLLMAPI). */
+      baseUrl: z.string().url().optional(),
       /** How long the planner waits for the model before falling back to a simpler plan. */
       timeoutSeconds: z.number().int().positive().default(60),
     })
@@ -373,6 +375,37 @@ export function getGlobalStateDatabasePath(): string {
   return path.resolve(os.homedir(), '.taskforge/state.db');
 }
 
+export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+
+/** Validate an explicitly trusted API endpoint before forwarding bearer credentials. */
+export function normalizeOpenAIBaseUrl(raw: string): string {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(raw);
+  } catch {
+    throw new ConfigurationError('Invalid router.baseUrl: expected an absolute http(s) URL');
+  }
+  if (
+    !['http:', 'https:'].includes(endpoint.protocol) ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.search ||
+    endpoint.hash
+  ) {
+    throw new ConfigurationError('Invalid router.baseUrl: use http(s) without credentials, query or fragment');
+  }
+  return endpoint.toString().replace(/\/+$/, '');
+}
+
+/** Explicit override first; do not inherit an unrelated SDK's OPENAI_BASE_URL. */
+export function resolveOpenAIBaseUrl(config?: TaskForgeConfig): string {
+  return normalizeOpenAIBaseUrl(
+    process.env.TASKFORGE_OPENAI_BASE_URL?.trim() ||
+      config?.router.baseUrl?.trim() ||
+      DEFAULT_OPENAI_BASE_URL,
+  );
+}
+
 export function resolveOpenAIApiKey(config?: TaskForgeConfig): string | undefined {
   if (process.env.TASKFORGE_OPENAI_API_KEY && process.env.TASKFORGE_OPENAI_API_KEY.trim().length > 0) {
     return process.env.TASKFORGE_OPENAI_API_KEY.trim();
@@ -380,6 +413,9 @@ export function resolveOpenAIApiKey(config?: TaskForgeConfig): string | undefine
   if (config?.router?.apiKey && config.router.apiKey.trim().length > 0) {
     return config.router.apiKey.trim();
   }
+  // Never forward a global OpenAI key to a custom gateway just because a base URL
+  // changed. A gateway must have its own explicitly configured credential.
+  if (resolveOpenAIBaseUrl(config) !== DEFAULT_OPENAI_BASE_URL) return undefined;
   if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0) {
     return process.env.OPENAI_API_KEY.trim();
   }

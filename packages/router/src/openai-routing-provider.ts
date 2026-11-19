@@ -10,6 +10,7 @@ import {
 import { StaticRoutingProvider } from './static-routing-provider.js';
 import { RouterQualityGuard } from './quality-guard.js';
 import { AgentQuotaTracker } from '@taskforge/agents';
+import { DEFAULT_OPENAI_BASE_URL, normalizeOpenAIBaseUrl } from '@taskforge/shared';
 
 export const RoleRequestSchema = z.object({
   role: z.enum([
@@ -154,18 +155,22 @@ export class OpenAIRoutingProvider implements RoutingProvider {
   private fallbackProvider = new StaticRoutingProvider();
   private failureCooldown?: { reason: RouterFallbackReason; until: number };
   private readonly failureCooldownMs = 30_000;
+  private readonly baseUrl: string;
 
   constructor(
     private apiKey?: string,
     private model: string = 'gpt-5.6-luna',
     private timeoutMs: number = 15000,
-    options: { performanceEngine?: PerformanceEngine } = {},
+    options: { performanceEngine?: PerformanceEngine; baseUrl?: string } = {},
   ) {
     void options.performanceEngine; // retained for API compatibility; history is observational, not selection input.
+    this.baseUrl = normalizeOpenAIBaseUrl(
+      options.baseUrl ?? process.env.TASKFORGE_OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE_URL,
+    );
     if (this.apiKey === undefined) {
       this.apiKey =
         process.env.TASKFORGE_OPENAI_API_KEY ||
-        process.env.OPENAI_API_KEY;
+        (this.baseUrl === DEFAULT_OPENAI_BASE_URL ? process.env.OPENAI_API_KEY : undefined);
     }
   }
 
@@ -200,7 +205,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
         try {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 2000);
-          const res = await fetch('https://api.openai.com/v1/models', {
+          const res = await fetch(`${this.baseUrl}/models`, {
             method: 'GET',
             headers: { Authorization: `Bearer ${this.apiKey}` },
             signal: controller.signal,
@@ -241,7 +246,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
       provider: this.id,
       model: this.model,
       adaptive: false,
-      details: `OpenAI routing active with model ${this.model}`,
+      details: `OpenAI-compatible routing active with model ${this.model}`,
     };
   }
 
@@ -280,7 +285,7 @@ export class OpenAIRoutingProvider implements RoutingProvider {
       const healthyAgents = input.availableAgents.filter((id) => quotaTracker.isAvailable(id));
       const agentsForRouting = healthyAgents.length > 0 ? healthyAgents : input.availableAgents;
 
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

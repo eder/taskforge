@@ -5,6 +5,9 @@ import {
   getDefaultConfig,
   TaskForgeConfigSchema,
   getGlobalStateDatabasePath,
+  resolveOpenAIBaseUrl,
+  resolveOpenAIApiKey,
+  normalizeOpenAIBaseUrl,
 } from '../src/config.js';
 import { ConfigurationError, TaskForgeError } from '../src/errors.js';
 
@@ -27,6 +30,40 @@ describe('Shared - Config', () => {
     expect(custom.router.provider).toBe('openai');
     expect(custom.router.apiKey).toBe('sk-custom-key');
     expect(custom.verification.lint).toBe(true); // defaults retained
+  });
+
+  it('normalizes gateway endpoints and rejects credential-bearing URLs', () => {
+    expect(normalizeOpenAIBaseUrl('http://localhost:3001/v1/')).toBe('http://localhost:3001/v1');
+    expect(() => normalizeOpenAIBaseUrl('ftp://localhost/v1')).toThrow();
+    expect(() => normalizeOpenAIBaseUrl('https://u:p@example.com/v1')).toThrow();
+    expect(() => normalizeOpenAIBaseUrl('https://example.com/v1?key=x')).toThrow();
+  });
+
+  it('uses a configured gateway URL and isolates the global OpenAI API key', () => {
+    const beforeUrl = process.env.TASKFORGE_OPENAI_BASE_URL;
+    const beforeDedicatedKey = process.env.TASKFORGE_OPENAI_API_KEY;
+    const beforeGlobalKey = process.env.OPENAI_API_KEY;
+    try {
+      delete process.env.TASKFORGE_OPENAI_BASE_URL;
+      delete process.env.TASKFORGE_OPENAI_API_KEY;
+      process.env.OPENAI_API_KEY = 'sk-global-should-not-leak';
+      const config = TaskForgeConfigSchema.parse({
+        router: { baseUrl: 'http://localhost:3001/v1', model: 'auto' },
+      });
+      expect(resolveOpenAIBaseUrl(config)).toBe('http://localhost:3001/v1');
+      expect(resolveOpenAIApiKey(config)).toBeUndefined();
+      process.env.TASKFORGE_OPENAI_API_KEY = 'freellmapi-dedicated-key';
+      expect(resolveOpenAIApiKey(config)).toBe('freellmapi-dedicated-key');
+      process.env.TASKFORGE_OPENAI_BASE_URL = 'http://127.0.0.1:3210/v1/';
+      expect(resolveOpenAIBaseUrl(config)).toBe('http://127.0.0.1:3210/v1');
+    } finally {
+      if (beforeUrl === undefined) delete process.env.TASKFORGE_OPENAI_BASE_URL;
+      else process.env.TASKFORGE_OPENAI_BASE_URL = beforeUrl;
+      if (beforeDedicatedKey === undefined) delete process.env.TASKFORGE_OPENAI_API_KEY;
+      else process.env.TASKFORGE_OPENAI_API_KEY = beforeDedicatedKey;
+      if (beforeGlobalKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = beforeGlobalKey;
+    }
   });
 
   it('resolveOpenAIApiKey prioritizes TASKFORGE_OPENAI_API_KEY over config and OPENAI_API_KEY', async () => {
