@@ -111,10 +111,22 @@ export class TelemetryCollector {
       return 'Tokens: no usage was reported by the agents, so the cost of this run is unknown.';
     }
     const fmt = (n: number) => n.toLocaleString('en-US');
-    const parts = [`Tokens used: ${fmt(report.totalTokens)} (~$${report.totalCostUsd.toFixed(2)})`];
+    const hasCache = report.totalCachedInputTokens > 0;
+    const freshTokens =
+      Math.max(0, report.totalInputTokens - report.totalCachedInputTokens) +
+      report.totalOutputTokens;
+    const parts = [
+      hasCache
+        ? `Tokens used: ${fmt(report.totalTokens)} (${fmt(freshTokens)} fresh, ${fmt(report.totalCachedInputTokens)} cached, ~$${report.totalCostUsd.toFixed(2)})`
+        : `Tokens used: ${fmt(report.totalTokens)} (~$${report.totalCostUsd.toFixed(2)})`,
+    ];
     if (budget) parts.push(`${Math.round((report.totalTokens / budget) * 100)}% of the ${fmt(budget)} budget`);
     if (report.totalPlannedEstimatedTokens > 0) {
-      parts.push(`the plan estimated ~${fmt(report.totalPlannedEstimatedTokens)}`);
+      parts.push(
+        hasCache
+          ? `the plan estimated ~${fmt(report.totalPlannedEstimatedTokens)} fresh`
+          : `the plan estimated ~${fmt(report.totalPlannedEstimatedTokens)}`,
+      );
     }
     const byTask = new Map<string, number>();
     for (const b of report.breakdown) byTask.set(b.taskId, (byTask.get(b.taskId) ?? 0) + b.totalTokens);

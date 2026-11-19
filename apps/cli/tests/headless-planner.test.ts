@@ -46,6 +46,49 @@ describe('headless planner and router wiring', () => {
     config.router.apiKey = 'sk-test-headless';
     expect(buildHeadlessPlannerAndRouter(process.cwd(), config, { fake: true })).toEqual({});
   });
+
+  it('forwards custom router.baseUrl to SemanticPlanner and OpenAIRoutingProvider without leaking OPENAI_API_KEY', () => {
+    const prevTfKey = process.env.TASKFORGE_OPENAI_API_KEY;
+    const prevOaiKey = process.env.OPENAI_API_KEY;
+    const prevBaseUrl = process.env.TASKFORGE_OPENAI_BASE_URL;
+    delete process.env.TASKFORGE_OPENAI_API_KEY;
+    delete process.env.TASKFORGE_OPENAI_BASE_URL;
+    process.env.OPENAI_API_KEY = 'sk-host-should-not-leak';
+    try {
+      const noKeyConfig = getDefaultConfig();
+      noKeyConfig.router.provider = 'openai';
+      noKeyConfig.router.baseUrl = 'http://localhost:3001/v1/';
+      const withoutGatewayKey = buildHeadlessPlannerAndRouter(process.cwd(), noKeyConfig, {
+        fake: false,
+      });
+      expect(withoutGatewayKey.router).toBeInstanceOf(StaticRoutingProvider);
+      expect((withoutGatewayKey.planner as unknown as { baseUrl: string }).baseUrl).toBe(
+        'http://localhost:3001/v1',
+      );
+
+      const withKeyConfig = getDefaultConfig();
+      withKeyConfig.router.provider = 'openai';
+      withKeyConfig.router.baseUrl = 'http://localhost:3001/v1/';
+      withKeyConfig.router.apiKey = 'gw-key-123';
+      const withGatewayKey = buildHeadlessPlannerAndRouter(process.cwd(), withKeyConfig, {
+        fake: false,
+      });
+      expect(withGatewayKey.router).toBeInstanceOf(OpenAIRoutingProvider);
+      expect((withGatewayKey.router as unknown as { baseUrl: string }).baseUrl).toBe(
+        'http://localhost:3001/v1',
+      );
+      expect((withGatewayKey.planner as unknown as { baseUrl: string }).baseUrl).toBe(
+        'http://localhost:3001/v1',
+      );
+    } finally {
+      if (prevTfKey === undefined) delete process.env.TASKFORGE_OPENAI_API_KEY;
+      else process.env.TASKFORGE_OPENAI_API_KEY = prevTfKey;
+      if (prevOaiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevOaiKey;
+      if (prevBaseUrl === undefined) delete process.env.TASKFORGE_OPENAI_BASE_URL;
+      else process.env.TASKFORGE_OPENAI_BASE_URL = prevBaseUrl;
+    }
+  });
 });
 
 describe('RunOrchestrator passes RepositoryProfile with repositoryMap to planner', () => {

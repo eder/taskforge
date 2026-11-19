@@ -177,6 +177,11 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
       expect(formatted).toContain('Provider footprint: 202,000 total');
       expect(formatted).toContain('Fresh-work tokens: 7,000');
       expect(formatted).toContain('context-sensitive, not a direct efficiency ratio');
+
+      const spendLine = collector.formatSpendLine(runId, 1_000_000);
+      expect(spendLine).toContain('Tokens used: 202,000 (7,000 fresh, 195,000 cached');
+      expect(spendLine).toContain('20% of the 1,000,000 budget');
+      expect(spendLine).toContain('the plan estimated ~7,000 fresh');
     });
 
     it('reports heavy provider token work observationally without downgrading a clean orchestration run', () => {

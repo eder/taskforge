@@ -76,8 +76,14 @@ Enable `verification.dualReview` with a sensitive scope and run a task in it. Pa
 TaskForge exists to get several agents working at once, cheaper and faster than one agent working alone. Steps 1-8 check that it is safe; this step checks that it pays off. Run it on 3 to 5 real tasks that touch more than one area of the project (for example storage + HTTP layer), and once with `execution.profile: economy` (the default). Replace `<db>` with `.taskforge/taskforge.db` (the `execution.databasePath` of the project).
 
 ```bash
-# Tokens the agents used, per run
-sqlite3 <db> "SELECT run_id, sum(total_tokens) AS tokens FROM cost_tracking GROUP BY run_id ORDER BY rowid DESC LIMIT 10;"
+# Tokens the agents used, per run (fresh vs cached vs plan estimate)
+sqlite3 -header -column <db> "SELECT run_id,
+  sum(input_tokens - cached_input_tokens + output_tokens) AS fresh_tokens,
+  sum(cached_input_tokens) AS cached_tokens,
+  sum(total_tokens) AS total_tokens,
+  sum(planned_estimated_tokens) AS est_fresh,
+  round(1.0 * sum(input_tokens - cached_input_tokens + output_tokens) / nullif(sum(planned_estimated_tokens), 0), 2) AS fresh_vs_est
+  FROM cost_tracking GROUP BY run_id ORDER BY rowid DESC LIMIT 10;"
 
 # Parallelism achieved: agent-seconds divided by wall-clock seconds (1.0 = no overlap)
 sqlite3 <db> "SELECT run_id,
@@ -109,8 +115,8 @@ Recorded on **`v1.0.0-rc.1`** (macOS, Node.js `v24.14.1`, `execution.profile: ec
 
 | Step | Agent(s) | Pass? | Notes / run id |
 | --- | --- | --- | --- |
-| 1 Read-only | `agy` | Pass | `run-1795059749444336` — `49.5s`, `23,612` tokens (est. `20,633`), `git status` clean, `0` `MUTATION_BLOCKED` events. |
-| 2 Small implementation | `codex` | Pass | `run-1795059816855542` — `37.2s`, `215,704` tokens (est. `44,542`), base branch untouched before `tf apply`, merged cleanly (`4bdaca0`), `4/4` tests pass. |
+| 1 Read-only | `agy` | Pass | `run-1795059749444336` — `49.5s`, `23,612` fresh / `0` cached (est. `20,633`, **1.14×**), `git status` clean, `0` `MUTATION_BLOCKED` events. |
+| 2 Small implementation | `codex` | Pass | `run-1795059816855542` — `37.2s`, `40,600` fresh + `175,104` cached = `215,704` total (est. `44,542` fresh, **0.91×**), base branch untouched before `tf apply`, merged cleanly (`4bdaca0`), `4/4` tests pass. |
 | 3 Scope enforcement | `agy`, `codex` | Pass | `run-1795059894416568` (`agy`), `run-1795059950194008` (`codex`) — both agents respected `allowedScope: ['src/storage/**']`, refused stray edits in `src/http/router.js` / `tests/app.test.js`, integrated only `src/storage/store.js`. |
 | 4 Failure handling | `codex`, `agy` | Pass | 4a (`run-1795060004291685`): `SIGKILL` mid-run on `codex` → failed (`exit 128`) → `Recovery 1/2` → completed (`37.8s`). 4b (`run-1795060059097377`, `agy`): verification failed → kept work on candidate branch → `Recovery 1/1` → `BLOCKED`, delivery disabled. Auth fail-fast also verified on signed-out `claude` (`oauth_org_not_allowed`, 1 attempt, `5.3s`). |
 | 5 Interrupt + resume | `codex` | Pass | `run-1795060145940098` — cancelled after task 1 integrated (`13.3s`); `tf resume` kept task 1 (1 execution only), ran tasks 2–3 on cumulative branch (`35.3s`), all 3 files in final diff. |
@@ -120,16 +126,16 @@ Recorded on **`v1.0.0-rc.1`** (macOS, Node.js `v24.14.1`, `execution.profile: ec
 
 Measurements (step 9):
 
-| Task | Areas touched | Tokens | Wall s | Parallelism | Serialized? | Single-agent tokens / wall s |
+| Task | Areas touched | Tokens (fresh / cached / total; vs est.) | Wall s | Parallelism | Serialized? | Single-agent tokens / wall s |
 | --- | --- | --- | --- | --- | --- | --- |
-| 9.1 `findBy` + `completeTask` + `GET /health` (`run-1795060469392871`) | `src/storage`, `src/domain`, `src/http` | 294,939 (`codex` ×2 + `agy` ×1) | 53.7s (`88.8s` agent) | **1.65x** | No (`0`) | — |
-| 9.2 `keys()` + `formatTaskSummary` (`run-1795060556786211`) | `src/storage`, `src/domain` | 243,797 (`codex`) | 44.9s (`44.5s` agent) | 0.99x (2-task serial plan) | No (`0`) | `270,780` / `43.7s` (`run-1795060615687534`, `--concurrency 1`) |
-| 9.3 `clear()` + `isValidPriority` + `DELETE /tasks/:id` (`run-1795060673089688`) | `src/storage`, `src/domain`, `src/http` | 302,831 (`codex` ×2 + `agy` ×1) | 90.3s (`131.5s` agent) | **1.46x** | No (`0`) | — |
+| 9.1 `findBy` + `completeTask` + `GET /health` (`run-1795060469392871`) | `src/storage`, `src/domain`, `src/http` | `70,171` fresh + `224,768` cached = `294,939` (`codex` ×2 + `agy` ×1; est. `76,396`, **0.92×**) | 53.7s (`88.8s` agent) | **1.65x** | No (`0`) | — |
+| 9.2 `keys()` + `formatTaskSummary` (`run-1795060556786211`) | `src/storage`, `src/domain` | `49,493` fresh + `194,304` cached = `243,797` (`codex`; est. `49,940`, **0.99×**) | 44.9s (`44.5s` agent) | 0.99x (2-task serial plan) | No (`0`) | `46,012` fresh / `270,780` total / `43.7s` (`run-1795060615687534`, `--concurrency 1`) |
+| 9.3 `clear()` + `isValidPriority` + `DELETE /tasks/:id` (`run-1795060673089688`) | `src/storage`, `src/domain`, `src/http` | `86,255` fresh + `216,576` cached = `302,831` (`codex` ×2 + `agy` ×1; est. `77,396`, **1.11×**) | 90.3s (`131.5s` agent) | **1.46x** | No (`0`) | — |
 
 Pilot findings & observations:
 - **Fixed during pilot:** headless `tf run` and `tf issue` previously did not pass `SemanticPlanner` / `OpenAIRoutingProvider` or `RepositoryProfile` (`repositoryMap`) to `RunOrchestrator`, causing headless runs to fall back to the 2-task serial `HeuristicPlanner` (`0.99x`). After wiring both, 3-area tasks split cleanly and reached **1.46x–1.65x** real parallelism across `codex` and `agy`.
-- **Token estimate gap on Codex:** Codex's reported `total_tokens` includes ~135k tokens per assignment (system/cached context), so actual reported tokens ran ~3.5x–4.8x above the initial cold-start plan estimate (`~76k` est. vs `~295k` actual on 3 tasks), whereas `agy` matched closely (`~20.6k` est. vs `23.6k` actual on Step 1; `18k` vs `27.5k` on `tf selftest`).
+- **Fresh tokens vs plan estimate (within 2× criterion):** separating `cached_input_tokens` from `fresh` work shows the plan estimator was accurate to **0.91×–1.14×** across every measured run (`codex` and `agy`). Codex's provider `total_tokens` includes ~85k–118k cached input tokens per assignment, which previously made `formatSpendLine` and `tf insights` look ~3.5×–4.8× off; both now surface fresh vs cached tokens explicitly when cache hits are present.
 - **`tf insights --since 7` summary across pilot repo (12 runs):** 92% completion (11/12; only intentional Step 4b failed), `agents working 91% / checks 0% / TaskForge overhead 9%`, `codex` 18/19 avg `19s`, `agy` 6/6 avg `50s`.
-- **Still open for 1.0 ([docs/release-criteria-1.0.md](release-criteria-1.0.md)):** `tf selftest` on Linux CI image, container pilot run by someone other than the author, and exercising the npm publish workflow with a pre-release tag (`v1.0.0-rc.1`).
+- **Still open for 1.0 ([docs/release-criteria-1.0.md](release-criteria-1.0.md)):** `tf selftest` with a real agent on Linux (pipeline `--fake` + Docker container smoke now run in CI on `ubuntu-latest`), container pilot run by someone other than the author, and exercising the npm publish workflow with a pre-release tag (`v1.0.0-rc.1`).
 
 A release candidate is ready for wider use when steps 1–7 pass with at least two different agents and no step produced an unreviewed change on your base branch.

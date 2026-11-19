@@ -86,8 +86,57 @@ describe('computeInsights', () => {
     expect(report.undoneRuns).toBe(1);
     expect(report.stopCauses[0]).toMatchObject({ cause: 'verification_configuration', count: 2 });
     expect(report.stopCauses.map((c) => c.cause)).toContain('token_budget');
-    expect(report.tokens).toMatchObject({ total: 4000, averagePerRun: 2000, runsWithUsage: 2 });
+    expect(report.tokens).toMatchObject({
+      total: 4000,
+      averagePerRun: 2000,
+      runsWithUsage: 2,
+      cachedInput: 0,
+      freshTotal: 4000,
+      freshAveragePerRun: 2000,
+    });
     expect(report.costUsd.total).toBeCloseTo(2);
+    db.close();
+  });
+
+  it('separates fresh work from cached prompt tokens in totals and per-agent insights', () => {
+    const { db, addRun } = setup();
+    addRun('run-cache', 'completed');
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO tasks (id, run_id, title, description, type, status, rework_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
+    ).run('T-cache', 'run-cache', 't', 't', 'implementation', 'integrated', now, now);
+    new CostRepository(db).record({
+      id: 'c-codex',
+      runId: 'run-cache',
+      taskId: 'T-cache',
+      agentId: 'codex',
+      modelName: 'codex',
+      inputTokens: 135_000,
+      cachedInputTokens: 110_000,
+      outputTokens: 1_000,
+      totalTokens: 136_000,
+      usageSource: 'provider_reported',
+      plannedEstimatedTokens: 25_000,
+      estimatedCostUsd: 0.35,
+    });
+
+    const report = computeInsights(db, { sinceDays: 30 });
+    expect(report.tokens).toMatchObject({
+      total: 136_000,
+      cachedInput: 110_000,
+      freshTotal: 26_000,
+      freshAveragePerRun: 26_000,
+    });
+    expect(report.agents[0]).toMatchObject({
+      agentId: 'codex',
+      tokens: 136_000,
+      cachedInputTokens: 110_000,
+      freshTokens: 26_000,
+    });
+
+    const text = formatInsights(report).join('\n');
+    expect(text).toContain('136,000 in total (26,000 fresh, 110,000 cached)');
+    expect(text).toContain('codex: 0/0 succeeded, 136,000 tokens (26,000 fresh, 110,000 cached)');
     db.close();
   });
 

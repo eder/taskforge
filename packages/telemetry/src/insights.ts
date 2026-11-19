@@ -25,7 +25,14 @@ export interface InsightsReport {
   undoneRuns: number;
   /** Why work stopped, most frequent first. */
   stopCauses: Array<{ cause: string; label: string; count: number }>;
-  tokens: { total: number; averagePerRun?: number; runsWithUsage: number };
+  tokens: {
+    total: number;
+    averagePerRun?: number;
+    runsWithUsage: number;
+    cachedInput: number;
+    freshTotal: number;
+    freshAveragePerRun?: number;
+  };
   costUsd: { total: number; averagePerRun?: number };
   /** How each agent did, most executions first. */
   agents: AgentInsight[];
@@ -65,6 +72,8 @@ export interface AgentInsight {
   /** Mean duration of the finished executions. */
   averageSeconds?: number;
   tokens: number;
+  cachedInputTokens: number;
+  freshTokens: number;
 }
 
 const CAUSE_LABELS: Record<string, string> = {
@@ -215,6 +224,8 @@ export function computeInsights(
   let resumedRuns = 0;
   let undoneRuns = 0;
   let totalTokens = 0;
+  let totalCachedInput = 0;
+  let totalFreshTokens = 0;
   let totalCost = 0;
   let runsWithUsage = 0;
   const agents = new Map<string, AgentInsight & { totalSeconds: number; finished: number }>();
@@ -227,6 +238,8 @@ export function computeInsights(
         succeeded: 0,
         failed: 0,
         tokens: 0,
+        cachedInputTokens: 0,
+        freshTokens: 0,
         totalSeconds: 0,
         finished: 0,
       };
@@ -264,7 +277,14 @@ export function computeInsights(
       entry.totalSeconds += seconds(e.finishedAt) - seconds(e.startedAt);
       entry.finished++;
     }
-    for (const c of costRepo.listByRun(run.id)) agentOf(c.agentId).tokens += c.totalTokens ?? 0;
+    for (const c of costRepo.listByRun(run.id)) {
+      const entry = agentOf(c.agentId);
+      const cached = c.cachedInputTokens ?? 0;
+      const fresh = Math.max(0, (c.inputTokens ?? 0) - cached) + (c.outputTokens ?? 0);
+      entry.tokens += c.totalTokens ?? 0;
+      entry.cachedInputTokens += cached;
+      entry.freshTokens += fresh > 0 ? fresh : Math.max(0, (c.totalTokens ?? 0) - cached);
+    }
     const spent = runTime(run, executions, events);
     if (spent) timed.push(spent);
     const overlap = taskOverlap(executions);
@@ -278,6 +298,9 @@ export function computeInsights(
     if (cost.totalTokens > 0) {
       runsWithUsage++;
       totalTokens += cost.totalTokens;
+      totalCachedInput += cost.totalCachedInputTokens;
+      totalFreshTokens +=
+        Math.max(0, cost.totalInputTokens - cost.totalCachedInputTokens) + cost.totalOutputTokens;
       totalCost += cost.totalCostUsd;
     }
   }
@@ -300,6 +323,10 @@ export function computeInsights(
       total: totalTokens,
       averagePerRun: runsWithUsage > 0 ? Math.round(totalTokens / runsWithUsage) : undefined,
       runsWithUsage,
+      cachedInput: totalCachedInput,
+      freshTotal: totalFreshTokens,
+      freshAveragePerRun:
+        runsWithUsage > 0 ? Math.round(totalFreshTokens / runsWithUsage) : undefined,
     },
     costUsd: {
       total: totalCost,
@@ -356,8 +383,12 @@ export function formatInsights(report: InsightsReport): string[] {
     for (const c of report.stopCauses.slice(0, 5)) lines.push(`    ${c.count}×  ${c.label}`);
   }
   if (report.tokens.runsWithUsage > 0) {
+    const cacheNote =
+      report.tokens.cachedInput > 0
+        ? ` (${n(report.tokens.freshTotal)} fresh, ${n(report.tokens.cachedInput)} cached)`
+        : '';
     lines.push(
-      `  Tokens: ${n(report.tokens.total)} in total, about ${n(report.tokens.averagePerRun ?? 0)} per run (~$${(report.costUsd.averagePerRun ?? 0).toFixed(2)})`,
+      `  Tokens: ${n(report.tokens.total)} in total${cacheNote}, about ${n(report.tokens.averagePerRun ?? 0)} per run (~$${(report.costUsd.averagePerRun ?? 0).toFixed(2)})`,
     );
   } else {
     lines.push('  Tokens: no usage was reported by the agents in this period.');
@@ -381,8 +412,12 @@ export function formatInsights(report: InsightsReport): string[] {
     lines.push('  By agent:');
     for (const a of report.agents) {
       const time = a.averageSeconds !== undefined ? `, ${a.averageSeconds}s on average` : '';
+      const cacheNote =
+        a.cachedInputTokens > 0
+          ? ` (${n(a.freshTokens)} fresh, ${n(a.cachedInputTokens)} cached)`
+          : '';
       lines.push(
-        `    ${a.agentId}: ${a.succeeded}/${a.executions} succeeded${time}, ${n(a.tokens)} tokens`,
+        `    ${a.agentId}: ${a.succeeded}/${a.executions} succeeded${time}, ${n(a.tokens)} tokens${cacheNote}`,
       );
     }
   }
