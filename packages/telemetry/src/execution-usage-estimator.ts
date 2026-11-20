@@ -205,7 +205,9 @@ function rawUsageBandFor(task: Task): UsageBand {
 }
 
 function plannerAssignmentCount(task: Task): number | undefined {
-  const collaboration = task.contract?.metadata?.collaboration;
+  const collaboration = task.contract?.metadata?.collaboration as
+    | { requestedRoles?: unknown[] }
+    | undefined;
   if (
     task.contract?.metadata?.recommendCollaboration &&
     collaboration &&

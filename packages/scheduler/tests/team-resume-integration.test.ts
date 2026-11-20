@@ -260,8 +260,6 @@ describe('an integration conflict keeps the work instead of ending the run with 
   }, 120_000);
 
   it('runs tasks that edit the same file one after the other, so they do not conflict', async () => {
-    const { describeRunFailures, formatRunFailureLines } = await import('../src/run-failure-report.js');
-    const { TaskRepository, EventRepository } = await import('@taskforge/persistence');
     const db = new TaskForgeDatabase(':memory:');
     const registry = new AgentRegistry(false);
     registry.register(new Overwriter());

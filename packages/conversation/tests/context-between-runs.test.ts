@@ -40,9 +40,24 @@ describe('context between runs in the shell', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  type ShellInternals = {
+    planner: {
+      apiKey?: string;
+      setEarlierRunSelector: (
+        fn: (messages: Array<{ content: string }>) => Promise<{ earlierRunId: string | null }>,
+      ) => void;
+      setIntentJudge: (
+        fn: () => Promise<{ readOnly: boolean; forbiddenTargets: string[] }>,
+      ) => void;
+    };
+    config: { context?: { carryOver: boolean; maxAgeHours: number; maxChars: number } };
+    settledIntent?: { intent: string; mutationAllowed: boolean };
+  };
+  const internals = () => shell as unknown as ShellInternals;
+
   const withSelector = (answer: string | null) => {
     const calls: string[] = [];
-    (shell as any).planner.setEarlierRunSelector(async (messages: Array<{ content: string }>) => {
+    internals().planner.setEarlierRunSelector(async (messages) => {
       calls.push(messages[1].content);
       return { earlierRunId: answer };
     });
@@ -96,7 +111,7 @@ describe('context between runs in the shell', () => {
   it('without a model, falls back to message length only', async () => {
     seedRun('run-1790000000000005', 1, { T1: 'report' });
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-    (shell as any).planner.apiKey = undefined;
+    internals().planner.apiKey = undefined;
 
     const short = plain(await shell.handleInput('do item 1 now'));
     expect(short).toContain('Context: using the output of run-1790000000000005');
@@ -121,7 +136,7 @@ describe('context between runs in the shell', () => {
   it('does nothing when context.carryOver is off', async () => {
     seedRun('run-1790000000000007', 1, { T1: 'report' });
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-    (shell as any).config.context = { carryOver: false, maxAgeHours: 24, maxChars: 12000 };
+    internals().config.context = { carryOver: false, maxAgeHours: 24, maxChars: 12000 };
     const calls = withSelector('run-1790000000000007');
 
     const reply = plain(await shell.handleInput('do item 1 now'));
@@ -133,12 +148,12 @@ describe('context between runs in the shell', () => {
   describe('execution intent in a language the patterns do not know', () => {
     it('is read-only when the planner model says so, and the plan is not an implementation', async () => {
       shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-      (shell as any).planner.setIntentJudge(async () => ({ readOnly: true, forbiddenTargets: [] }));
+      internals().planner.setIntentJudge(async () => ({ readOnly: true, forbiddenTargets: [] }));
 
       await shell.handleInput('No modifiques nada del repositorio, solo dime qué falta por hacer');
 
-      expect((shell as any).settledIntent.intent).toBe('READ_ONLY_ANALYSIS');
-      expect((shell as any).settledIntent.mutationAllowed).toBe(false);
+      expect(internals().settledIntent?.intent).toBe('READ_ONLY_ANALYSIS');
+      expect(internals().settledIntent?.mutationAllowed).toBe(false);
     });
   });
 });

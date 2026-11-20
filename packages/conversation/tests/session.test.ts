@@ -51,10 +51,21 @@ describe('session: /clear, tf --new and continuation', () => {
     expect(sessions.getContextBoundary()?.toISOString()).toBe('2026-10-03T00:00:00.000Z');
   });
 
+  type ShellInternals = {
+    planner: {
+      setEarlierRunSelector: (
+        fn: (messages: Array<{ content: string }>) => Promise<{ earlierRunId: string | null }>,
+      ) => void;
+    };
+    currentGraph?: unknown;
+    continuationHint: () => string;
+  };
+  const internals = (s: InteractiveShell) => s as unknown as ShellInternals;
+
   it('/clear stops earlier runs from being attached, but keeps them in the history', async () => {
     seedRun('run-1790000000000001', 1);
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-    (shell as any).planner.setEarlierRunSelector(async () => ({ earlierRunId: 'run-1790000000000001' }));
+    internals(shell).planner.setEarlierRunSelector(async () => ({ earlierRunId: 'run-1790000000000001' }));
 
     const before = plain(await shell.handleInput('implement item 1 and add regression tests'));
     expect(before).toContain('Context: using the output of run-1790000000000001');
@@ -72,7 +83,7 @@ describe('session: /clear, tf --new and continuation', () => {
     await shell.handleInput('implement password reset with token expiry and add tests');
     const cleared = plain(await shell.handleInput('/clear'));
     expect(cleared).toContain('pending plan was discarded');
-    expect((shell as any).currentGraph).toBeUndefined();
+    expect(internals(shell).currentGraph).toBeUndefined();
   });
 
   it('a run created after /clear is used again', async () => {
@@ -80,7 +91,7 @@ describe('session: /clear, tf --new and continuation', () => {
     new SessionRepository(db).clearContext(new Date(Date.now() - 3_600_000));
     seedRun('run-1790000000000003', 0.5);
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-    (shell as any).planner.setEarlierRunSelector(async (m: Array<{ content: string }>) => {
+    internals(shell).planner.setEarlierRunSelector(async (m) => {
       const ids = (JSON.parse(m[1].content).recentRuns as Array<{ id: string }>).map((r) => r.id);
       expect(ids).toEqual(['run-1790000000000003']);
       return { earlierRunId: ids[0] };
@@ -92,20 +103,20 @@ describe('session: /clear, tf --new and continuation', () => {
   it('shows what the session continues from, and nothing for a fresh session', () => {
     seedRun('run-1790000000000004', 2);
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-    const hint = plain((shell as any).continuationHint());
+    const hint = plain(internals(shell).continuationHint());
     expect(hint).toContain('Continuing from run-1790000000000004');
     expect(hint).toContain('/clear');
     shell.close();
 
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db, freshSession: true });
-    expect((shell as any).continuationHint()).toBe('');
+    expect(internals(shell).continuationHint()).toBe('');
   });
 
   it('shows no continuation after /clear until a new run exists', async () => {
     seedRun('run-1790000000000005', 2);
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
     await shell.handleInput('/clear');
-    expect((shell as any).continuationHint()).toBe('');
+    expect(internals(shell).continuationHint()).toBe('');
   });
 
   it('/unpause and the old /resume both continue a paused execution; /clear is its own command', () => {
@@ -156,17 +167,24 @@ describe('retry from the REPL', () => {
 
     new GoalRepository(db).create({ id: 'g2', description: 'x', repository: tmpDir });
     new RunRepository(db).create('run-1790000000000002', 'g2', {});
-    (shell as any).focusedRun = { runId: 'run-1790000000000002', action: { kind: 'continue' } };
-    (shell as any).buildOrchestrator = () => ({ checkResumable: async () => 'stub: not resumable' });
+    const retryInternals = shell as unknown as {
+      focusedRun?: { runId: string; action: { kind: string } };
+      buildOrchestrator: () => { checkResumable: () => Promise<string> };
+    };
+    retryInternals.focusedRun = { runId: 'run-1790000000000002', action: { kind: 'continue' } };
+    retryInternals.buildOrchestrator = () => ({ checkResumable: async () => 'stub: not resumable' });
     expect(await shell.handleInput('')).toBe('stub: not resumable');
   });
 
   it('/back leaves the stopped run, which stays in the history', async () => {
     shell = new InteractiveShell({ repoRoot: tmpDir, database: db });
-    (shell as any).focusedRun = { runId: 'run-1790000000000003', action: { kind: 'continue' } };
+    const backInternals = shell as unknown as {
+      focusedRun?: { runId: string; action: { kind: string } };
+    };
+    backInternals.focusedRun = { runId: 'run-1790000000000003', action: { kind: 'continue' } };
     const reply = plain(await shell.handleInput('/back'));
     expect(reply).toContain('Left run-1790000000000003');
-    expect((shell as any).focusedRun).toBeUndefined();
+    expect(backInternals.focusedRun).toBeUndefined();
     expect(await shell.handleInput('')).toBe('');
   });
 
@@ -183,10 +201,11 @@ describe('first-launch security notice', () => {
     process.env.HOME = path.join(dir, 'home'); // a machine that has never shown it
     const database = new TaskForgeDatabase(path.join(dir, 'test.db'));
     const shell = new InteractiveShell({ repoRoot: dir, database });
-    const first = plain((shell as any).securityNotice());
+    const notice = shell as unknown as { securityNotice: () => string };
+    const first = plain(notice.securityNotice());
     expect(first).toContain('Before you start');
     expect(first).toContain('no sandbox');
-    expect((shell as any).securityNotice()).toBe('');
+    expect(notice.securityNotice()).toBe('');
     shell.close(); // also closes the database it was given
     process.env.HOME = previousHome;
     fs.rmSync(dir, { recursive: true, force: true });

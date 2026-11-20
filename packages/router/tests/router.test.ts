@@ -564,7 +564,7 @@ describe('Router and AgentSelector', () => {
     registry.register(new FakeAgent('agy', 'Google Antigravity'));
 
     const history = {
-      getAgentSelectionStats(agentId: string, role: string) {
+      getAgentSelectionStats(agentId: string, _role: string) {
         const roleAssignments: Record<string, number> = {
           claude: 12,
           codex: 3,
@@ -603,7 +603,7 @@ describe('Router and AgentSelector', () => {
     registry.register(new FakeAgent('codex', 'Codex CLI'));
 
     const history = {
-      getAgentSelectionStats(agentId: string, role: string) {
+      getAgentSelectionStats(agentId: string, _role: string) {
         return {
           agentId,
           roleAssignments: agentId === 'claude' ? 0 : 50,
@@ -633,7 +633,7 @@ describe('Router and AgentSelector', () => {
     registry.register(new FakeAgent('codex', 'Codex CLI'));
 
     const history = {
-      getAgentSelectionStats(agentId: string, role: string) {
+      getAgentSelectionStats(agentId: string, _role: string) {
         return {
           agentId,
           roleAssignments: agentId === 'claude' ? 50 : 0,

@@ -54,8 +54,34 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
     }
   }
 
+  type ShellInternals = {
+    buildOrchestrator: () => {
+      checkResumable: () => Promise<undefined>;
+      resume: (
+        runId: string,
+        options: { guidance?: string },
+      ) => Promise<{
+        runId: string;
+        goalId: string;
+        status: string;
+        tasksCompleted: number;
+        tasksFailed: number;
+        durationMs: number;
+        graph: { getAllTasks: () => unknown[] };
+      }>;
+    };
+    planner: {
+      setEarlierRunSelector: (
+        fn: (messages: Array<{ content: string }>) => Promise<{ earlierRunId: string | null }>,
+      ) => void;
+    };
+    currentGraph?: unknown;
+    focusedRun?: unknown;
+  };
+  const internals = (s: InteractiveShell) => s as unknown as ShellInternals;
+
   function stubOrchestrator(s: InteractiveShell) {
-    (s as any).buildOrchestrator = () => ({
+    internals(s).buildOrchestrator = () => ({
       checkResumable: async () => undefined,
       resume: async (runId: string, options: { guidance?: string }) => {
         resumed.push({ runId, guidance: options.guidance });
@@ -68,7 +94,7 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
     seedFailedRun('run-1790000000000010', { failureClass: 'code_or_test', evidence: 'AssertionError: expected 1 to be 2' });
     shell = new InteractiveShell({ repoRoot: dir, database: db });
     stubOrchestrator(shell);
-    (shell as any).planner.setEarlierRunSelector(async () => ({ earlierRunId: 'run-1790000000000010' }));
+    internals(shell).planner.setEarlierRunSelector(async () => ({ earlierRunId: 'run-1790000000000010' }));
 
     const message = 'ajuste os pontos que o revisor levantou';
     const reply = plain(await shell.handleInput(message));
@@ -78,7 +104,7 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
     expect(reply).toContain('This sounds like run-1790000000000010');
     expect(reply).toContain('1 of 1 task is left');
     expect(reply).toContain('Enter: continue that run');
-    expect((shell as any).currentGraph).toBeUndefined();
+    expect(internals(shell).currentGraph).toBeUndefined();
 
     await shell.handleInput('');
     expect(resumed).toEqual([{ runId: 'run-1790000000000010', guidance: message }]);
@@ -89,7 +115,7 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
     shell = new InteractiveShell({ repoRoot: dir, database: db });
     stubOrchestrator(shell);
     let offered: Array<{ id: string; state?: string; excerpt: string }> = [];
-    (shell as any).planner.setEarlierRunSelector(async (messages: Array<{ content: string }>) => {
+    internals(shell).planner.setEarlierRunSelector(async (messages) => {
       offered = JSON.parse(messages[1].content).recentRuns;
       return { earlierRunId: null };
     });
@@ -109,7 +135,7 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
     });
     shell = new InteractiveShell({ repoRoot: dir, database: db });
     stubOrchestrator(shell);
-    (shell as any).planner.setEarlierRunSelector(async () => ({ earlierRunId: 'run-1790000000000012' }));
+    internals(shell).planner.setEarlierRunSelector(async () => ({ earlierRunId: 'run-1790000000000012' }));
 
     const reply = plain(await shell.handleInput('arrume isso'));
 
@@ -117,7 +143,7 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
     expect(reply).toContain('.env');
     expect(reply).toContain('Enter: do that, then continue with your instruction');
     expect(resumed).toEqual([]); // nothing runs until the person agrees
-    expect((shell as any).focusedRun).toMatchObject({
+    expect(internals(shell).focusedRun).toMatchObject({
       runId: 'run-1790000000000012',
       action: { kind: 'fix' },
       guidance: 'arrume isso',
@@ -144,9 +170,12 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
       mutationAllowed: true,
       task: { objective: 'Fix it', allowedScope: ['**'], forbiddenChanges: [], acceptanceCriteria: ['done'], dependencies: [] },
     };
-    const prompt = (claude as any).buildPrompt(assignment, context) as string;
+    const buildPrompt = (
+      claude as unknown as { buildPrompt: (a: typeof assignment, c: typeof context | Omit<typeof context, 'userGuidance'> & { userGuidance?: string }) => string }
+    ).buildPrompt.bind(claude);
+    const prompt = buildPrompt(assignment, context);
     expect(prompt).toContain('The user asked for this when continuing the run (follow it');
     expect(prompt).toContain('fix the reviewer points first');
-    expect((claude as any).buildPrompt(assignment, { ...context, userGuidance: undefined })).not.toContain('when continuing the run');
+    expect(buildPrompt(assignment, { ...context, userGuidance: undefined })).not.toContain('when continuing the run');
   });
 });

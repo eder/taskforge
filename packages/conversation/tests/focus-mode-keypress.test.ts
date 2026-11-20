@@ -85,16 +85,16 @@ describe('Focus Mode single-key shortcuts', () => {
     registerAssignment(shell, 'asgn-2', 'claude', 'Claude Code');
 
     await shell.handleInput('/stream TASK-FOCUS');
-    expect((shell as any).focusedAssignmentId).toBe('asgn-1');
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBe('asgn-1');
 
     const runPromise = shell.start();
     await waitForKeypressListener(input);
 
     input.emit('keypress', '2', { name: '2', sequence: '2' });
-    expect((shell as any).focusedAssignmentId).toBe('asgn-2');
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBe('asgn-2');
 
     input.emit('keypress', '\x1b', { name: 'escape', sequence: '\x1b' });
-    expect((shell as any).focusedAssignmentId).toBeUndefined();
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBeUndefined();
 
     input.emit('keypress', undefined, { ctrl: true, name: 'd', sequence: '\x04' });
     await runPromise;
@@ -116,7 +116,7 @@ describe('Focus Mode single-key shortcuts', () => {
     registerAssignment(shell, 'asgn-2', 'claude', 'Claude Code');
 
     await shell.handleInput('/stream TASK-FOCUS');
-    expect((shell as any).focusedAssignmentId).toBe('asgn-1');
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBe('asgn-1');
 
     const runPromise = shell.start();
     await waitForKeypressListener(input);
@@ -125,11 +125,11 @@ describe('Focus Mode single-key shortcuts', () => {
     input.emit('keypress', '2', { name: '2', sequence: '2' });
 
     // The '2' is ordinary text because the user was already editing a line.
-    expect((shell as any).focusedAssignmentId).toBe('asgn-1');
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBe('asgn-1');
 
     // Ctrl+C clears the edited buffer without leaving Focus Mode.
     input.emit('keypress', undefined, { ctrl: true, name: 'c', sequence: '\x03' });
-    expect((shell as any).focusedAssignmentId).toBe('asgn-1');
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBe('asgn-1');
 
     input.emit('keypress', undefined, { ctrl: true, name: 'd', sequence: '\x04' });
     await runPromise;
@@ -159,7 +159,7 @@ describe('Focus Mode single-key shortcuts', () => {
       'normal input submission for digit 2',
     );
 
-    expect((shell as any).focusedAssignmentId).toBeUndefined();
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBeUndefined();
 
     input.emit('keypress', undefined, { ctrl: true, name: 'd', sequence: '\x04' });
     await runPromise;
@@ -175,11 +175,11 @@ describe('Focus Mode single-key shortcuts', () => {
     await shell.handleInput('/stream TASK-FOCUS');
     const switched = await shell.handleInput('/focus 2');
     expect(switched).toContain('Claude Code');
-    expect((shell as any).focusedAssignmentId).toBe('asgn-2');
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBe('asgn-2');
 
     const back = await shell.handleInput('/back');
     expect(back).toContain('overview');
-    expect((shell as any).focusedAssignmentId).toBeUndefined();
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBeUndefined();
   });
 
   it('does not enable raw shortcuts in non-interactive/CI mode', async () => {
@@ -203,6 +203,6 @@ describe('Focus Mode single-key shortcuts', () => {
     await runPromise;
 
     expect(handleInput).toHaveBeenCalledWith('2');
-    expect((shell as any).focusedAssignmentId).toBeUndefined();
+    expect((shell as unknown as { focusedAssignmentId?: string }).focusedAssignmentId).toBeUndefined();
   });
 });

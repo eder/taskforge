@@ -102,8 +102,28 @@ describe('E2E Self-Hosting Correctness Pass (PR #10 Integration)', () => {
       return twoTaskPlan;
     });
 
-    (shell as any).planner.setModelCaller(mockModelCaller);
-    const planSpy = vi.spyOn((shell as any).planner, 'plan');
+    const shellInternal = shell as unknown as {
+      planner: {
+        setModelCaller: (caller: typeof mockModelCaller) => void;
+        plan: (goal: { description: string }) => Promise<unknown>;
+        revise: (
+          graph: unknown,
+          goal: { description: string },
+          revision: { revisionType?: string; feedback?: string },
+        ) => Promise<unknown>;
+      };
+      conversationState: string;
+      currentGraph?: {
+        getAllTasks: () => Task[];
+        metadata?: {
+          planner?: { source?: string; fallbackReason?: string; model?: string };
+          revised?: boolean;
+        };
+      };
+    };
+
+    shellInternal.planner.setModelCaller(mockModelCaller);
+    const planSpy = vi.spyOn(shellInternal.planner, 'plan');
 
     // ──────────────────────────────────────────────────────────────────────────
     // Step 1: Raw Bracketed Paste Boundary
@@ -125,8 +145,8 @@ describe('E2E Self-Hosting Correctness Pass (PR #10 Integration)', () => {
     // Wait a tick to verify no premature execution occurs
     await new Promise((r) => setTimeout(r, 100));
     expect(planSpy).not.toHaveBeenCalled();
-    expect((shell as any).conversationState).toBe('IDLE');
-    expect((shell as any).currentGraph).toBeUndefined();
+    expect(shellInternal.conversationState).toBe('IDLE');
+    expect(shellInternal.currentGraph).toBeUndefined();
 
     // Now send Enter to submit the pasted prompt
     inStream.write('\r');
@@ -149,14 +169,14 @@ describe('E2E Self-Hosting Correctness Pass (PR #10 Integration)', () => {
 
     // Wait for the shell to finish planning and transition to AWAITING_PLAN_APPROVAL
     await waitForCondition(
-      () => (shell as any).conversationState === 'AWAITING_PLAN_APPROVAL',
+      () => shellInternal.conversationState === 'AWAITING_PLAN_APPROVAL',
       'shell enters AWAITING_PLAN_APPROVAL',
     );
 
     // Model was called, proposed 2 tasks, but policy rejected it and fell back to meaningful decomposition
     expect(modelCalledCount).toBeGreaterThan(1); // retried
 
-    const initialGraph = (shell as any).currentGraph;
+    const initialGraph = shellInternal.currentGraph!;
     expect(initialGraph).toBeDefined();
     const initialTasks: Task[] = initialGraph.getAllTasks();
 
@@ -174,10 +194,10 @@ describe('E2E Self-Hosting Correctness Pass (PR #10 Integration)', () => {
     // Step 4: Truthful Planner Provenance
     // ──────────────────────────────────────────────────────────────────────────
     expect(initialGraph.metadata?.planner).toBeDefined();
-    expect(initialGraph.metadata.planner.source).toBe('deterministic_decomposition');
-    expect(initialGraph.metadata.planner.fallbackReason).toBe('model_unresponsive_or_invalid');
+    expect(initialGraph.metadata?.planner?.source).toBe('deterministic_decomposition');
+    expect(initialGraph.metadata?.planner?.fallbackReason).toBe('model_unresponsive_or_invalid');
     // Crucial: Deterministic decomposition is NOT labeled as AI model!
-    expect(initialGraph.metadata.planner.model).toBeUndefined();
+    expect(initialGraph.metadata?.planner?.model).toBeUndefined();
 
     // Verify terminal output displayed the truthful planner source
     await waitForCondition(
@@ -189,7 +209,7 @@ describe('E2E Self-Hosting Correctness Pass (PR #10 Integration)', () => {
     // ──────────────────────────────────────────────────────────────────────────
     // Step 5 & 6: Plan Feedback → SemanticPlanner.revise → Revised TaskGraph
     // ──────────────────────────────────────────────────────────────────────────
-    const reviseSpy = vi.spyOn((shell as any).planner, 'revise');
+    const reviseSpy = vi.spyOn(shellInternal.planner, 'revise');
 
     // Submit natural language plan feedback: add task
     const feedbackLine = 'add task Comprehensive Verification and Regression Review';
@@ -214,7 +234,7 @@ describe('E2E Self-Hosting Correctness Pass (PR #10 Integration)', () => {
       'capturedTerminalOutput includes Revised Plan',
     );
 
-    const revisedGraph = (shell as any).currentGraph;
+    const revisedGraph = shellInternal.currentGraph!;
     expect(revisedGraph).toBeDefined();
     expect(revisedGraph.metadata?.revised).toBe(true);
 

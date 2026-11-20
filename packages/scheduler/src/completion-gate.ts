@@ -47,9 +47,12 @@ export function sanitizeTaskOutput(output?: string): string {
           if (typeof parsed.message.content === 'string' && parsed.message.content) {
             extractedLines.push(parsed.message.content);
           } else if (Array.isArray(parsed.message.content)) {
-            const texts = parsed.message.content
-              .filter((c: any) => c && typeof c.text === 'string')
-              .map((c: any) => c.text);
+            const texts = (parsed.message.content as unknown[])
+              .filter(
+                (c): c is { text: string } =>
+                  Boolean(c) && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string',
+              )
+              .map((c) => c.text);
             if (texts.length > 0) {
               extractedLines.push(texts.join('\n'));
             }

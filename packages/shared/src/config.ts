@@ -422,19 +422,19 @@ export function resolveOpenAIApiKey(config?: TaskForgeConfig): string | undefine
   return undefined;
 }
 
-function deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
-  const result: Record<string, any> = { ...target };
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function deepMerge(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...target };
   for (const key of Object.keys(source)) {
     const sVal = source[key];
     const tVal = result[key];
-    if (
-      sVal &&
-      typeof sVal === 'object' &&
-      !Array.isArray(sVal) &&
-      tVal &&
-      typeof tVal === 'object' &&
-      !Array.isArray(tVal)
-    ) {
+    if (isPlainObject(sVal) && isPlainObject(tVal)) {
       result[key] = deepMerge(tVal, sVal);
     } else if (sVal !== undefined) {
       result[key] = sVal;
@@ -451,20 +451,33 @@ export const EXECUTION_PROFILES = {
 } as const;
 
 /** Fills the settings a profile governs, unless the person set them. */
-function applyProfile(merged: Record<string, any>): Record<string, any> {
-  const execution = { ...(merged.execution ?? {}) };
+function applyProfile(merged: Record<string, unknown>): Record<string, unknown> {
+  const execution: Record<string, unknown> = isPlainObject(merged.execution)
+    ? { ...merged.execution }
+    : {};
+  const rawProfile = execution.profile;
   // A misspelt profile is left as written so validation rejects it with a clear message.
-  if (execution.profile !== undefined && !(execution.profile in EXECUTION_PROFILES)) return merged;
-  const profile: keyof typeof EXECUTION_PROFILES = execution.profile ?? 'economy';
+  if (
+    rawProfile !== undefined &&
+    (typeof rawProfile !== 'string' || !(rawProfile in EXECUTION_PROFILES))
+  ) {
+    return merged;
+  }
+  const profile: keyof typeof EXECUTION_PROFILES =
+    (rawProfile as keyof typeof EXECUTION_PROFILES | undefined) ?? 'economy';
   const values = EXECUTION_PROFILES[profile];
-  const collaboration = { ...(merged.collaboration ?? {}) };
-  if (collaboration.maxAgentsPerTask === undefined) collaboration.maxAgentsPerTask = values.maxAgentsPerTask;
+  const collaboration: Record<string, unknown> = isPlainObject(merged.collaboration)
+    ? { ...merged.collaboration }
+    : {};
+  if (collaboration.maxAgentsPerTask === undefined) {
+    collaboration.maxAgentsPerTask = values.maxAgentsPerTask;
+  }
   if (execution.tokenBudget === undefined) execution.tokenBudget = values.tokenBudget;
   return { ...merged, execution: { ...execution, profile }, collaboration };
 }
 
 export function loadConfig(configPath?: string): TaskForgeConfig {
-  let merged: Record<string, any> = {};
+  let merged: Record<string, unknown> = {};
 
   // Load global ~/.taskforge/config.yaml if using default resolution
   if (!configPath) {

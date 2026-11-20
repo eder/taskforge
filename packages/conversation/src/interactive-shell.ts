@@ -57,7 +57,6 @@ import {
   OpenAIRoutingProvider,
   AdaptiveRoutingProvider,
   RoutingProvider,
-  RoutingDecision,
   RouterHealthReport,
   AgentSelector,
   RouterQualityGuard,
@@ -66,7 +65,6 @@ import { TaskGraph, Goal } from '@taskforge/core';
 import {
   RunOrchestrator,
   OrchestrationResult,
-  sanitizeTaskOutput,
   allowedWritersForTask,
   describeRunFailures,
   formatRunFailureLines,
@@ -98,7 +96,6 @@ import {
   EventRepository,
   TaskRepository,
   AssignmentRepository,
-  AuditService,
   AgentAvailabilityRepository,
 } from '@taskforge/persistence';
 import {
@@ -118,7 +115,6 @@ import { LiveTicker } from './live-ticker.js';
 import { StreamViewer } from './stream-viewer.js';
 import { CockpitPanels } from './cockpit-panels.js';
 import {
-  formatApproxTokens,
   sanitizeDisplayedRepositoryPaths,
   plannerSourceLabel,
   routerSourceLabel,
@@ -1562,8 +1558,9 @@ export class InteractiveShell {
           this.config.router.model || 'gpt-4o-mini',
           lightweightFastPath,
         );
-        const policyBadge = (routing as any).policyAdjustment
-          ? `\n  ${colors.yellow}▲ Policy adjustment: ${(routing as any).policyAdjustment}${colors.reset}`
+        const policyAdjustment = (routing as { policyAdjustment?: string }).policyAdjustment;
+        const policyBadge = policyAdjustment
+          ? `\n  ${colors.yellow}▲ Policy adjustment: ${policyAdjustment}${colors.reset}`
           : '';
 
         this.conversationState = 'AWAITING_PLAN_APPROVAL';
@@ -1611,8 +1608,11 @@ export class InteractiveShell {
         this.activeGoal = goal;
 
         let revisedGraph: TaskGraph;
-        if ('revise' in this.planner && typeof (this.planner as any).revise === 'function') {
-          revisedGraph = await (this.planner as any).revise(
+        const revisablePlanner = this.planner as {
+          revise?: (graph: TaskGraph, g: Goal, revision: unknown) => Promise<TaskGraph>;
+        };
+        if (typeof revisablePlanner.revise === 'function') {
+          revisedGraph = await revisablePlanner.revise(
             this.currentGraph,
             goal,
             intent.revision,

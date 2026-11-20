@@ -12,7 +12,7 @@
     "tf": "node apps/cli/dist/bin.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -b",
     "format": "prettier --write \"**/*.{ts,js,json,md,yaml}\"",
     "release:verify": "node scripts/verify-release.mjs",

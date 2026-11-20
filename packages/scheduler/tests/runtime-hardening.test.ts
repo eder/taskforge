@@ -258,7 +258,7 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
       config,
       task,
       assignment,
-      agent: crashingAgent as any,
+      agent: crashingAgent as unknown as AgentAdapter,
       worktreeManager,
       workspaceRepo,
       assignmentRepo,
@@ -524,7 +524,9 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     expect(result.status).toBe('completed');
 
     // Check that CommunicationBus recorded handoff message in the database!
-    const messages = db.prepare('SELECT * FROM agent_messages WHERE task_id = ?').all('TASK-BUS') as any[];
+    const messages = db
+      .prepare('SELECT * FROM agent_messages WHERE task_id = ?')
+      .all('TASK-BUS') as Array<{ type: string; body: string }>;
     expect(messages.length).toBeGreaterThan(0);
     expect(messages[0].type).toBe('handoff');
     expect(messages[0].body).toContain('Handoff from Lead Agent');
@@ -543,7 +545,7 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
     const bus = new CommunicationBus(db, eventRepo, {}, registry);
 
     const receivedSessions: string[] = [];
-    const receivedMessages: any[] = [];
+    const receivedMessages: unknown[] = [];
 
     const mockAdapter: AgentAdapter = {
       id: 'mock-agent',
@@ -551,7 +553,7 @@ describe('TaskForge Multi-Agent Runtime Hardening', () => {
       detect: async () => true,
       capabilities: async () => ({ canRead: true, canWrite: true, canExecute: true, languages: [], tools: [] }),
       execute: async () => ({ success: true, message: 'ok', durationMs: 10 }),
-      send: async (sessionId: string, message: any) => {
+      send: async (sessionId: string, message: unknown) => {
         receivedSessions.push(sessionId);
         receivedMessages.push(message);
       },

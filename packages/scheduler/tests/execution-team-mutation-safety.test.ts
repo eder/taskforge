@@ -118,7 +118,7 @@ describe('execution-team: no implicit implementer promotion, investigation stays
     };
     graph.addTask(task);
 
-    const result = await orchestrator.run('Fix the flaky retry logic', { preplannedGraph: graph });
+    await orchestrator.run('Fix the flaky retry logic', { preplannedGraph: graph });
 
     // The router violated the invariant (mutating task, no implementer). The
     // quality guard repairs the staffing BEFORE anything runs: failing at

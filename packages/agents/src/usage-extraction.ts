@@ -7,16 +7,17 @@ function finiteTokenNumber(value: unknown): number | undefined {
   return Math.round(value);
 }
 
-function firstTokenNumber(obj: any, keys: string[]): number | undefined {
+function firstTokenNumber(obj: unknown, keys: string[]): number | undefined {
   if (!obj || typeof obj !== 'object') return undefined;
+  const rec = obj as Record<string, unknown>;
   for (const key of keys) {
-    const value = finiteTokenNumber(obj[key]);
+    const value = finiteTokenNumber(rec[key]);
     if (value !== undefined) return value;
   }
   return undefined;
 }
 
-export function usageFromObject(raw: any, modelName?: string): AgentUsage | undefined {
+export function usageFromObject(raw: unknown, modelName?: string): AgentUsage | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
 
   const rawInputTokens =

@@ -177,21 +177,29 @@ describe('Agents - FakeAgent and Registry', () => {
       '../src/real-adapters.js'
     );
 
+    type InspectableAdapter = {
+      options: { defaultArgs: string[] };
+      extractActivity: (chunk: string, cb: (activity: string) => void) => void;
+      extractOutput: (stdout: string, stderr: string) => string;
+    };
+    const asInspectable = (adapter: unknown): InspectableAdapter =>
+      adapter as InspectableAdapter;
+
     const claude = new ClaudeCodeAdapter();
     const agy = new AntigravityAdapter();
     const codex = new CodexAdapter();
 
     // Check streaming flags
-    expect((claude as any).options.defaultArgs).toContain('--output-format=stream-json');
-    expect((agy as any).options.defaultArgs).toContain('stream-json');
-    expect((codex as any).options.defaultArgs).toContain('--json');
+    expect(asInspectable(claude).options.defaultArgs).toContain('--output-format=stream-json');
+    expect(asInspectable(agy).options.defaultArgs).toContain('stream-json');
+    expect(asInspectable(codex).options.defaultArgs).toContain('--json');
 
     // Test extractActivity
     const activities: string[] = [];
     const callback = (act: string) => activities.push(act);
 
     // 1. Claude tool_use Bash
-    (claude as any).extractActivity(
+    asInspectable(claude).extractActivity(
       JSON.stringify({
         type: 'assistant',
         message: {
@@ -203,7 +211,7 @@ describe('Agents - FakeAgent and Registry', () => {
     expect(activities[activities.length - 1]).toBe('Bash: pnpm test');
 
     // 2. Claude tool_use Edit
-    (claude as any).extractActivity(
+    asInspectable(claude).extractActivity(
       JSON.stringify({
         type: 'assistant',
         message: {
@@ -217,7 +225,7 @@ describe('Agents - FakeAgent and Registry', () => {
     expect(activities[activities.length - 1]).toBe('Edit graph.ts');
 
     // 3. AGY step_update
-    (agy as any).extractActivity(
+    asInspectable(agy).extractActivity(
       JSON.stringify({
         event: 'step_update',
         step_update: { description: 'Analyzing workspace' },
@@ -227,7 +235,7 @@ describe('Agents - FakeAgent and Registry', () => {
     expect(activities[activities.length - 1]).toBe('Analyzing workspace');
 
     // 4. Codex item
-    (codex as any).extractActivity(
+    asInspectable(codex).extractActivity(
       JSON.stringify({
         type: 'item',
         item: { command: 'git diff' },
@@ -237,7 +245,7 @@ describe('Agents - FakeAgent and Registry', () => {
     expect(activities[activities.length - 1]).toBe('git diff');
 
     // 5. Raw text fallback
-    (claude as any).extractActivity('Running linter...\nAll passed\n', callback);
+    asInspectable(claude).extractActivity('Running linter...\nAll passed\n', callback);
     expect(activities[activities.length - 1]).toBe('All passed');
 
     // Test extractOutput
@@ -250,7 +258,7 @@ describe('Agents - FakeAgent and Registry', () => {
       JSON.stringify({ type: 'result', result: 'Clean final markdown answer' }),
     ].join('\n');
 
-    const cleanResult = (claude as any).extractOutput(streamOutput, '');
+    const cleanResult = asInspectable(claude).extractOutput(streamOutput, '');
     expect(cleanResult).toBe('Clean final markdown answer');
   });
 
@@ -258,14 +266,16 @@ describe('Agents - FakeAgent and Registry', () => {
     const { ClaudeCodeAdapter, AntigravityAdapter, CodexAdapter } = await import(
       '../src/real-adapters.js'
     );
+    const defaultArgsOf = (adapter: unknown): string[] =>
+      (adapter as { options: { defaultArgs: string[] } }).options.defaultArgs;
 
-    const claude = new ClaudeCodeAdapter({ defaultArgs: undefined } as any);
-    const agy = new AntigravityAdapter({ defaultArgs: undefined } as any);
-    const codex = new CodexAdapter({ defaultArgs: undefined } as any);
+    const claude = new ClaudeCodeAdapter({ defaultArgs: undefined });
+    const agy = new AntigravityAdapter({ defaultArgs: undefined });
+    const codex = new CodexAdapter({ defaultArgs: undefined });
 
-    expect((claude as any).options.defaultArgs).toContain('--output-format=stream-json');
-    expect((agy as any).options.defaultArgs).toContain('stream-json');
-    expect((codex as any).options.defaultArgs).toContain('--json');
+    expect(defaultArgsOf(claude)).toContain('--output-format=stream-json');
+    expect(defaultArgsOf(agy)).toContain('stream-json');
+    expect(defaultArgsOf(codex)).toContain('--json');
 
     // Also verify via AgentRegistry with empty agentConfigs
     const registry = new AgentRegistry(true, {
@@ -278,13 +288,13 @@ describe('Agents - FakeAgent and Registry', () => {
     const regCodex = registry.get('codex');
     const regAgy = registry.get('agy');
 
-    expect((regClaude as any).options.defaultArgs).toContain('--output-format=stream-json');
-    expect((regCodex as any).options.defaultArgs).toEqual(['exec', '--json', '--ephemeral']);
-    expect((regClaude as any).options.defaultArgs).toContain('--no-session-persistence');
+    expect(defaultArgsOf(regClaude)).toContain('--output-format=stream-json');
+    expect(defaultArgsOf(regCodex)).toEqual(['exec', '--json', '--ephemeral']);
+    expect(defaultArgsOf(regClaude)).toContain('--no-session-persistence');
     // The flag must come before -p, which takes the prompt that follows it.
-    const claudeArgs = (regClaude as any).options.defaultArgs as string[];
+    const claudeArgs = defaultArgsOf(regClaude);
     expect(claudeArgs.indexOf('--no-session-persistence')).toBeLessThan(claudeArgs.indexOf('-p'));
-    expect((regAgy as any).options.defaultArgs).toEqual(['--output-format', 'stream-json', '-p']);
+    expect(defaultArgsOf(regAgy)).toEqual(['--output-format', 'stream-json', '-p']);
   });
 
   it('normalizes auto-denied headless tool requests as denied actions', async () => {

@@ -52,13 +52,26 @@ describe('BaseCliAdapter.publishStreamEvents', () => {
     ).toBe(false);
   });
 
+  const publishStreamEvents = (
+    adapter: unknown,
+    chunk: string,
+    assignment: AgentAssignment,
+    context: AgentContext,
+  ) =>
+    (
+      adapter as {
+        publishStreamEvents: (c: string, a: AgentAssignment, ctx: AgentContext) => void;
+      }
+    ).publishStreamEvents(chunk, assignment, context);
+
   it('publishes normalized events with full identity, alongside extractActivity (additive, not a replacement)', () => {
     const claude = new ClaudeCodeAdapter();
     const events: AgentStreamEvent[] = [];
     const context = makeContext((e) => events.push(e));
     const assignment = makeAssignment({ id: 'asgn-claude', role: 'architecture_reviewer' });
 
-    (claude as any).publishStreamEvents(
+    publishStreamEvents(
+      claude,
       JSON.stringify({
         type: 'assistant',
         message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'server/app.py' } }] },
@@ -87,7 +100,8 @@ describe('BaseCliAdapter.publishStreamEvents', () => {
       assignment: makeAssignment({ agentId: 'codex' }),
     };
     expect(() =>
-      (codex as any).publishStreamEvents(
+      publishStreamEvents(
+        codex,
         JSON.stringify({ type: 'item', item: { command: 'ls' } }),
         makeAssignment({ agentId: 'codex' }),
         context,
@@ -100,7 +114,7 @@ describe('BaseCliAdapter.publishStreamEvents', () => {
     const events: AgentStreamEvent[] = [];
     const context = makeContext((e) => events.push(e));
     expect(() =>
-      (agy as any).publishStreamEvents('not json {{{ broken', makeAssignment({ agentId: 'agy' }), context),
+      publishStreamEvents(agy, 'not json {{{ broken', makeAssignment({ agentId: 'agy' }), context),
     ).not.toThrow();
     expect(events).toHaveLength(0);
   });

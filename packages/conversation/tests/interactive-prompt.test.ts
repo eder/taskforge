@@ -47,10 +47,16 @@ describe('Interactive Terminal Prompt & REPL', () => {
 
       // Force interactive flags for testing rendering sequences
       const viewport = new TerminalViewport(out);
-      (viewport as any).isInteractive = true;
-      (viewport as any).rows = 30;
-      (viewport as any).cols = 100;
-      (viewport as any).scrollBottom = 29;
+      const vp = viewport as unknown as {
+        isInteractive: boolean;
+        rows: number;
+        cols: number;
+        scrollBottom: number;
+      };
+      vp.isInteractive = true;
+      vp.rows = 30;
+      vp.cols = 100;
+      vp.scrollBottom = 29;
 
       viewport.renderInputLine('hello world', 5);
 
@@ -69,9 +75,14 @@ describe('Interactive Terminal Prompt & REPL', () => {
       });
 
       const viewport = new TerminalViewport(out);
-      (viewport as any).isInteractive = true;
-      (viewport as any).rows = 24;
-      (viewport as any).scrollBottom = 23;
+      const vp = viewport as unknown as {
+        isInteractive: boolean;
+        rows: number;
+        scrollBottom: number;
+      };
+      vp.isInteractive = true;
+      vp.rows = 24;
+      vp.scrollBottom = 23;
 
       viewport.renderInputLine('active typing', 3);
       written = ''; // reset capture
@@ -90,7 +101,7 @@ describe('Interactive Terminal Prompt & REPL', () => {
     it('wraps large text across multiple visual lines when typing without newline', () => {
       const out = new PassThrough();
       const viewport = new TerminalViewport(out);
-      (viewport as any).cols = 50;
+      (viewport as unknown as { cols: number }).cols = 50;
 
       // Type 90 characters of text without any newline
       const longText = 'Refactor the entire authentication system to use JWT tokens with Redis backed sessions';
@@ -117,9 +128,14 @@ describe('Interactive Terminal Prompt & REPL', () => {
       });
 
       const viewport = new TerminalViewport(out);
-      (viewport as any).isInteractive = true;
-      (viewport as any).rows = 24;
-      (viewport as any).cols = 40;
+      const vp = viewport as unknown as {
+        isInteractive: boolean;
+        rows: number;
+        cols: number;
+      };
+      vp.isInteractive = true;
+      vp.rows = 24;
+      vp.cols = 40;
 
       const longText = 'Refactor auth system to use JWT tokens and Redis store';
       viewport.renderInputLine(longText, longText.length);

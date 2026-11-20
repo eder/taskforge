@@ -117,7 +117,16 @@ export interface SchedulerContext {
   }) => void;
   collaborativeExecutors?: Map<
     string,
-    (task: Task, ctx: SchedulerContext) => Promise<{ success: boolean; commitHash?: string }>
+    (
+      task: Task,
+      ctx: SchedulerContext,
+    ) => Promise<{
+      success: boolean;
+      commitHash?: string;
+      worktreePath?: string;
+      output?: string;
+      findings?: import('@taskforge/shared').ReviewFinding[];
+    }>
   >;
 }
 
@@ -1335,7 +1344,7 @@ export class DeterministicScheduler {
           return;
         }
 
-        const verifyPath = (res as any).worktreePath ?? this.ctx.repoRoot;
+        const verifyPath = res.worktreePath ?? this.ctx.repoRoot;
         let collabCompletionVerification: VerificationResult | undefined;
         if (task.contract.completionMode === 'verification') {
           collabCompletionVerification = await verificationRunner.verify({
@@ -1356,8 +1365,8 @@ export class DeterministicScheduler {
             message: 'Collaborative execution completed',
             durationMs: 0,
             commitHash: res.commitHash,
-            output: (res as any).output,
-            findings: (res as any).findings,
+            output: res.output,
+            findings: res.findings,
           },
           baseCommit: taskBaseCommit,
           resultingCommit: res.commitHash,
@@ -1423,7 +1432,7 @@ export class DeterministicScheduler {
         graph.updateTaskStatus(task.id, 'completed');
         taskRepo.updateStatus(task.id, 'completed');
 
-        const collabOutput = (res as any).output as string | undefined;
+        const collabOutput = res.output;
         if (collabOutput && collabOutput.trim().length > 0) {
           this.recordTaskOutput(task.id, collabOutput);
         }

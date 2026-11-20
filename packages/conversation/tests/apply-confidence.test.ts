@@ -57,7 +57,13 @@ describe('apply confidence and undo in the REPL', () => {
     fs.writeFileSync(path.join(dir, `${runId}.txt`), 'feature\n');
     await git.stageAndCommit('feat: file', dir);
     await git.checkout('main', dir);
-    (shell as any).deliveryService.markReady(runId, branch, 'main', base);
+    (
+      shell as unknown as {
+        deliveryService: {
+          markReady: (id: string, b: string, target: string, baseSha: string) => void;
+        };
+      }
+    ).deliveryService.markReady(runId, branch, 'main', base);
   }
 
   it('does not apply an unverified run on a bare /apply: shows how it was (not) checked and asks for --yes', async () => {
@@ -71,7 +77,13 @@ describe('apply confidence and undo in the REPL', () => {
     expect(reply).toContain('no automated checks ran');
     expect(reply).toContain('--yes');
     expect(fs.existsSync(path.join(dir, 'run-1790000000000001.txt'))).toBe(false);
-    expect((shell as any).deliveryService.getDelivery('run-1790000000000001').status).toBe('ready_to_apply');
+    expect(
+      (
+        shell as unknown as {
+          deliveryService: { getDelivery: (id: string) => { status: string } };
+        }
+      ).deliveryService.getDelivery('run-1790000000000001').status,
+    ).toBe('ready_to_apply');
   });
 
   it('applies with --yes, and applies a verified run without asking', async () => {

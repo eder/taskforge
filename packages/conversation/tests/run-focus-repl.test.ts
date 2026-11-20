@@ -53,9 +53,28 @@ describe('the REPL goes into a run that stopped', () => {
     });
   }
 
+  type ShellInternals = {
+    buildOrchestrator: () => {
+      checkResumable: () => Promise<undefined>;
+      resume: (
+        runId: string,
+        options: { guidance?: string; tokenBudget?: number },
+      ) => Promise<unknown>;
+    };
+    formatRunSummary: (summary: Record<string, unknown>) => Promise<string>;
+    focusedRun?: { runId: string; action: unknown; asked?: string };
+    telemetry: { getRunTokenTotal: (runId: string) => number };
+    planner: {
+      setEarlierRunSelector: (
+        fn: () => Promise<{ earlierRunId: string | null }>,
+      ) => void;
+    };
+  };
+  const internals = (s: InteractiveShell) => s as unknown as ShellInternals;
+
   function open(): InteractiveShell {
     const s = new InteractiveShell({ repoRoot: dir, database: db });
-    (s as any).buildOrchestrator = () => ({
+    internals(s).buildOrchestrator = () => ({
       checkResumable: async () => undefined,
       resume: async (runId: string, options: { guidance?: string; tokenBudget?: number }) => {
         resumes.push({ runId, guidance: options.guidance, tokenBudget: options.tokenBudget });
@@ -66,7 +85,7 @@ describe('the REPL goes into a run that stopped', () => {
   }
 
   const stopped = (s: InteractiveShell, id: string) =>
-    (s as any).formatRunSummary({ runId: id, goalId: 'g', status: 'failed', tasksCompleted: 0, tasksFailed: 1, durationMs: 5, graph: { getAllTasks: () => [] }, error: 'x' }) as Promise<string>;
+    internals(s).formatRunSummary({ runId: id, goalId: 'g', status: 'failed', tasksCompleted: 0, tasksFailed: 1, durationMs: 5, graph: { getAllTasks: () => [] }, error: 'x' });
 
   it('says what happened and what it would do, in words, with no command to run elsewhere', async () => {
     fs.writeFileSync(path.join(dir, '.env'), 'LLM_API_KEY=x\n');
@@ -80,7 +99,7 @@ describe('the REPL goes into a run that stopped', () => {
     expect(text).toContain('↵ Enter: fix this and continue');
     expect(text).toContain('or just tell me what you want');
     expect(text).not.toMatch(/\btf (fix|resume|abandon|inspect)\b/);
-    expect((shell as any).focusedRun).toMatchObject({ runId: 'run-1790000000000020', action: { kind: 'fix' } });
+    expect(internals(shell).focusedRun).toMatchObject({ runId: 'run-1790000000000020', action: { kind: 'fix' } });
   });
 
   it('Enter repairs and continues the run, and a plain yes does the same', async () => {
@@ -93,7 +112,7 @@ describe('the REPL goes into a run that stopped', () => {
 
     expect(fs.readFileSync(path.join(dir, '.taskforge/config.yaml'), 'utf8')).toContain('.env');
     expect(resumes).toEqual([{ runId: 'run-1790000000000021', guidance: undefined, tokenBudget: undefined }]);
-    expect((shell as any).focusedRun).toBeUndefined();
+    expect(internals(shell).focusedRun).toBeUndefined();
 
     resumes.length = 0;
     seed('run-1790000000000022', { failureClass: 'code_or_test', evidence: 'AssertionError: 1 != 2' });
@@ -143,15 +162,15 @@ describe('the REPL goes into a run that stopped', () => {
   it('/retry on a run past its token cap offers the higher cap instead of stopping again at once', async () => {
     seed('run-1790000000000028', { failureClass: 'code_or_test', evidence: 'x' });
     shell = open();
-    (shell as any).telemetry.getRunTokenTotal = () => 1_567_076;
+    internals(shell).telemetry.getRunTokenTotal = () => 1_567_076;
 
     const text = plain(await shell.handleInput('/retry'));
 
     expect(resumes).toEqual([]); // nothing was started that would stop at once
     expect(text).toContain('raise the cap to 2,000,000');
     expect(text).toContain('Enter');
-    expect((shell as any).focusedRun).toMatchObject({ runId: 'run-1790000000000028', action: { kind: 'raise_budget', budget: 2_000_000 } });
-    expect((shell as any).focusedRun.asked).toContain('raise the cap');
+    expect(internals(shell).focusedRun).toMatchObject({ runId: 'run-1790000000000028', action: { kind: 'raise_budget', budget: 2_000_000 } });
+    expect(internals(shell).focusedRun?.asked).toContain('raise the cap');
 
     await shell.handleInput('');
     expect(resumes[0]).toMatchObject({ runId: 'run-1790000000000028', tokenBudget: 2_000_000 });
@@ -162,7 +181,7 @@ describe('the REPL goes into a run that stopped', () => {
     fs.writeFileSync(path.join(dir, '.env'), 'LLM_API_KEY=x\n');
     shell = open();
     await stopped(shell, 'run-1790000000000029');
-    expect((shell as any).focusedRun.asked).toContain("What I'd do");
+    expect(internals(shell).focusedRun?.asked).toContain("What I'd do");
   });
 
   it('a message goes to that run as the user’s instruction; no model needed', async () => {
@@ -178,14 +197,14 @@ describe('the REPL goes into a run that stopped', () => {
   it('leaves the run when the planner says the message is a new task', async () => {
     seed('run-1790000000000025', { failureClass: 'code_or_test', evidence: 'AssertionError: 1 != 2' });
     shell = open();
-    (shell as any).planner.setEarlierRunSelector(async () => ({ earlierRunId: null }));
+    internals(shell).planner.setEarlierRunSelector(async () => ({ earlierRunId: null }));
     await stopped(shell, 'run-1790000000000025');
 
     const reply = plain(await shell.handleInput('implement password reset with token expiry and add tests'));
 
     expect(resumes).toEqual([]);
     expect(reply).toContain('Plan Proposal');
-    expect((shell as any).focusedRun).toBeUndefined();
+    expect(internals(shell).focusedRun).toBeUndefined();
   });
 
   it('asks how to start the service it cannot find, runs what the person types, and continues once the port is up', async () => {
@@ -226,7 +245,7 @@ describe('the REPL goes into a run that stopped', () => {
     shell = open();
     await stopped(shell, 'run-1790000000000028');
     await shell.handleInput('no');
-    expect((shell as any).focusedRun).toBeUndefined();
+    expect(internals(shell).focusedRun).toBeUndefined();
     expect(resumes).toEqual([]);
   });
 });
@@ -239,7 +258,14 @@ describe('an unexpected error does not leave a dead run and a raw message', () =
     new RunRepository(db).create('run-1790000000000040', undefined, {});
     new RunRepository(db).updateStatus('run-1790000000000040', 'failed');
     const shell = new InteractiveShell({ repoRoot: dir, database: db });
-    (shell as any).buildOrchestrator = () => ({
+    const shellInternal = shell as unknown as {
+      buildOrchestrator: () => {
+        checkResumable: () => Promise<undefined>;
+        resume: () => Promise<never>;
+      };
+      focusedRun?: unknown;
+    };
+    shellInternal.buildOrchestrator = () => ({
       checkResumable: async () => undefined,
       resume: async () => {
         throw new Error('Failed to integrate task TASK-12 (commit abc): Git command failed: git cherry-pick abc\nhint: After resolving the conflicts');
@@ -250,7 +276,7 @@ describe('an unexpected error does not leave a dead run and a raw message', () =
     expect(reply).toContain('Nothing was applied to your branch');
     expect(reply).toContain('Enter: try again from where it stopped');
     expect(reply).not.toContain('hint:'); // only the first line, never the git advice block
-    expect((shell as any).focusedRun).toMatchObject({ runId: 'run-1790000000000040', action: { kind: 'continue' } });
+    expect(shellInternal.focusedRun).toMatchObject({ runId: 'run-1790000000000040', action: { kind: 'continue' } });
     shell.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });

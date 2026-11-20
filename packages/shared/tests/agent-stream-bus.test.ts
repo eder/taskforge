@@ -61,8 +61,8 @@ describe('AgentStreamBus', () => {
 
     const history = bus.history('asgn-a');
     expect(history).toHaveLength(5);
-    expect((history[0] as any).status).toBe('step-5');
-    expect((history[4] as any).status).toBe('step-9');
+    expect((history[0] as { status?: string }).status).toBe('step-5');
+    expect((history[4] as { status?: string }).status).toBe('step-9');
   });
 
   it('history() for one assignment never includes events from another assignment', () => {
