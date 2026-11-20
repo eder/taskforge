@@ -216,4 +216,124 @@ describe('preflight and tf fix: an environment problem is repaired once, not pai
     expect(writer.calls).toBeGreaterThanOrEqual(1);
     db.close();
   });
+
+  it('resume({ repairTask }) injects REPAIR-1 ahead of blocked task, preserves original task scope, and automatically continues to completion', async () => {
+    // Project check fails until server/check.js is patched (a file OUTSIDE TASK-1's allowedScope).
+    fs.writeFileSync(
+      path.join(root, 'server/check.js'),
+      "console.error('OSError: Connect call failed (127.0.0.1, 8765)'); process.exit(2);\n",
+    );
+    await git.stageAndCommit('Add failing check script', root);
+
+    const db = new TaskForgeDatabase(':memory:');
+    const executedOrder: Array<{ taskId: string; agentId: string }> = [];
+
+    class ScopedWriter implements AgentAdapter {
+      readonly id = 'writer';
+      readonly name = 'Writer';
+      async detect() {
+        return true;
+      }
+      async capabilities(): Promise<AgentCapabilities> {
+        return { canRead: true, canWrite: true, canExecute: true, languages: [], tools: ['git'] };
+      }
+      async execute(a: AgentAssignment, context: AgentContext): Promise<AgentResult> {
+        executedOrder.push({ taskId: a.taskId, agentId: this.id });
+        // Verify REPAIR-1's fix is already visible in TASK-1's worktree!
+        const checkContent = fs.readFileSync(path.join(context.worktreePath, 'server/check.js'), 'utf8');
+        expect(checkContent).toContain('process.exit(0)');
+        fs.writeFileSync(path.join(context.worktreePath, 'feature.txt'), 'done\n');
+        const g = new GitService(context.worktreePath);
+        const commitHash = await g.stageAndCommit('feat: add feature.txt', context.worktreePath);
+        return { success: true, message: 'Added feature.txt', durationMs: 1, commitHash };
+      }
+    }
+
+    class RepairAgent implements AgentAdapter {
+      readonly id = 'repair-specialist';
+      readonly name = 'Repair Specialist';
+      async detect() {
+        return true;
+      }
+      async capabilities(): Promise<AgentCapabilities> {
+        return { canRead: true, canWrite: true, canExecute: true, languages: [], tools: ['git'] };
+      }
+      async execute(a: AgentAssignment, context: AgentContext): Promise<AgentResult> {
+        executedOrder.push({ taskId: a.taskId, agentId: this.id });
+        fs.writeFileSync(path.join(context.worktreePath, 'server/check.js'), 'process.exit(0);\n');
+        const g = new GitService(context.worktreePath);
+        const commitHash = await g.stageAndCommit('fix: isolate check.js from port 8765', context.worktreePath);
+        return { success: true, message: 'Fixed check.js', durationMs: 1, commitHash };
+      }
+    }
+
+    const registry = new AgentRegistry(false);
+    registry.register(new ScopedWriter());
+    registry.register(new RepairAgent());
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+    config.verification.review = false;
+    config.verification.commands = ['node server/check.js'];
+    config.execution.worktreeLinks = [];
+    const router: RoutingProvider = {
+      id: 'test',
+      route: async () => ({
+        strategy: 'single',
+        complexity: 'low',
+        risk: 'low',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [{ role: 'implementer', requiredCapabilities: ['canWrite'], objective: 'work', preferredAgent: 'writer' }],
+        communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
+        reason: 'test',
+      }),
+    };
+    const orchestrator = new RunOrchestrator({
+      database: db,
+      repoRoot: root,
+      config,
+      agentRegistry: registry,
+      router,
+      worktreeManager: worktrees,
+    });
+
+    const narrowTask: Task = {
+      ...writableTask(),
+      contract: {
+        ...writableTask().contract,
+        allowedScope: ['feature.txt'], // Narrow scope: cannot touch server/check.js!
+      },
+    };
+
+    const first = await orchestrator.run('Add feature.txt', {
+      preplannedGraph: new TaskGraph([narrowTask]),
+    });
+    expect(first.status).toBe('failed');
+    expect(executedOrder).toEqual([]);
+
+    const progress: string[] = [];
+    const resumed = await orchestrator.resume(first.runId, {
+      skipPreflight: true,
+      repairTask: {
+        title: 'Repair: isolate check.js from port 8765',
+        description: 'Patch server/check.js so it exits 0 without port 8765',
+        preferredAgent: 'repair-specialist',
+      },
+      onProgress: (m) => progress.push(m),
+    });
+
+    expect(
+      resumed.status,
+      JSON.stringify({ error: resumed.error, executedOrder, progress }, null, 2),
+    ).toBe('completed');
+    expect(resumed.tasksCompleted).toBe(2);
+    expect(executedOrder).toEqual([
+      { taskId: 'REPAIR-1', agentId: 'repair-specialist' },
+      { taskId: 'TASK-1', agentId: 'writer' },
+    ]);
+    expect(progress.join('\n')).toContain('Injected repair task REPAIR-1');
+    db.close();
+  });
 });

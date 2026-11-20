@@ -122,6 +122,14 @@ export class TaskRepository {
       .run(status, now, taskId);
   }
 
+  addDependency(taskId: string, dependsOnTaskId: string): void {
+    this.db
+      .prepare(
+        'INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)',
+      )
+      .run(taskId, dependsOnTaskId);
+  }
+
   /** Whether any run (past or present) already owns a task with this id. */
   idExists(taskId: string): boolean {
     return Boolean(this.db.prepare('SELECT 1 AS x FROM tasks WHERE id = ?').get(taskId));

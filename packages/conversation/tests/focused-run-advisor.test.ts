@@ -47,7 +47,12 @@ describe('InteractiveShell conversational failure advisor & agent investigation'
   let dir: string;
   let db: TaskForgeDatabase;
   let shell: InteractiveShell | undefined;
-  const resumes: Array<{ runId: string; guidance?: string; skipPreflight?: boolean }> = [];
+  const resumes: Array<{
+    runId: string;
+    guidance?: string;
+    skipPreflight?: boolean;
+    repairTask?: { title: string; description: string; preferredAgent?: string };
+  }> = [];
   const runs: Array<{ goal: string; intent?: string }> = [];
 
   beforeEach(() => {
@@ -125,7 +130,11 @@ describe('InteractiveShell conversational failure advisor & agent investigation'
       checkResumable: () => Promise<undefined>;
       resume: (
         runId: string,
-        opts: { guidance?: string; skipPreflight?: boolean },
+        opts: {
+          guidance?: string;
+          skipPreflight?: boolean;
+          repairTask?: { title: string; description: string; preferredAgent?: string };
+        },
       ) => Promise<unknown>;
       run: (
         goal: string,
@@ -140,7 +149,12 @@ describe('InteractiveShell conversational failure advisor & agent investigation'
     internals.buildOrchestrator = () => ({
       checkResumable: async () => undefined,
       resume: async (runId, opts) => {
-        resumes.push({ runId, guidance: opts.guidance, skipPreflight: opts.skipPreflight });
+        resumes.push({
+          runId,
+          guidance: opts.guidance,
+          skipPreflight: opts.skipPreflight,
+          repairTask: opts.repairTask,
+        });
         return {
           runId,
           goalId: `g-${runId}`,
@@ -272,13 +286,14 @@ describe('InteractiveShell conversational failure advisor & agent investigation'
     }));
 
     await enterStopped(shell, runId);
-    await shell.handleInput('não quero depender de arquivos externos, faz o agente resolver isso');
+    await shell.handleInput('não quero depender de arquivos externos, pede pro codex resolver isso');
 
     expect(resumes).toHaveLength(1);
     expect(resumes[0].runId).toBe(runId);
     expect(resumes[0].skipPreflight).toBe(true);
-    expect(resumes[0].guidance).toContain('synthetic PCM buffer');
-    expect(resumes[0].guidance).toContain('Check');
+    expect(resumes[0].repairTask?.preferredAgent).toBe('codex');
+    expect(resumes[0].repairTask?.description).toContain('synthetic PCM buffer');
+    expect(resumes[0].repairTask?.description).toContain('Check');
   });
 
   it('leaves the stopped run and plans a new goal when the advisor classifies the message as new_task', async () => {

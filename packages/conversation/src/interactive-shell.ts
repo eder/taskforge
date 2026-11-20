@@ -66,6 +66,7 @@ import { TaskGraph, Goal } from '@taskforge/core';
 import {
   RunOrchestrator,
   OrchestrationResult,
+  type RepairPreTaskOptions,
   allowedWritersForTask,
   describeRunFailures,
   formatRunFailureLines,
@@ -2359,7 +2360,7 @@ export class InteractiveShell {
         if (decision.reply) {
           this.viewport.writeUpper(`\n  ${colors.brand}✦${colors.reset} ${decision.reply}\n`);
         }
-        return this.fixWithAgent(focus, decision.guidance ?? text, effectiveBudget);
+        return this.fixWithAgent(focus, decision.guidance ?? text, effectiveBudget, text);
       }
 
       case 'investigate_with_agent': {
@@ -2412,10 +2413,20 @@ export class InteractiveShell {
     return this.continueRun(focus.runId, focus.guidance, { tokenBudget: effectiveBudget });
   }
 
+  /** Detects an explicitly named coding agent in the user's message ('codex' | 'claude' | 'agy'). */
+  private detectRequestedAgentId(text: string): string | undefined {
+    const lower = text.toLowerCase();
+    if (/\bcodex\b/.test(lower)) return 'codex';
+    if (/\bclaude\b/.test(lower)) return 'claude';
+    if (/\b(?:antigravity|agy)\b/.test(lower)) return 'agy';
+    return undefined;
+  }
+
   private async fixWithAgent(
     focus: RunFocus,
     guidance: string,
     effectiveBudget?: number,
+    rawUserMessage?: string,
   ): Promise<string> {
     const failureSummary = this.describeUnfinished(focus.runId)?.summary;
     const priorNotes = (focus.history ?? [])
@@ -2426,9 +2437,17 @@ export class InteractiveShell {
       failureSummary ? `Recorded inconsistency/failure to resolve:\n${failureSummary}` : '',
       priorNotes ? `Previous diagnosis notes:\n${priorNotes.slice(0, 800)}` : '',
     ].filter(Boolean);
-    return this.continueRun(focus.runId, sections.join('\n\n'), {
+    const fullDescription = sections.join('\n\n');
+    const shortTitle = `Repair: ${guidance.replace(/\s+/g, ' ').trim().slice(0, 72)}`;
+    const preferredAgent = this.detectRequestedAgentId(`${rawUserMessage ?? ''} ${guidance}`);
+    return this.continueRun(focus.runId, fullDescription, {
       tokenBudget: effectiveBudget,
       skipPreflight: true,
+      repairTask: {
+        title: shortTitle,
+        description: fullDescription,
+        preferredAgent,
+      },
     });
   }
 
@@ -2670,7 +2689,11 @@ export class InteractiveShell {
   private async continueRun(
     runId: string,
     guidance?: string,
-    options: { tokenBudget?: number; skipPreflight?: boolean } = {},
+    options: {
+      tokenBudget?: number;
+      skipPreflight?: boolean;
+      repairTask?: RepairPreTaskOptions;
+    } = {},
   ): Promise<string> {
         const orchestrator = this.buildOrchestrator();
         const notResumable = await orchestrator.checkResumable(runId);
@@ -2681,8 +2704,11 @@ export class InteractiveShell {
         this.conversationState = 'EXECUTING';
         const controller = new AbortController();
         this.activeExecutionController = controller;
+        const resumeSummary = options.repairTask
+          ? `Injecting repair step ("${options.repairTask.title}"${options.repairTask.preferredAgent ? ` → ${options.repairTask.preferredAgent}` : ''}) into ${colors.bold}${runId}${colors.reset}; once integrated, the original tasks continue automatically.`
+          : `Continuing ${colors.bold}${runId}${colors.reset}: integrated tasks are kept, the rest runs again.${guidance ? ` ${colors.dim}Your instruction goes to the agents: "${guidance.slice(0, 80)}${guidance.length > 80 ? '…' : ''}"${colors.reset}` : ''}`;
         this.viewport.writeUpper(
-          `\n  ${colors.brand}✦ ${colors.bold}TaskForge Resume${colors.reset}\n  ${colors.green}✔${colors.reset} Continuing ${colors.bold}${runId}${colors.reset}: integrated tasks are kept, the rest runs again.${guidance ? ` ${colors.dim}Your instruction goes to the agents: "${guidance.slice(0, 80)}${guidance.length > 80 ? '…' : ''}"${colors.reset}` : ''}\n`,
+          `\n  ${colors.brand}✦ ${colors.bold}TaskForge Resume${colors.reset}\n  ${colors.green}✔${colors.reset} ${resumeSummary}\n`,
         );
         const finish = async (result: OrchestrationResult): Promise<string> => {
           this.activeExecutionController = undefined;
@@ -2697,9 +2723,10 @@ export class InteractiveShell {
         const execution = orchestrator.resume(runId, {
           abortSignal: controller.signal,
           activityTracker: this.activityTracker,
-          guidance,
+          guidance: options.repairTask ? undefined : guidance,
           tokenBudget: options.tokenBudget,
           skipPreflight: options.skipPreflight,
+          repairTask: options.repairTask,
           onProgress: (msg) => this.viewport.writeUpper(theme.formatProgressMessage(msg)),
         });
         if (this.options.asyncExecution ?? this.viewport.isInteractive) {
