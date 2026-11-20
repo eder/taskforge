@@ -1477,7 +1477,12 @@ export class InteractiveShell {
           }
         }
         this.settledIntent = executionIntent;
-        const proposedGraph = await this.planner.plan(goal);
+        const repoProfile = this.inRepo
+          ? await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+              .analyze({ goalDescription: intent.goal })
+              .catch(() => undefined)
+          : undefined;
+        const proposedGraph = await this.planner.plan(goal, repoProfile);
         const negotiatedGraph = await this.negotiator.negotiateGraph(
           proposedGraph,
           this.activeRunId,

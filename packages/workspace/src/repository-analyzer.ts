@@ -4,6 +4,12 @@ import { RepositoryProfile } from '@taskforge/shared';
 import { GitService } from './git-service.js';
 import { ProjectInstructionResolver } from './project-instructions.js';
 import { buildRepositoryMap } from './repository-map.js';
+import { RepositoryIndexer } from './repo-indexer.js';
+
+export interface AnalyzeRepositoryOptions {
+  /** Optional goal text to enrich the profile with offline BM25 architectural context. */
+  goalDescription?: string;
+}
 
 export class RepositoryAnalyzer {
   constructor(
@@ -15,7 +21,7 @@ export class RepositoryAnalyzer {
     }
   }
 
-  async analyze(): Promise<RepositoryProfile> {
+  async analyze(options: AnalyzeRepositoryOptions = {}): Promise<RepositoryProfile> {
     const languages: Set<string> = new Set();
     const frameworks: Set<string> = new Set();
     let packageManager: string | undefined;
@@ -148,6 +154,18 @@ export class RepositoryAnalyzer {
     const tracked = await this.gitService!.exec(['-c', 'core.quotepath=off', 'ls-files']).catch(() => '');
     const repositoryMap = tracked.trim() ? buildRepositoryMap(tracked.split('\n').filter(Boolean)) : undefined;
 
+    let indexContext: RepositoryProfile['indexContext'];
+    if (options.goalDescription?.trim() && repositoryMap && repositoryMap.length > 0) {
+      try {
+        const ctx = RepositoryIndexer.queryGoal(this.repoRoot, options.goalDescription);
+        if (ctx.matches.length > 0) {
+          indexContext = ctx;
+        }
+      } catch {
+        // Offline index enrichment is advisory; never block analysis if SQLite is unavailable.
+      }
+    }
+
     const instructions = new ProjectInstructionResolver(this.repoRoot).resolve(['*']);
 
     return {
@@ -161,6 +179,7 @@ export class RepositoryAnalyzer {
       hasECC,
       summary,
       repositoryMap,
+      indexContext,
       projectInstructions: instructions.documents,
       instructionWarnings: instructions.warnings,
     };

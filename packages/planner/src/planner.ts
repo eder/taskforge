@@ -403,17 +403,30 @@ export class HeuristicPlanner implements Planner {
       tasks.push(task1, task2, task3);
     } else {
       // Standard feature: Implementation + Review
+      const indexedScopes = profile?.indexContext?.suggestedScopes ?? [];
+      const indexedTests = profile?.indexContext?.relatedTests ?? [];
+      const resolvedScope =
+        indexedScopes.length > 0
+          ? Array.from(new Set([...indexedScopes, ...indexedTests]))
+          : ['*'];
+      const indexedHint =
+        profile?.indexContext?.summaryLines && profile.indexContext.summaryLines.length > 0
+          ? `\n\nRelevant files (offline index):\n${profile.indexContext.summaryLines
+              .slice(0, 6)
+              .map((line) => `- ${line}`)
+              .join('\n')}`
+          : '';
       const task1: Task = {
         id: 'TASK-01',
         goalId: goal.id,
         title: 'Core Implementation',
-        description: goal.description,
+        description: `${goal.description}${indexedHint}`,
         type: 'implementation',
         status: 'proposed',
         dependencies: [],
         contract: {
           objective: goal.description,
-          allowedScope: ['*'],
+          allowedScope: resolvedScope,
           forbiddenChanges: [],
           acceptanceCriteria:
             goal.acceptanceCriteria.length > 0

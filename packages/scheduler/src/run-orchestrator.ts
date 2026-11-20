@@ -397,7 +397,9 @@ export class RunOrchestrator {
     options.onProgress?.('Generating structured task graph...');
     let rawGraph = options.preplannedGraph;
     if (!rawGraph) {
-      const repoProfile = await new RepositoryAnalyzer(this.repoRoot).analyze().catch(() => undefined);
+      const repoProfile = await new RepositoryAnalyzer(this.repoRoot)
+        .analyze({ goalDescription })
+        .catch(() => undefined);
       rawGraph = await this.planner.plan(goal, repoProfile);
     }
 

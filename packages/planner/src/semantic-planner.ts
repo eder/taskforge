@@ -894,6 +894,9 @@ Output strictly according to the json_schema.`,
                 buildCommands: profile.buildCommands,
                 hasECC: profile.hasECC,
                 repositoryMap: profile.repositoryMap,
+                ...(profile.indexContext?.summaryLines.length
+                  ? { relevantFiles: profile.indexContext.summaryLines }
+                  : {}),
                 projectInstructions: profile.projectInstructions?.map((doc) => ({
                   path: doc.path,
                   scope: doc.scope,

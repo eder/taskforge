@@ -28,6 +28,7 @@ import {
   GitService,
   WorktreeManager,
   RepositoryAnalyzer,
+  RepositoryIndexer,
   parseAgeSpec,
   detectProjectSetup,
   runCheckCommand,
@@ -1578,6 +1579,50 @@ export function createCli(): Command {
       }
 
       db.close();
+    });
+
+  program
+    .command('index [query]')
+    .description('Build/update the local offline BM25 repository index, or query relevant files')
+    .option('-n, --limit <count>', 'Maximum results to return when querying', '8')
+    .option('--no-tests', 'Exclude test files from query results')
+    .option('--json', 'Output JSON')
+    .action((query: string | undefined, opts: { limit?: string; tests?: boolean; json?: boolean }) => {
+      const repoRoot = process.cwd();
+      const indexer = new RepositoryIndexer(repoRoot);
+      try {
+        const stats = indexer.index();
+        if (!query) {
+          if (opts.json) {
+            console.log(JSON.stringify(stats, null, 2));
+            return;
+          }
+          console.log(
+            `Indexed ${stats.indexedFiles} file(s) (${stats.updatedFiles} updated, ${stats.removedFiles} removed, ${stats.edgeCount} import edge(s), ${stats.testFiles} test file(s)) in ${stats.durationMs}ms.`,
+          );
+          return;
+        }
+        const limit = Math.max(1, parseInt(opts.limit ?? '8', 10) || 8);
+        const hits = indexer.search(query, { limit, includeTests: opts.tests !== false });
+        if (opts.json) {
+          console.log(JSON.stringify({ stats, query, hits }, null, 2));
+          return;
+        }
+        if (hits.length === 0) {
+          console.log(`No indexed files matched "${query}" (${stats.indexedFiles} files indexed).`);
+          return;
+        }
+        console.log(`Top ${hits.length} match(es) for "${query}" (${stats.indexedFiles} files indexed):`);
+        for (const hit of hits) {
+          const extras: string[] = [];
+          if (hit.symbols.length > 0) extras.push(`symbols: ${hit.symbols.slice(0, 4).join(', ')}`);
+          if (hit.imports.length > 0) extras.push(`imports: ${hit.imports.slice(0, 3).join(', ')}`);
+          if (hit.relatedTests.length > 0) extras.push(`tests: ${hit.relatedTests.slice(0, 2).join(', ')}`);
+          console.log(`  ${hit.path}${extras.length > 0 ? ` — ${extras.join(' · ')}` : ''}`);
+        }
+      } finally {
+        indexer.close();
+      }
     });
 
   return program;
