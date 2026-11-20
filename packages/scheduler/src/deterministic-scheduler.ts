@@ -99,6 +99,8 @@ export interface SchedulerContext {
   runRepo: RunRepository;
   /** Present when continuing an interrupted run via `RunOrchestrator.resume()`. */
   resumeState?: SchedulerResumeState;
+  /** Skip the pre-execution verification preflight when the user explicitly asks to proceed or have an agent fix the inconsistency. */
+  skipPreflight?: boolean;
   taskRepo: TaskRepository;
   assignmentRepo: AssignmentRepository;
   executionRepo: ExecutionRepository;
@@ -906,6 +908,10 @@ export class DeterministicScheduler {
   private async preflightChecks(): Promise<SchedulerResult | undefined> {
     const { config, graph, runId, eventRepo, taskRepo, runRepo, worktreeManager, verificationRunner } = this.ctx;
     if (config.verification.preflight === false) return undefined;
+    if (this.ctx.skipPreflight) {
+      this.ctx.onProgress?.('Skipping preflight checks as requested; handing off directly to agents.');
+      return undefined;
+    }
     // Resuming kept work: the checks run on that work anyway. A resume that starts
     // the work over (nothing integrated, nothing kept) is a fresh start and is checked.
     const resume = this.ctx.resumeState;
@@ -1031,6 +1037,10 @@ export class DeterministicScheduler {
       timestamp: new Date(),
     });
     for (const task of writable) {
+      // Record TASK_FAILED before TASK_RECOVERY_BLOCKED so describeRunFailures()
+      // always sees the authoritative failureClass + full preflight evidence on
+      // the very first run (not overwritten by a bare TASK_FAILED event).
+      this.noteTaskFailure(task, 'verification', `Preflight: ${reason}`);
       eventRepo.append({
         id: `evt-${randomUUID()}`,
         runId,
@@ -1049,7 +1059,6 @@ export class DeterministicScheduler {
         },
         timestamp: new Date(),
       });
-      this.noteTaskFailure(task, 'verification', `Preflight: ${reason}`);
       graph.updateTaskStatus(task.id, 'blocked');
       taskRepo.updateStatus(task.id, 'blocked');
     }

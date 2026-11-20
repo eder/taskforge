@@ -496,6 +496,59 @@ describe('SemanticPlanner', () => {
     }
   });
 
+  it('normalizes read-only tasks that list files in allowedScope alongside forbiddenChanges: ["*"] instead of falling back', async () => {
+    const planner = new SemanticPlanner({
+      apiKey: 'test-key',
+      customCaller: async () => ({
+        tasks: [
+          {
+            taskId: 'ARCHITECTURE-TASK-1',
+            title: 'Review memory architecture',
+            description: 'Inspect memory adapter and retrieval flow',
+            type: 'architecture',
+            completionMode: 'report',
+            dependencies: [],
+            objective: 'Produce architecture notes for memory v1',
+            allowedScope: ['server/adapters/memory.py', 'server/context_retrieval.py'],
+            forbiddenChanges: ['*'],
+            acceptanceCriteria: ['Architecture summary produced'],
+          },
+          {
+            taskId: 'IMPL-TASK-1',
+            title: 'Implement memory filters',
+            description: 'Add metadata filters to search_memories',
+            type: 'implementation',
+            completionMode: 'mutation',
+            dependencies: ['ARCHITECTURE-TASK-1'],
+            objective: 'Apply person/project/topic filters in search_memories',
+            allowedScope: ['server/adapters/memory.py', 'server/tests/**'],
+            forbiddenChanges: ['server/migrations/**'],
+            acceptanceCriteria: ['Unit tests pass'],
+          },
+        ],
+      }),
+    });
+
+    const graph = await planner.plan({
+      id: 'goal-zaira',
+      description: 'Complete memory v1 extraction and filtered retrieval and open a PR',
+      repository: '/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    });
+
+    const provenance = graph.metadata?.planner as { source?: string } | undefined;
+    expect(provenance?.source).toBe('semantic_model');
+    const arch = graph.getTask('ARCHITECTURE-TASK-1');
+    expect(arch?.contract.allowedScope).toEqual([]);
+    expect(arch?.contract.forbiddenChanges).toEqual(['*']);
+    expect(graph.getTask('IMPL-TASK-1')?.contract.allowedScope).toEqual([
+      'server/adapters/memory.py',
+      'server/tests/**',
+    ]);
+  });
+
   it('Requirement 3: revises existing plan with typed revisions without creating new goal', async () => {
     const planner = new SemanticPlanner();
     const goal: Goal = {
