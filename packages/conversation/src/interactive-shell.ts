@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { buildRunFocus, type RunFocus } from './run-focus.js';
+import { buildRunFocus, type PendingAdvisorAction, type RunFocus } from './run-focus.js';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { execFileSync } from 'node:child_process';
@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import {
   TaskForgeConfig,
   loadConfig,
+  getDefaultConfig,
   GIT_WORKFLOW_KINDS,
   setProjectConfigValue,
   DeliveryError,
@@ -131,6 +132,11 @@ import {
   formatUsageEstimate,
 } from './shell-formatters.js';
 import { classifyFocusedInstruction } from './focused-run-resolver.js';
+import {
+  FocusedRunAdvisor,
+  buildPendingAdvisorAction,
+  validateWorktreeLinkPaths,
+} from './focused-run-advisor.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -173,6 +179,7 @@ export class InteractiveShell {
   private agentRegistry: AgentRegistry;
   private gitService: GitService;
   private planner: SemanticPlanner | HeuristicPlanner;
+  private focusedAdvisor: FocusedRunAdvisor;
   private negotiator: NegotiationManager;
   private router: RoutingProvider;
   private agentSelector: AgentSelector;
@@ -187,6 +194,8 @@ export class InteractiveShell {
   private settledIntent?: ExecutionIntentDecision;
   /** The stopped run the REPL is "in": Enter accepts its proposal and typing goes to it (see run-focus.ts). */
   private focusedRun?: RunFocus;
+  /** Run id explicitly dismissed as unrelated on the current turn so submit_goal does not immediately re-attach it. */
+  private dismissedUnfinishedRunId?: string;
   /** The folder is inside a git repository (checked once, when the shell opens). */
   private inRepo = true;
   /** Output of an earlier run attached to the plan being proposed ("do item 1"). */
@@ -262,6 +271,13 @@ export class InteractiveShell {
         cwd: this.repoRoot,
         timeoutMs: AGENT_PLANNING_TIMEOUT_MS,
       }),
+    });
+    const advisorModel = process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini';
+    this.focusedAdvisor = new FocusedRunAdvisor({
+      apiKey: openaiApiKey,
+      baseUrl: openaiBaseUrl,
+      model: advisorModel,
+      timeoutMs: Math.min((this.config.router.timeoutSeconds ?? 30) * 1000, 30_000),
     });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);
@@ -1428,7 +1444,12 @@ export class InteractiveShell {
             }
           } else {
             const candidates = findPriorRunCandidates(deps, { ...limits, limit: 3 });
-            const unfinished = await this.findUnfinishedRun(limits);
+            const dismissedRunId = this.dismissedUnfinishedRunId;
+            this.dismissedUnfinishedRunId = undefined;
+            const unfinished = await this.findUnfinishedRun({
+              ...limits,
+              excludeRunId: dismissedRunId ?? limits.excludeRunId,
+            });
             const offered = [
               ...candidates.map((c) => ({
                 id: c.runId,
@@ -2066,6 +2087,13 @@ export class InteractiveShell {
   private async acceptFocus(): Promise<string> {
     const focus = this.focusedRun;
     if (!focus) return '';
+    const effectiveBudget =
+      focus.raiseBudgetTo ?? (focus.action.kind === 'raise_budget' ? focus.action.budget : undefined);
+    if (focus.pendingAction) {
+      const pending = focus.pendingAction;
+      focus.pendingAction = undefined;
+      return this.executePendingAdvisorAction(focus, pending, effectiveBudget);
+    }
     switch (focus.action.kind) {
       case 'fix':
         return this.fixAndContinue(focus.runId, focus.guidance, focus.raiseBudgetTo);
@@ -2081,9 +2109,11 @@ export class InteractiveShell {
   }
 
   /**
-   * A message typed while the REPL is in a stopped run. Answers a question TaskForge
-   * asked, or is an instruction for that run. Returns undefined when the planner
-   * says it is a new task, so the caller plans it normally.
+   * A message typed while the REPL is in a stopped run. Uses fast-path
+   * deterministic commands, then the conversational LLM advisor (when configured)
+   * so TaskForge can explain failures, discuss options, apply fixes, or launch
+   * coding agents to investigate/repair inconsistencies. Returns undefined when
+   * the message is an unrelated new task, so the caller plans it normally.
    */
   private async handleFocusedMessage(text: string): Promise<string | undefined> {
     const focus = this.focusedRun;
@@ -2093,13 +2123,11 @@ export class InteractiveShell {
       focus.raiseBudgetTo ?? (focus.action.kind === 'raise_budget' ? focus.action.budget : undefined);
     const resolution = classifyFocusedInstruction(text, focus);
 
+    // 1. Unambiguous deterministic fast-path commands (instant, zero model latency).
     if (resolution.kind === 'leave') {
       const left = focus.runId;
       this.focusedRun = undefined;
       return `${colors.dim}Left ${left}. It stays in /runs and can be continued any time with /retry.${colors.reset}`;
-    }
-    if (resolution.kind === 'explain') {
-      return this.explainFocusedFailure(focus, resolution.language);
     }
     if (resolution.kind === 'retry_now') {
       return this.continueRun(focus.runId, focus.guidance, { tokenBudget: effectiveBudget });
@@ -2119,15 +2147,30 @@ export class InteractiveShell {
     if (resolution.kind === 'run_shell_command') {
       return this.runShellAndContinue(focus, resolution.command);
     }
+    if (resolution.kind === 'investigate_with_agent') {
+      return this.investigateFocusedFailureWithAgent(focus, resolution.question);
+    }
+
+    // 2. Conversational LLM advisor (answers questions, understands any language,
+    //    remembers multi-turn options, and dispatches deterministic repairs or agents).
+    const looksLikeLiteralCommandAnswer =
+      Boolean(focus.question) &&
+      !text.includes('?') &&
+      resolution.kind !== 'explain' &&
+      /^(?:[a-zA-Z0-9_./-]+(?:\s+[^\s]+)*|nohup\s+|cd\s+)/.test(text.trim()) &&
+      text.trim().split(/\s+/).length <= 8;
+
+    if (this.focusedAdvisor.isAvailable() && !looksLikeLiteralCommandAnswer) {
+      const advised = await this.adviseFocusedRun(focus, text, effectiveBudget);
+      if (advised !== 'fallback') return advised;
+    }
+
+    // 3. Offline / no-API-key deterministic fallback.
+    if (resolution.kind === 'explain') {
+      return this.explainFocusedFailure(focus, resolution.language);
+    }
     if (resolution.kind === 'fix_with_agent') {
-      const failureSummary = this.describeUnfinished(focus.runId)?.summary;
-      const agentGuidance = failureSummary
-        ? `${resolution.guidance}\n\nRecorded inconsistency/failure to resolve:\n${failureSummary}`
-        : resolution.guidance;
-      return this.continueRun(focus.runId, agentGuidance, {
-        tokenBudget: effectiveBudget,
-        skipPreflight: true,
-      });
+      return this.fixWithAgent(focus, resolution.guidance, effectiveBudget);
     }
 
     if (focus.question?.kind === 'start_command') return this.startServiceWith(focus, focus.question.port, text);
@@ -2152,6 +2195,342 @@ export class InteractiveShell {
       }
     }
     return this.respondToUnfinishedRun(focus.runId, text, false, effectiveBudget);
+  }
+
+  private recordFocusHistory(focus: RunFocus, userMessage: string, assistantReply: string): void {
+    const history = focus.history ?? [];
+    history.push(
+      { role: 'user', content: userMessage.slice(0, 600) },
+      { role: 'assistant', content: assistantReply.slice(0, 1200) },
+    );
+    focus.history = history.slice(-8);
+  }
+
+  private describePendingAdvisorAction(action: PendingAdvisorAction): string {
+    switch (action.kind) {
+      case 'apply_repair':
+        return 'apply the suggested repair and continue';
+      case 'add_worktree_links':
+        return `link ${action.paths.join(', ')} into worktrees and continue`;
+      case 'set_check_command':
+        return `save \`${action.command}\` as check command and continue`;
+      case 'run_shell_command':
+        return `run \`${action.command}\` and continue`;
+      case 'fix_with_agent':
+        return 'hand off to a coding agent to fix and continue';
+      case 'investigate_with_agent':
+        return 'launch a read-only agent investigation';
+      case 'skip_preflight':
+        return 'skip preflight and continue';
+      case 'retry_now':
+        return 'retry the run now';
+    }
+  }
+
+  private async executePendingAdvisorAction(
+    focus: RunFocus,
+    action: PendingAdvisorAction,
+    effectiveBudget?: number,
+  ): Promise<string> {
+    switch (action.kind) {
+      case 'apply_repair':
+        return this.fixAndContinue(focus.runId, focus.guidance, effectiveBudget);
+      case 'add_worktree_links':
+        return this.addWorktreeLinksAndContinue(focus, action.paths, effectiveBudget);
+      case 'set_check_command':
+        return this.saveCheckCommand(focus, action.command);
+      case 'run_shell_command':
+        return this.runShellAndContinue(focus, action.command);
+      case 'fix_with_agent':
+        return this.fixWithAgent(focus, action.guidance, effectiveBudget);
+      case 'investigate_with_agent':
+        return this.investigateFocusedFailureWithAgent(focus, action.question);
+      case 'skip_preflight':
+        return this.continueRun(focus.runId, action.guidance ?? focus.guidance, {
+          tokenBudget: effectiveBudget,
+          skipPreflight: true,
+        });
+      case 'retry_now':
+        return this.continueRun(focus.runId, focus.guidance, { tokenBudget: effectiveBudget });
+    }
+  }
+
+  private async adviseFocusedRun(
+    focus: RunFocus,
+    text: string,
+    effectiveBudget?: number,
+  ): Promise<string | undefined | 'fallback'> {
+    const info = this.describeUnfinished(focus.runId);
+    const failures = describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, focus.runId);
+    const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, focus.runId);
+    const availableAgents = this.agentRegistry.list().map((a) => `${a.name} (${a.id})`);
+
+    const decision = await this.focusedAdvisor.advise({
+      userMessage: text,
+      runId: focus.runId,
+      goal: info?.goal ?? '',
+      failures: failures.filter((f) => f.kind !== 'not_started'),
+      availableRepairs: plan.descriptions,
+      verificationCommands: this.config.verification.commands ?? [],
+      worktreeLinks: this.config.execution.worktreeLinks ?? [],
+      availableAgents,
+      pendingAction: focus.pendingAction,
+      history: focus.history,
+    });
+    if (!decision) return 'fallback';
+
+    switch (decision.action) {
+      case 'new_task':
+        this.dismissedUnfinishedRunId = focus.runId;
+        this.focusedRun = undefined;
+        return undefined;
+
+      case 'leave': {
+        const left = focus.runId;
+        this.focusedRun = undefined;
+        return decision.reply || `${colors.dim}Left ${left}. It stays in /runs and can be continued any time with /retry.${colors.reset}`;
+      }
+
+      case 'answer': {
+        const pending = buildPendingAdvisorAction(decision, this.repoRoot);
+        focus.pendingAction = pending;
+        const replyText = decision.reply || this.explainFocusedFailure(focus, 'en');
+        this.recordFocusHistory(focus, text, replyText);
+        const hint = pending
+          ? `↵ Enter (or say "yes"): ${this.describePendingAdvisorAction(pending)}   ·   or tell me another option   ·   /back to leave`
+          : 'Tell me which option you want to run, press Enter to retry, or /back to leave';
+        return [
+          `${colors.brand}✦ ${colors.bold}TaskForge Advisor${colors.reset} ${colors.dim}(${focus.runId})${colors.reset}`,
+          replyText
+            .split('\n')
+            .map((l) => `  ${l}`)
+            .join('\n'),
+          '',
+          `  ${colors.dim}${hint}${colors.reset}`,
+        ].join('\n');
+      }
+
+      case 'apply_repair': {
+        if (decision.reply) {
+          this.viewport.writeUpper(`\n  ${colors.brand}✦${colors.reset} ${decision.reply}\n`);
+        }
+        return this.fixAndContinue(focus.runId, focus.guidance, effectiveBudget);
+      }
+
+      case 'add_worktree_links': {
+        const validPaths = validateWorktreeLinkPaths(this.repoRoot, decision.paths);
+        if (validPaths.length === 0) {
+          const fallbackReply =
+            decision.reply ||
+            'Could not find the requested paths in this repository to link. Specify an existing relative path (e.g. `testdata` or `server/.env`).';
+          this.recordFocusHistory(focus, text, fallbackReply);
+          return `${colors.brand}✦ ${colors.bold}TaskForge Advisor${colors.reset}\n  ${fallbackReply}`;
+        }
+        if (decision.reply) {
+          this.viewport.writeUpper(`\n  ${colors.brand}✦${colors.reset} ${decision.reply}\n`);
+        }
+        return this.addWorktreeLinksAndContinue(focus, validPaths, effectiveBudget);
+      }
+
+      case 'set_check_command': {
+        if (!decision.command) return 'fallback';
+        if (decision.reply) {
+          this.viewport.writeUpper(`\n  ${colors.brand}✦${colors.reset} ${decision.reply}\n`);
+        }
+        return this.saveCheckCommand(focus, decision.command);
+      }
+
+      case 'run_shell_command': {
+        if (!decision.command) return 'fallback';
+        // Safety guardrail: LLM-suggested shell commands require explicit confirmation before running.
+        focus.pendingAction = { kind: 'run_shell_command', command: decision.command };
+        const explanation = decision.reply || `I suggest running this command to unblock ${focus.runId}:`;
+        this.recordFocusHistory(focus, text, `${explanation}\nCommand: ${decision.command}`);
+        return [
+          `${colors.brand}✦ ${colors.bold}TaskForge Advisor${colors.reset} ${colors.dim}(${focus.runId})${colors.reset}`,
+          `  ${explanation}`,
+          `  ${colors.cyan}$ ${decision.command}${colors.reset}`,
+          '',
+          `  ${colors.dim}↵ Enter (or say "pode rodar" / "yes"): run this command and continue   ·   or tell me another approach   ·   /back to leave${colors.reset}`,
+        ].join('\n');
+      }
+
+      case 'fix_with_agent': {
+        if (decision.reply) {
+          this.viewport.writeUpper(`\n  ${colors.brand}✦${colors.reset} ${decision.reply}\n`);
+        }
+        return this.fixWithAgent(focus, decision.guidance ?? text, effectiveBudget);
+      }
+
+      case 'investigate_with_agent': {
+        if (decision.reply) {
+          this.viewport.writeUpper(`\n  ${colors.brand}✦${colors.reset} ${decision.reply}\n`);
+        }
+        return this.investigateFocusedFailureWithAgent(focus, decision.guidance ?? text);
+      }
+
+      case 'skip_preflight': {
+        if (decision.reply) {
+          this.viewport.writeUpper(`\n  ${colors.brand}✦${colors.reset} ${decision.reply}\n`);
+        }
+        return this.continueRun(focus.runId, decision.guidance ?? focus.guidance, {
+          tokenBudget: effectiveBudget,
+          skipPreflight: true,
+        });
+      }
+
+      case 'retry_now': {
+        if (decision.reply) {
+          this.viewport.writeUpper(`\n  ${colors.brand}✦${colors.reset} ${decision.reply}\n`);
+        }
+        return this.continueRun(focus.runId, focus.guidance, { tokenBudget: effectiveBudget });
+      }
+    }
+  }
+
+  private async addWorktreeLinksAndContinue(
+    focus: RunFocus,
+    paths: string[],
+    effectiveBudget?: number,
+  ): Promise<string> {
+    const valid = validateWorktreeLinkPaths(this.repoRoot, paths);
+    if (valid.length === 0) {
+      return `${colors.yellow}No existing repository paths found to link.${colors.reset}`;
+    }
+    const defaults = getDefaultConfig().execution.worktreeLinks;
+    const { added } = addToProjectConfigList(this.repoRoot, ['execution', 'worktreeLinks'], valid, defaults);
+    this.config.execution.worktreeLinks = [
+      ...new Set([...(this.config.execution.worktreeLinks ?? []), ...valid]),
+    ];
+    this.viewport.writeUpper(
+      `\n  ${colors.green}✔${colors.reset} ${
+        added.length > 0
+          ? `Added ${added.join(', ')} to execution.worktreeLinks in .taskforge/config.yaml`
+          : `${valid.join(', ')} was already linked in .taskforge/config.yaml`
+      }\n`,
+    );
+    return this.continueRun(focus.runId, focus.guidance, { tokenBudget: effectiveBudget });
+  }
+
+  private async fixWithAgent(
+    focus: RunFocus,
+    guidance: string,
+    effectiveBudget?: number,
+  ): Promise<string> {
+    const failureSummary = this.describeUnfinished(focus.runId)?.summary;
+    const priorNotes = (focus.history ?? [])
+      .filter((m) => m.role === 'assistant')
+      .slice(-1)[0]?.content;
+    const sections = [
+      guidance,
+      failureSummary ? `Recorded inconsistency/failure to resolve:\n${failureSummary}` : '',
+      priorNotes ? `Previous diagnosis notes:\n${priorNotes.slice(0, 800)}` : '',
+    ].filter(Boolean);
+    return this.continueRun(focus.runId, sections.join('\n\n'), {
+      tokenBudget: effectiveBudget,
+      skipPreflight: true,
+    });
+  }
+
+  /**
+   * Launches a real coding agent (Claude/Codex/Antigravity) in read-only mode to
+   * inspect the repository files behind a stopped run's error and return a deep
+   * diagnosis while keeping the stopped run focused for immediate follow-up.
+   */
+  private async investigateFocusedFailureWithAgent(focus: RunFocus, question: string): Promise<string> {
+    if (!(await this.gitService.isGitRepo())) return this.notARepositoryMessage();
+    const info = this.describeUnfinished(focus.runId);
+    const failures = describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, focus.runId);
+    const evidenceBlock = failures
+      .filter((f) => f.kind !== 'not_started')
+      .map((f) => `${f.taskId} (${f.title}): ${f.evidence ?? f.reason ?? 'stopped'}`)
+      .join('\n\n')
+      .slice(0, 2400);
+
+    const investigationGoal = [
+      `Read-only diagnosis of why TaskForge run ${focus.runId} stopped. Inspect the relevant repository files, explain the root cause clearly in the user's language, and propose concrete actionable fix options (do not modify repository files).`,
+      `User question: ${question}`,
+      info?.goal ? `Original run goal: ${info.goal}` : '',
+      evidenceBlock ? `Recorded failure evidence:\n${evidenceBlock}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    const investigationIntent: ExecutionIntentDecision = {
+      intent: 'READ_ONLY_ANALYSIS',
+      mutationAllowed: false,
+      deliveryAllowed: false,
+      allowedScope: [],
+      forbiddenChanges: ['*'],
+      reason: 'Read-only failure diagnosis requested inside stopped run.',
+    };
+
+    const orchestrator = this.buildOrchestrator();
+    const diagRunId = generateRunId();
+    const isBackground = this.options.asyncExecution ?? this.viewport.isInteractive;
+    const controller = new AbortController();
+    this.activeExecutionController = controller;
+    this.conversationState = 'EXECUTING';
+
+    const finishInvestigation = async (result: OrchestrationResult): Promise<string> => {
+      this.activeExecutionController = undefined;
+      this.conversationState = 'IDLE';
+      const summary = await this.formatRunSummary(result);
+      // Re-attach the stopped run so the user can immediately ask TaskForge to apply what the agent found.
+      this.focusedRun = focus;
+      const report = findPriorRunContext(
+        { runRepo: new RunRepository(this.db), goalRepo: new GoalRepository(this.db) },
+        { explicitRunId: result.runId, maxChars: 1200 },
+      );
+      this.recordFocusHistory(
+        focus,
+        question,
+        report?.text
+          ? `Agent investigation (${result.runId}) findings:\n${report.text}`
+          : `Agent investigation (${result.runId}) finished with status ${result.status}.`,
+      );
+      return `${summary}\n  ${colors.dim}Still focused on ${focus.runId} — tell me which fix to apply (e.g. ask an agent to implement the recommendation), press Enter, or /back to leave.${colors.reset}`;
+    };
+
+    const execution = orchestrator.run(investigationGoal, {
+      runId: diagRunId,
+      executionIntent: investigationIntent,
+      abortSignal: controller.signal,
+      activityTracker: this.activityTracker,
+      onProgress: (msg) => this.viewport.writeUpper(theme.formatProgressMessage(msg)),
+    });
+
+    if (isBackground) {
+      execution
+        .then(async (result) => {
+          this.viewport.writeUpper(`\n${await finishInvestigation(result)}\n`);
+          this.viewport.drawFooter('');
+        })
+        .catch((err) => {
+          this.activeExecutionController = undefined;
+          this.conversationState = 'IDLE';
+          this.focusedRun = focus;
+          if (controller.signal.aborted || err.message?.includes('database is not open')) return;
+          this.viewport.writeUpper(
+            `\n  ${colors.red}✖ Investigation failed:${colors.reset} ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+          this.viewport.drawFooter('');
+        });
+      return [
+        `\n  ${colors.brand}✦ ${colors.bold}TaskForge Failure Investigation${colors.reset}`,
+        `  ${colors.green}✔${colors.reset} Launching a read-only agent investigation for ${colors.bold}${focus.runId}${colors.reset} (Run: ${diagRunId}).`,
+        `  ${colors.dim}When it finishes, ${focus.runId} stays focused so you can immediately tell me how to fix and continue.${colors.reset}\n`,
+      ].join('\n');
+    }
+
+    try {
+      return await finishInvestigation(await execution);
+    } catch (err) {
+      this.activeExecutionController = undefined;
+      this.conversationState = 'IDLE';
+      this.focusedRun = focus;
+      return `  ${colors.red}✖ Investigation failed:${colors.reset} ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   /** Explains why the focused run stopped in plain language (PT or EN) without changing focus or guidance. */
