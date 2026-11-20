@@ -31,7 +31,9 @@ describe('Router Health Checks', () => {
   });
 
   it('AdaptiveRoutingProvider reports degraded when performance engine is missing', async () => {
-    const adaptiveRouter = new AdaptiveRoutingProvider(undefined as any);
+    const adaptiveRouter = new AdaptiveRoutingProvider(
+      undefined as unknown as ConstructorParameters<typeof AdaptiveRoutingProvider>[0],
+    );
     const health = await adaptiveRouter.healthCheck();
     expect(health.status).toBe('degraded');
     expect(health.provider).toBe('adaptive');
@@ -111,7 +113,7 @@ describe('Router Health Checks', () => {
       process.env.OPENAI_API_KEY = 'sk-openai-global';
 
       const router = new OpenAIRoutingProvider(undefined, 'gpt-4o');
-      expect((router as any).apiKey).toBe('sk-taskforge-dedicated');
+      expect((router as unknown as { apiKey?: string }).apiKey).toBe('sk-taskforge-dedicated');
     } finally {
       if (origTaskforge !== undefined) process.env.TASKFORGE_OPENAI_API_KEY = origTaskforge;
       else delete process.env.TASKFORGE_OPENAI_API_KEY;

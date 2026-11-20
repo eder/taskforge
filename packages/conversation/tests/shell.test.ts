@@ -97,7 +97,7 @@ describe('InteractiveShell (REPL)', () => {
       });
       shellsToClean.push(shell);
 
-      expect((shell as any).planner.model).toBe('gpt-4o');
+      expect((shell as unknown as { planner: { model: string } }).planner.model).toBe('gpt-4o');
     } finally {
       if (previousOverride === undefined) {
         delete process.env.PLANNER_MODEL;
@@ -231,7 +231,19 @@ describe('InteractiveShell (REPL)', () => {
     expect(planProposal).not.toContain('Baseline assignments:');
     expect(planProposal).toContain('structured tasks:');
 
-    const initialGraph = (shell as any).currentGraph;
+    type ShellGraph = {
+      currentGraph?: {
+        metadata?: { revised?: boolean };
+        getAllTasks: () => Array<{
+          type: string;
+          title: string;
+          contract: { forbiddenChanges: string[] };
+        }>;
+      };
+    };
+    const shellGraph = shell as unknown as ShellGraph;
+
+    const initialGraph = shellGraph.currentGraph!;
     expect(initialGraph).toBeDefined();
     const initialCount = initialGraph.getAllTasks().length;
     expect(initialCount).toBeGreaterThan(0);
@@ -242,7 +254,7 @@ describe('InteractiveShell (REPL)', () => {
     expect(constraintReply).not.toContain('Estimated agent usage:');
     expect(constraintReply).not.toContain('Baseline assignments:');
 
-    const graphAfterConstraint = (shell as any).currentGraph;
+    const graphAfterConstraint = shellGraph.currentGraph!;
     expect(graphAfterConstraint).toBeDefined();
     expect(graphAfterConstraint.metadata?.revised).toBe(true);
     for (const t of graphAfterConstraint.getAllTasks()) {
@@ -253,7 +265,7 @@ describe('InteractiveShell (REPL)', () => {
     const addTaskReply = await shell.handleInput('add task Comprehensive Verification and Integration Tests');
     expect(addTaskReply).toContain('✦ Revised Plan');
 
-    const graphAfterAdd = (shell as any).currentGraph;
+    const graphAfterAdd = shellGraph.currentGraph!;
     expect(graphAfterAdd.getAllTasks().length).toBe(graphAfterConstraint.getAllTasks().length + 1);
     const lastTask = graphAfterAdd.getAllTasks()[graphAfterAdd.getAllTasks().length - 1];
     expect(lastTask.type).toBe('testing');

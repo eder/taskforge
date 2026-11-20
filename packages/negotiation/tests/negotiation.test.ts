@@ -241,7 +241,8 @@ describe('NegotiationManager', () => {
       events.some(
         (event) =>
           event.type === 'PLAN_INVARIANT_ENFORCED' &&
-          (event.payload as any).invariant === 'architecture_boundary_before_stateful_mutation',
+          (event.payload as Record<string, unknown>).invariant ===
+      'architecture_boundary_before_stateful_mutation',
       ),
     ).toBe(true);
 

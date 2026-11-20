@@ -61,15 +61,15 @@ describe('governed assignment activity lifecycle', () => {
             durationMs: 0,
           }),
         },
-        worktreeManager: {} as any,
-        workspaceRepo: {} as any,
-        assignmentRepo: {} as any,
-        executionRepo: {} as any,
+        worktreeManager: {} as never,
+        workspaceRepo: {} as never,
+        assignmentRepo: {} as never,
+        executionRepo: {} as never,
         eventRepo: {
           append: () => {
             throw new Error('persistence unavailable');
           },
-        } as any,
+        } as never,
         activityTracker,
       }),
     ).rejects.toThrow('persistence unavailable');

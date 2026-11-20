@@ -121,7 +121,7 @@ export interface TaskContract {
    * Deterministic command evidence required when completionMode=verification.
    */
   verification?: TaskVerificationSpec;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export type ConversationState =

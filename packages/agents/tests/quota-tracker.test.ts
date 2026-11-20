@@ -76,10 +76,18 @@ describe('AgentQuotaTracker and Quota-Aware Detection', () => {
   });
 
   it('hydrates quota state from durable storage across process-like singleton resets', () => {
-    const records = new Map<string, any>();
+    type AvailabilityRecord = {
+      agentId: string;
+      status: 'quota_exhausted' | 'auth_failed' | 'unavailable';
+      reason?: string;
+      recordedAt: number;
+      resetAt?: number;
+      source?: string;
+    };
+    const records = new Map<string, AvailabilityRecord>();
     const store = {
       list: () => Array.from(records.values()),
-      upsert: (record: any) => records.set(record.agentId, { ...record }),
+      upsert: (record: AvailabilityRecord) => records.set(record.agentId, { ...record }),
       delete: (agentId: string) => records.delete(agentId),
     };
 
@@ -105,7 +113,15 @@ describe('AgentQuotaTracker and Quota-Aware Detection', () => {
   });
 
   it('removes expired durable cooldowns so the next execution can probe recovery', () => {
-    const records = new Map<string, any>([
+    type AvailabilityRecord = {
+      agentId: string;
+      status: 'quota_exhausted' | 'auth_failed' | 'unavailable';
+      reason?: string;
+      recordedAt: number;
+      resetAt?: number;
+      source?: string;
+    };
+    const records = new Map<string, AvailabilityRecord>([
       [
         'agy',
         {
@@ -120,7 +136,7 @@ describe('AgentQuotaTracker and Quota-Aware Detection', () => {
     ]);
     const store = {
       list: () => Array.from(records.values()),
-      upsert: (record: any) => records.set(record.agentId, { ...record }),
+      upsert: (record: AvailabilityRecord) => records.set(record.agentId, { ...record }),
       delete: (agentId: string) => records.delete(agentId),
     };
 

@@ -383,7 +383,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     const fallbackModel =
       this.id === 'agy' ? 'gemini' : this.id === 'claude' ? 'claude' : this.id;
 
-    const consider = (raw: any, modelName?: string) => {
+    const consider = (raw: unknown, modelName?: string) => {
       const usage = usageFromObject(raw, modelName ?? fallbackModel);
       if (!usage) return;
       const score =

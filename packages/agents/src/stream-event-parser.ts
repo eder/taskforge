@@ -39,15 +39,50 @@ export function parseAgentStreamEvents(
   return events;
 }
 
-function parseStructuredLine(obj: any, identity: AgentStreamEventIdentity): AgentStreamEvent[] {
+interface StructuredLine {
+  type?: string;
+  event?: string;
+  message?: {
+    content?: Array<{
+      type?: string;
+      name?: string;
+      input?: Record<string, unknown>;
+      text?: string;
+    }>;
+  };
+  content_block?: {
+    type?: string;
+    name?: string;
+  };
+  step_update?: {
+    description?: string;
+    tool?: string;
+  };
+  item?: {
+    type?: string;
+    text?: string;
+    command?: string;
+    message?: string;
+  };
+  response?: string;
+  result?: {
+    response?: string;
+  };
+  error?: unknown;
+  warning?: unknown;
+}
+
+function parseStructuredLine(raw: unknown, identity: AgentStreamEventIdentity): AgentStreamEvent[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const obj = raw as StructuredLine;
   const out: AgentStreamEvent[] = [];
   const timestamp = new Date();
   const base = { ...identity, timestamp };
 
   // Claude Code: assistant message content (text + tool_use blocks)
-  if (obj.type === 'assistant' && obj.message?.content) {
+  if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
     for (const item of obj.message.content) {
-      if (item.type === 'tool_use') {
+      if (item.type === 'tool_use' && typeof item.name === 'string') {
         out.push(...toolUseToEvents(item.name, item.input, base));
       } else if (item.type === 'text' && typeof item.text === 'string' && item.text.trim()) {
         out.push({ ...base, type: 'agent_message', text: item.text.trim() });
@@ -56,7 +91,11 @@ function parseStructuredLine(obj: any, identity: AgentStreamEventIdentity): Agen
   }
 
   // Claude Code: streamed tool_use block start (before args are complete)
-  if (obj.type === 'content_block_start' && obj.content_block?.type === 'tool_use') {
+  if (
+    obj.type === 'content_block_start' &&
+    obj.content_block?.type === 'tool_use' &&
+    typeof obj.content_block.name === 'string'
+  ) {
     out.push({ ...base, type: 'tool_started', tool: obj.content_block.name });
   }
 

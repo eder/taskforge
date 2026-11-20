@@ -81,10 +81,15 @@ describe('Bracketed Paste Terminal Boundary Integration', () => {
     // Wait a tick for readline keypress event loop to process paste chunk
     await new Promise((r) => setTimeout(r, 100));
 
+    const shellInternal = shell as unknown as {
+      conversationState: string;
+      currentGraph?: unknown;
+    };
+
     // ASSERTION: No plan is created before paste-end and manual Enter!
     expect(planSpy).not.toHaveBeenCalled();
-    expect((shell as any).conversationState).toBe('IDLE');
-    expect((shell as any).currentGraph).toBeUndefined();
+    expect(shellInternal.conversationState).toBe('IDLE');
+    expect(shellInternal.currentGraph).toBeUndefined();
 
     // 2. Now send manual Enter (\r)
     inStream.write('\r');
@@ -117,12 +122,12 @@ describe('Bracketed Paste Terminal Boundary Integration', () => {
 
     // Wait for plan negotiation and state transition to AWAITING_PLAN_APPROVAL
     await waitForCondition(
-      () => (shell as any).conversationState === 'AWAITING_PLAN_APPROVAL',
+      () => shellInternal.conversationState === 'AWAITING_PLAN_APPROVAL',
       'shell enters AWAITING_PLAN_APPROVAL',
     );
 
     // Verify current graph is populated
-    expect((shell as any).currentGraph).toBeDefined();
+    expect(shellInternal.currentGraph).toBeDefined();
 
     // Verify rendered output displayed Plan Proposal with structured tasks
     await waitForCondition(

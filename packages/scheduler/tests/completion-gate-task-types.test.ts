@@ -591,7 +591,7 @@ describe('CompletionGate - Task-Type Aware Policy Matrix', () => {
     it('throws error when unhandled task type is encountered', () => {
       const fakeTask = {
         ...createTask('implementation'),
-        type: 'unregistered_type' as any,
+        type: 'unregistered_type' as unknown as Task['type'],
       };
       expect(() => resolveCompletionPolicy(fakeTask)).toThrow('Unhandled TaskType');
     });

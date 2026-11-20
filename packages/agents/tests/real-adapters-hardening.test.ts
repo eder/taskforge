@@ -49,9 +49,11 @@ describe('Real-Agent Hardening - Safety & Adapters', () => {
     const codex = new CodexAdapter();
     const agy = new AntigravityAdapter();
 
-    const claudeArgs = (claude as any).options.defaultArgs || [];
-    const codexArgs = (codex as any).options.defaultArgs || [];
-    const agyArgs = (agy as any).options.defaultArgs || [];
+    const defaultArgsOf = (adapter: unknown): string[] =>
+      (adapter as { options: { defaultArgs?: string[] } }).options.defaultArgs || [];
+    const claudeArgs = defaultArgsOf(claude);
+    const codexArgs = defaultArgsOf(codex);
+    const agyArgs = defaultArgsOf(agy);
 
     // Claude Code must never bypass permissions silently
     expect(claudeArgs).not.toContain('--dangerously-skip-permissions');
@@ -90,7 +92,9 @@ describe('Real-Agent Hardening - Safety & Adapters', () => {
       },
     };
 
-    const prompt = (claude as any).buildPrompt(assignment, context) as string;
+    const prompt = (
+      claude as unknown as { buildPrompt: (a: AgentAssignment, c: AgentContext) => string }
+    ).buildPrompt(assignment, context);
 
     expect(prompt).toContain('Original user request:\nMe explique esse projeto');
     expect(prompt).toContain('Role: researcher');
@@ -130,11 +134,15 @@ describe('Real-Agent Hardening - Safety & Adapters', () => {
         dependencies: [],
       },
     };
-    const prompt = (claude as any).buildPrompt(assignment, context) as string;
+    const prompt = (
+      claude as unknown as { buildPrompt: (a: AgentAssignment, c: AgentContext) => string }
+    ).buildPrompt(assignment, context);
     expect(prompt).toContain('REFERENCE DATA');
     expect(prompt).toContain('EARLIER REPORT BODY');
     expect(prompt.indexOf('Original user request')).toBeLessThan(prompt.indexOf('EARLIER REPORT BODY'));
-    const without = (claude as any).buildPrompt(assignment, { ...context, priorContext: undefined }) as string;
+    const without = (
+      claude as unknown as { buildPrompt: (a: AgentAssignment, c: AgentContext) => string }
+    ).buildPrompt(assignment, { ...context, priorContext: undefined });
     expect(without).not.toContain('REFERENCE DATA');
   });
 
@@ -214,16 +222,17 @@ function createMockChild(): { child: ChildProcess; written: string[] } {
     },
   });
 
-  const emitter = new EventEmitter() as any;
-  emitter.stdin = mockStdin;
-  emitter.killed = false;
-  emitter.kill = vi.fn((signal?: string) => {
-    emitter.killed = true;
-    emitter.emit('exit', 0, signal);
-    return true;
+  const emitter = Object.assign(new EventEmitter(), {
+    stdin: mockStdin,
+    killed: false,
+    kill: vi.fn((signal?: string) => {
+      emitter.killed = true;
+      emitter.emit('exit', 0, signal);
+      return true;
+    }),
   });
 
-  return { child: emitter as ChildProcess, written };
+  return { child: emitter as unknown as ChildProcess, written };
 }
 
 describe('Real-Agent Hardening - RealCliAgentSession Bidirectional I/O', () => {
@@ -471,10 +480,12 @@ describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
         },
         interactions: { humanResponseTimeout: 5000, onTimeout: { permission: 'deny', question: 'cancel', confirmation: 'deny' } },
         headless: { onUnknownPermission: 'deny', onHumanQuestion: 'fail', onConfirmationRequired: 'block', onAuthenticationRequired: 'fail' },
-      } as any,
+      } as unknown as ConstructorParameters<typeof InteractionGateway>[0]['config'],
     });
 
-    let interceptedRequest: any;
+    let interceptedRequest:
+      | { id: string; type: string; prompt: string; resource?: string }
+      | undefined;
     gateway.onInteraction((req) => {
       interceptedRequest = req;
     });
@@ -502,12 +513,12 @@ describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
 
     // Ensure gateway intercepted request with matching requestId
     expect(interceptedRequest).toBeDefined();
-    expect(interceptedRequest.id).toBeDefined();
-    expect(interceptedRequest.type).toBe('permission');
-    expect(interceptedRequest.prompt).toContain('Do you want to run migration on production?');
+    expect(interceptedRequest!.id).toBeDefined();
+    expect(interceptedRequest!.type).toBe('permission');
+    expect(interceptedRequest!.prompt).toContain('Do you want to run migration on production?');
 
     // Human answers allow via gateway
-    const resolved = gateway.resolve(interceptedRequest.id, 'allow');
+    const resolved = gateway.resolve(interceptedRequest!.id, 'allow');
     expect(resolved).toBe(true);
     await new Promise((r) => setTimeout(r, 10));
 
@@ -521,10 +532,12 @@ describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
         ui: { mode: 'interactive' },
         interactions: { humanResponseTimeout: 5000, onTimeout: { permission: 'deny', question: 'cancel', confirmation: 'deny' } },
         headless: { onUnknownPermission: 'deny', onHumanQuestion: 'fail', onConfirmationRequired: 'block', onAuthenticationRequired: 'fail' },
-      } as any,
+      } as unknown as ConstructorParameters<typeof InteractionGateway>[0]['config'],
     });
 
-    let interceptedRequest: any;
+    let interceptedRequest:
+      | { id: string; type: string; prompt: string; resource?: string }
+      | undefined;
     gateway.onInteraction((req) => {
       interceptedRequest = req;
     });
@@ -555,11 +568,11 @@ describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(interceptedRequest).toBeDefined();
-    expect(interceptedRequest.type).toBe('question');
-    expect(interceptedRequest.prompt).toBe('Select target database');
+    expect(interceptedRequest!.type).toBe('question');
+    expect(interceptedRequest!.prompt).toBe('Select target database');
 
     // Human answers custom option
-    const resolved = gateway.resolve(interceptedRequest.id, 'answer', 'PostgreSQL');
+    const resolved = gateway.resolve(interceptedRequest!.id, 'answer', 'PostgreSQL');
     expect(resolved).toBe(true);
     await new Promise((r) => setTimeout(r, 10));
 
@@ -579,10 +592,12 @@ describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
         },
         interactions: { humanResponseTimeout: 5000, onTimeout: { permission: 'deny', question: 'cancel', confirmation: 'deny' } },
         headless: { onUnknownPermission: 'deny', onHumanQuestion: 'fail', onConfirmationRequired: 'block', onAuthenticationRequired: 'fail' },
-      } as any,
+      } as unknown as ConstructorParameters<typeof InteractionGateway>[0]['config'],
     });
 
-    let interceptedRequest: any;
+    let interceptedRequest:
+      | { id: string; type: string; prompt: string; resource?: string }
+      | undefined;
     gateway.onInteraction((req) => {
       interceptedRequest = req;
     });
@@ -620,11 +635,11 @@ describe('Real-Agent Hardening - Full E2E Gateway & Permission Loop', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(interceptedRequest).toBeDefined();
-    expect(interceptedRequest.type).toBe('permission');
-    expect(interceptedRequest.resource).toBe('rm -rf ./node_modules');
+    expect(interceptedRequest!.type).toBe('permission');
+    expect(interceptedRequest!.resource).toBe('rm -rf ./node_modules');
 
     // Deny permission
-    const resolved = gateway.resolve(interceptedRequest.id, 'deny');
+    const resolved = gateway.resolve(interceptedRequest!.id, 'deny');
     expect(resolved).toBe(true);
     await new Promise((r) => setTimeout(r, 10));
 
@@ -679,21 +694,33 @@ describe('Codex sandbox mode is stated by TaskForge, not inherited from the user
     ...over,
   });
 
+  const formatArgs = (adapter: CodexAdapter, prompt: string, ctx: AgentContext): string[] =>
+    (adapter as unknown as { formatArgs: (p: string, c: AgentContext) => string[] }).formatArgs(
+      prompt,
+      ctx,
+    );
+
   it('lets an assignment that may change files write inside its isolated worktree', () => {
-    const args = (new CodexAdapter() as any).formatArgs('PROMPT', context()) as string[];
+    const args = formatArgs(new CodexAdapter(), 'PROMPT', context());
     expect(args).toEqual(['exec', '--json', '--ephemeral', '--sandbox', 'workspace-write', 'PROMPT']);
   });
 
   it('keeps read-only assignments read-only', () => {
-    const readOnly = (new CodexAdapter() as any).formatArgs('PROMPT', context({ mutationAllowed: false })) as string[];
+    const readOnly = formatArgs(new CodexAdapter(), 'PROMPT', context({ mutationAllowed: false }));
     expect(readOnly.slice(-3)).toEqual(['--sandbox', 'read-only', 'PROMPT']);
-    const star = (new CodexAdapter() as any).formatArgs('PROMPT', context({ task: { objective: 'x', allowedScope: [], forbiddenChanges: ['*'], acceptanceCriteria: [], dependencies: [] } })) as string[];
+    const star = formatArgs(
+      new CodexAdapter(),
+      'PROMPT',
+      context({
+        task: { objective: 'x', allowedScope: [], forbiddenChanges: ['*'], acceptanceCriteria: [], dependencies: [] },
+      }),
+    );
     expect(star.slice(-3)).toEqual(['--sandbox', 'read-only', 'PROMPT']);
   });
 
   it('leaves alone a sandbox choice the user put in their agent configuration', () => {
     const custom = new CodexAdapter({ defaultArgs: ['exec', '--json', '--sandbox', 'danger-full-access'] });
-    expect((custom as any).formatArgs('PROMPT', context()) as string[]).toEqual(['exec', '--json', '--sandbox', 'danger-full-access', 'PROMPT']);
+    expect(formatArgs(custom, 'PROMPT', context())).toEqual(['exec', '--json', '--sandbox', 'danger-full-access', 'PROMPT']);
   });
 });
 
@@ -706,9 +733,14 @@ describe('Claude Code is told it may edit, instead of relying on the user’s se
     task: { objective: 'x', allowedScope: ['**'], forbiddenChanges: [], acceptanceCriteria: ['x'], dependencies: [] },
     ...over,
   });
+  const formatArgs = (adapter: ClaudeCodeAdapter, prompt: string, ctx: AgentContext): string[] =>
+    (adapter as unknown as { formatArgs: (p: string, c: AgentContext) => string[] }).formatArgs(
+      prompt,
+      ctx,
+    );
 
   it('accepts edits inside the worktree for an assignment that may change files, before -p (which takes the prompt)', () => {
-    const args = (new ClaudeCodeAdapter() as any).formatArgs('PROMPT', context()) as string[];
+    const args = formatArgs(new ClaudeCodeAdapter(), 'PROMPT', context());
     expect(args).toEqual([
       '--output-format=stream-json',
       '--verbose',
@@ -721,14 +753,14 @@ describe('Claude Code is told it may edit, instead of relying on the user’s se
   });
 
   it('leaves read-only assignments exactly as they were', () => {
-    const args = (new ClaudeCodeAdapter() as any).formatArgs('PROMPT', context({ mutationAllowed: false })) as string[];
+    const args = formatArgs(new ClaudeCodeAdapter(), 'PROMPT', context({ mutationAllowed: false }));
     expect(args).not.toContain('--permission-mode');
     expect(args.slice(-2)).toEqual(['-p', 'PROMPT']);
   });
 
   it('respects a permission choice the user put in their agent configuration', () => {
     const custom = new ClaudeCodeAdapter({ defaultArgs: ['--output-format=stream-json', '--permission-mode', 'plan', '-p'] });
-    const args = (custom as any).formatArgs('PROMPT', context()) as string[];
+    const args = formatArgs(custom, 'PROMPT', context());
     expect(args.filter((a) => a === '--permission-mode')).toHaveLength(1);
     expect(args).toContain('plan');
   });

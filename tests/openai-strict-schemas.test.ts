@@ -10,7 +10,7 @@ import { SEMANTIC_PLAN_JSON_SCHEMA } from '@taskforge/planner';
  */
 function strictViolations(node: unknown, at = 'root'): string[] {
   if (!node || typeof node !== 'object') return [];
-  const n = node as Record<string, any>;
+  const n = node as Record<string, unknown>;
   const problems: string[] = [];
   const types = Array.isArray(n.type) ? n.type : [n.type];
   if (types.includes('object')) {

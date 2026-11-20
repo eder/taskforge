@@ -240,32 +240,39 @@ export async function executeGovernedAssignment(
         (async () => {
           try {
             for await (const event of session.events()) {
+              const evt = event as {
+                prompt?: string;
+                resource?: string;
+                operation?: string;
+                category?: string;
+                requestId?: string;
+              };
               if (event.type === 'permission_request') {
                 ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
                 ctx.onAttention?.('waiting_permission');
                 ctx.activityTracker?.setAttention(assignment.id, {
                   type: 'permission',
-                  prompt: (event as any).prompt || 'Permission approval required',
-                  resource: (event as any).resource,
-                  operation: (event as any).operation,
-                  category: (event as any).category,
-                  requestId: (event as any).requestId,
+                  prompt: evt.prompt || 'Permission approval required',
+                  resource: evt.resource,
+                  operation: evt.operation,
+                  category: evt.category,
+                  requestId: evt.requestId,
                 });
               } else if (event.type === 'question') {
                 ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_input');
                 ctx.onAttention?.('waiting_input');
                 ctx.activityTracker?.setAttention(assignment.id, {
                   type: 'question',
-                  prompt: (event as any).prompt || 'Question answer required',
-                  requestId: (event as any).requestId,
+                  prompt: evt.prompt || 'Question answer required',
+                  requestId: evt.requestId,
                 });
               } else if (event.type === 'authentication_required') {
                 ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_auth');
                 ctx.onAttention?.('waiting_auth');
                 ctx.activityTracker?.setAttention(assignment.id, {
                   type: 'auth',
-                  prompt: (event as any).prompt || 'Authentication required',
-                  requestId: (event as any).requestId,
+                  prompt: evt.prompt || 'Authentication required',
+                  requestId: evt.requestId,
                 });
               }
 
@@ -309,15 +316,22 @@ export async function executeGovernedAssignment(
       onEvent: async (event) => {
         if (ctx.interactionGateway && session) {
           if (event.type === 'permission_request') {
+            const evt = event as {
+              prompt?: string;
+              resource?: string;
+              operation?: string;
+              category?: string;
+              requestId?: string;
+            };
             ctx.assignmentRepo.updateStatus(assignment.id, 'waiting_permission');
             ctx.onAttention?.('waiting_permission');
             ctx.activityTracker?.setAttention(assignment.id, {
               type: 'permission',
-              prompt: (event as any).prompt || 'Permission approval required',
-              resource: (event as any).resource,
-              operation: (event as any).operation,
-              category: (event as any).category,
-              requestId: (event as any).requestId,
+              prompt: evt.prompt || 'Permission approval required',
+              resource: evt.resource,
+              operation: evt.operation,
+              category: evt.category,
+              requestId: evt.requestId,
             });
           }
           await ctx.interactionGateway.handleEvent(event, session, {
@@ -493,18 +507,30 @@ export function parseStructuredFindings(
 ): import('@taskforge/shared').ReviewFinding[] | undefined {
   if (!text) return undefined;
 
-  const validSeverities = new Set(['critical', 'major', 'minor', 'suggestion']);
+  const validSeverities = new Set<import('@taskforge/shared').ReviewFinding['severity']>([
+    'critical',
+    'major',
+    'minor',
+    'suggestion',
+  ]);
 
-  function extract(obj: any): import('@taskforge/shared').ReviewFinding[] | undefined {
+  function extract(obj: unknown): import('@taskforge/shared').ReviewFinding[] | undefined {
     if (!obj || typeof obj !== 'object') return undefined;
-    const list = Array.isArray(obj) ? obj : Array.isArray(obj.findings) ? obj.findings : undefined;
+    const rawFindings = (obj as { findings?: unknown }).findings;
+    const list = Array.isArray(obj) ? obj : Array.isArray(rawFindings) ? rawFindings : undefined;
     if (!list || !Array.isArray(list)) return undefined;
 
     const res: import('@taskforge/shared').ReviewFinding[] = [];
-    for (const item of list) {
-      if (typeof item === 'object' && item !== null && typeof item.description === 'string') {
+    for (const rawItem of list) {
+      if (typeof rawItem === 'object' && rawItem !== null) {
+        const item = rawItem as Record<string, unknown>;
+        if (typeof item.description !== 'string') continue;
         const rawSev = typeof item.severity === 'string' ? item.severity.toLowerCase() : 'minor';
-        const sev = validSeverities.has(rawSev) ? rawSev : 'minor';
+        const sev: import('@taskforge/shared').ReviewFinding['severity'] = validSeverities.has(
+          rawSev as import('@taskforge/shared').ReviewFinding['severity'],
+        )
+          ? (rawSev as import('@taskforge/shared').ReviewFinding['severity'])
+          : 'minor';
         const file =
           typeof item.file === 'string'
             ? item.file
@@ -519,7 +545,7 @@ export function parseStructuredFindings(
           if (!isNaN(parsed)) line = parsed;
         }
         res.push({
-          severity: sev as any,
+          severity: sev,
           description: item.description,
           file,
           line,

@@ -297,7 +297,6 @@ export async function formatRunSummary(ctx: RunSummaryContext, result: Orchestra
 
   const usageAccuracy = ctx.telemetry.getUsageAccuracy(result.runId);
   const efficiency = ctx.telemetry.getOrchestrationEfficiency(result.runId);
-  const pct = (value: number) => `${(value * 100).toFixed(0)}%`;
 
   const dimensionBadge = (status: 'healthy' | 'attention' | 'uncertain'): string =>
     status === 'healthy'

@@ -9,7 +9,7 @@ import {
   getDefaultConfig,
 } from '@taskforge/shared';
 import { type AgentAdapter, AgentRegistry } from '@taskforge/agents';
-import { TaskForgeDatabase, EventRepository } from '@taskforge/persistence';
+import { TaskForgeDatabase } from '@taskforge/persistence';
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { TaskGraph, type Task } from '@taskforge/core';
 import type { RoutingProvider } from '@taskforge/router';

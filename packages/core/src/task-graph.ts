@@ -3,9 +3,9 @@ import { Task, TaskStateMachine } from './models.js';
 
 export class TaskGraph {
   private tasks: Map<string, Task> = new Map();
-  public metadata?: Record<string, any>;
+  public metadata?: Record<string, unknown>;
 
-  constructor(tasks: Task[] = [], metadata?: Record<string, any>) {
+  constructor(tasks: Task[] = [], metadata?: Record<string, unknown>) {
     this.metadata = metadata;
     for (const task of tasks) {
       this.addTask(task);

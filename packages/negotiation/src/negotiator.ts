@@ -20,8 +20,11 @@ export class AgentPreflightEvaluator implements PreflightEvaluator {
       return this.options.evaluateWorkerFn(task, agent);
     }
 
-    if (agent && typeof (agent as any).preflight === 'function') {
-      return (agent as any).preflight(task);
+    const preflightAgent = agent as
+      | (AgentAdapter & { preflight?: (t: Task) => Promise<TaskPreflightResult> })
+      | undefined;
+    if (preflightAgent && typeof preflightAgent.preflight === 'function') {
+      return preflightAgent.preflight(task);
     }
 
     const contract = task.contract;
