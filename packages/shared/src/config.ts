@@ -49,6 +49,17 @@ const DualReviewSchema = z.object({
   onNoIndependentReviewer: z.enum(['block', 'skip']).default('block'),
 });
 
+const SemanticAuditSchema = z.object({
+  /** Opt-in AST boundary check that blocks breaking exported signatures or protected internals. */
+  enabled: z.boolean().default(false),
+  /** Fail verification when an exported interface/type/function/class/enum signature breaks. */
+  blockOnBreakingExports: z.boolean().default(true),
+  /** Also fail verification when an unexported top-level internal function or class is modified. */
+  blockOnUnexportedChanges: z.boolean().default(false),
+  /** Optional path globs restricting which files are semantically audited (empty = all changed TS/JS files). */
+  scopes: z.array(z.string().min(1)).default([]),
+});
+
 const ScopedVerificationRuleSchema = z.object({
   scope: z.string().min(1),
   commands: z.array(z.string().min(1)).min(1),
@@ -198,6 +209,7 @@ export const TaskForgeConfigSchema = z.object({
       /** Extra environment variable names verification commands may see (secret-looking names are otherwise withheld). */
       passEnv: z.array(z.string()).default([]),
       dualReview: DualReviewSchema.default({}),
+      semanticAudit: SemanticAuditSchema.default({}),
     })
     .default({
       tests: true,

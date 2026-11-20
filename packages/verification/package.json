@@ -22,11 +22,10 @@
   "dependencies": {
     "@taskforge/shared": "workspace:*",
     "@taskforge/execution": "workspace:*",
-    "@taskforge/persistence": "workspace:*"
-  },
-  "devDependencies": {
+    "@taskforge/persistence": "workspace:*",
     "typescript": "^5.7.2"
   },
+  "devDependencies": {},
   "engines": {
     "node": ">=22.0.0"
   },

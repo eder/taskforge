@@ -85,6 +85,16 @@ function reasonFromEvent(event: ReasonEvent): string | undefined {
       const files = Array.isArray(p.violations) ? (p.violations as string[]).slice(0, 5).join(', ') : '';
       return files ? `Changed files outside the allowed scope: ${files}` : undefined;
     }
+    case 'SEMANTIC_SCOPE_VIOLATION': {
+      const items = Array.isArray(p.violations)
+        ? (p.violations as Array<{ file?: string; symbol?: string }>)
+            .slice(0, 5)
+            .map((v) => (v.file && v.symbol ? `${v.file}:${v.symbol}` : v.symbol ?? v.file ?? ''))
+            .filter(Boolean)
+            .join(', ')
+        : '';
+      return items ? `Breaking AST boundary violation(s): ${items}` : 'Breaking AST boundary violation';
+    }
     case 'DUAL_REVIEW_REJECTED':
       return 'An independent reviewer rejected the change';
     case 'DUAL_REVIEW_UNAVAILABLE':
