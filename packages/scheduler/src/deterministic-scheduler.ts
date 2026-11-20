@@ -21,7 +21,13 @@ import {
   TaskRepository,
   WorkspaceRepository,
 } from '@taskforge/persistence';
-import { VerificationRunner, isDocumentationOnlyChange, testsActuallyRan } from '@taskforge/verification';
+import {
+  VerificationRunner,
+  isDocumentationOnlyChange,
+  testsActuallyRan,
+  auditGitCommitSemanticBoundary,
+  type SemanticBoundaryViolation,
+} from '@taskforge/verification';
 import { IntegrationService } from '@taskforge/integration';
 import { NegotiationManager } from '@taskforge/negotiation';
 import { CommunicationBus, EscalationHandler, SessionRegistry } from '@taskforge/collaboration';
@@ -662,6 +668,57 @@ export class DeterministicScheduler {
       });
     }
     return violations;
+  }
+
+  /**
+   * Optional AST boundary check (`verification.semanticAudit.enabled`):
+   * detects breaking changes to exported TS/JS interfaces, types, functions,
+   * classes, enums (and optionally unexported internals) relative to the task's
+   * starting commit.
+   */
+  private async findSemanticScopeViolations(
+    task: Task,
+    commitHash: string | undefined,
+    worktreePath: string,
+  ): Promise<SemanticBoundaryViolation[]> {
+    const auditCfg = this.ctx.config.verification.semanticAudit;
+    if (!auditCfg?.enabled || !commitHash || !taskProducesChanges(task)) return [];
+    const base = await this.resolveCumulativeBase(task);
+    const changedFiles = await this.changedFilesSinceTaskStart(task, commitHash, worktreePath);
+    if (changedFiles.length === 0) return [];
+    const allowedSymbols = Array.isArray(task.contract.metadata?.allowedSymbols)
+      ? (task.contract.metadata.allowedSymbols as unknown[]).filter(
+          (s): s is string => typeof s === 'string',
+        )
+      : undefined;
+    const report = auditGitCommitSemanticBoundary({
+      worktreePath,
+      baseCommit: base,
+      commitHash,
+      changedFiles,
+      options: {
+        blockOnBreakingExports: auditCfg.blockOnBreakingExports,
+        blockOnUnexportedChanges: auditCfg.blockOnUnexportedChanges,
+        scopes: auditCfg.scopes,
+        allowedSymbols,
+      },
+    });
+    if (report.violations.length > 0) {
+      this.ctx.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId: this.ctx.runId,
+        taskId: task.id,
+        type: 'SEMANTIC_SCOPE_VIOLATION',
+        payload: {
+          taskId: task.id,
+          commitHash,
+          auditedFiles: report.auditedFiles,
+          violations: report.violations,
+        },
+        timestamp: new Date(),
+      });
+    }
+    return report.violations;
   }
 
   /**
@@ -1470,6 +1527,37 @@ export class DeterministicScheduler {
           return;
         }
 
+        const collabSemanticViolations = await this.findSemanticScopeViolations(
+          task,
+          res.commitHash,
+          verifyPath,
+        );
+        if (collabSemanticViolations.length > 0) {
+          const summary = collabSemanticViolations
+            .slice(0, 5)
+            .map((v) => `${v.file}:${v.symbol} (${v.detail})`)
+            .join('; ');
+          this.ctx.onProgress?.(
+            `[${task.id}] Collaborative task BLOCKED by semantic AST audit: ${summary}`,
+          );
+          this.noteTaskFailure(
+            task,
+            'semantic_scope',
+            `Breaking AST boundary violation(s): ${summary}`,
+          );
+          this.preserveCandidate(task, {
+            commit: res.commitHash,
+            phase: 'verification',
+            failureClass: 'code_or_test',
+            reason: `Breaking AST boundary violation(s): ${summary}`,
+          });
+          graph.updateTaskStatus(task.id, 'failed');
+          taskRepo.updateStatus(task.id, 'failed');
+          graph.updateTaskStatus(task.id, 'blocked');
+          taskRepo.updateStatus(task.id, 'blocked');
+          return;
+        }
+
         const runAutomatedVerification = requiresAutomatedRepositoryVerification(task);
         if (runAutomatedVerification) {
           this.ctx.activityTracker?.updateStatus(
@@ -2149,6 +2237,32 @@ export class DeterministicScheduler {
           failureClass: 'code_or_test',
           reason: `Modified ${scopeViolations.length} file(s) outside the allowed scope`,
           evidence: `Allowed scope: ${task.contract.allowedScope.join(', ')}\nFiles outside scope (revert these, keep changes inside the scope):\n${scopeViolations.map((f) => `- ${f}`).join('\n')}`,
+          candidateCommit: agentResult.commitHash,
+          assignmentId,
+        });
+        await worktreeManager.removeWorktree(task.id, assignmentId, true, true).catch(() => {});
+        return;
+      }
+
+      const semanticViolations = await this.findSemanticScopeViolations(
+        task,
+        agentResult.commitHash,
+        wt.path,
+      );
+      if (semanticViolations.length > 0) {
+        const shown = semanticViolations
+          .slice(0, 5)
+          .map((v) => `${v.file}:${v.symbol}`)
+          .join(', ');
+        this.ctx.onProgress?.(
+          `[${task.id}] ✗ Breaking AST boundary violation(s): ${shown}`,
+        );
+        await this.recoverTask(task, {
+          agentId,
+          phase: 'verification',
+          failureClass: 'code_or_test',
+          reason: `Semantic AST audit found ${semanticViolations.length} breaking signature violation(s)`,
+          evidence: `Breaking AST boundary violations (preserve existing exported signatures or make additions backwards-compatible):\n${semanticViolations.map((v) => `- ${v.file} [${v.symbol}]: ${v.detail}`).join('\n')}`,
           candidateCommit: agentResult.commitHash,
           assignmentId,
         });

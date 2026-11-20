@@ -85,6 +85,7 @@ const CAUSE_LABELS: Record<string, string> = {
   provider_auth: 'an agent was not signed in',
   token_budget: 'the token budget was reached',
   scope_violation: 'an agent changed files outside its allowed scope',
+  semantic_scope_violation: 'an agent broke an exported API signature or protected symbol',
   review_rejected: 'an independent reviewer rejected the change',
 };
 
@@ -264,6 +265,7 @@ export function computeInsights(
         bump(String((e.payload as { failureClass?: string }).failureClass ?? 'code_or_test'));
       } else if (e.type === 'TOKEN_BUDGET_REACHED') bump('token_budget');
       else if (e.type === 'SCOPE_VIOLATION') bump('scope_violation');
+      else if (e.type === 'SEMANTIC_SCOPE_VIOLATION') bump('semantic_scope_violation');
       else if (e.type === 'DUAL_REVIEW_REJECTED') bump('review_rejected');
     }
 
