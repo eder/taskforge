@@ -113,6 +113,29 @@ describe('kept work in the failure report', () => {
     expect(text).toContain('continues from its kept work');
     db.close();
   });
+
+  it('scopes failure evidence to the latest attempt after RUN_RESUMED so fixed blockers are not re-diagnosed', () => {
+    const { db, addTask, addEvent, deps } = setup();
+    addTask('T1', 'blocked');
+    addEvent('T1', 'TASK_RECOVERY_BLOCKED', {
+      failureClass: 'environment',
+      reason: "Connect call failed ('127.0.0.1', 8765)",
+      evidence: "ERROR test_multiturn.py - OSError: Connect call failed ('127.0.0.1', 8765)",
+    });
+    addEvent('T1', 'TASK_CANDIDATE_PRESERVED', { branch: 'taskforge/candidate/123/T1', commit: 'abc' });
+    addEvent(undefined, 'RUN_RESUMED', { guidance: '' });
+    addEvent('T1', 'TASK_RECOVERY_BLOCKED', {
+      failureClass: 'environment',
+      reason: "FileNotFoundError: '../testdata/capital_irlanda.pcm'",
+      evidence: "ERROR test_memory.py - FileNotFoundError: '../testdata/capital_irlanda.pcm'",
+    });
+
+    const lines = describeRunFailures(deps, 'run-1');
+    expect(lines[0].keptBranch).toBe('taskforge/candidate/123/T1');
+    expect(lines[0].evidence).toContain('capital_irlanda.pcm');
+    expect(lines[0].evidence).not.toContain('8765');
+    db.close();
+  });
 });
 
 describe('formatRunFailureLines', () => {

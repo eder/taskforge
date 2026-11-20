@@ -122,16 +122,36 @@ export function linkableMissingPaths(repoRoot: string, text: string): string[] {
       const tracked = git(repoRoot, ['ls-files', '--', rel]).trim().length > 0;
       if (!tracked) {
         const posix = rel.split(path.sep).join('/');
-        found.add(posix);
-        // A failure only names the files it reached first. A test data set is a directory of
-        // files, so the next run would name the next one and the next (a real run needed
-        // five rounds): link the untracked files that sit beside it too.
-        for (const sibling of untrackedSiblings(repoRoot, posix)) found.add(sibling);
+        const siblings = untrackedSiblings(repoRoot, posix);
+        const parentDir = path.posix.dirname(posix);
+        if (siblings.length > 5 && canLinkWholeDirectory(repoRoot, parentDir)) {
+          found.add(parentDir);
+        } else {
+          found.add(posix);
+          // A failure only names the files it reached first. A test data set is a directory of
+          // files, so the next run would name the next one and the next (a real run needed
+          // five rounds): link the untracked files that sit beside it too.
+          for (const sibling of siblings) found.add(sibling);
+        }
         break;
       }
     }
   }
   return [...found].slice(0, 40);
+}
+
+/** True when `dir` is a non-root directory with no git-tracked files and no hidden dotfiles. */
+function canLinkWholeDirectory(repoRoot: string, dir: string): boolean {
+  if (!dir || dir === '.' || dir.startsWith('.')) return false;
+  const full = path.join(repoRoot, dir);
+  try {
+    if (!fs.statSync(full).isDirectory()) return false;
+    const entries = fs.readdirSync(full);
+    if (entries.some((name) => name.startsWith('.'))) return false;
+  } catch {
+    return false;
+  }
+  return git(repoRoot, ['ls-files', '--', dir]).trim().length === 0;
 }
 
 /** Untracked (including git-ignored) files directly inside the same directory as `rel`. */
@@ -202,10 +222,19 @@ export function actionableFixes(fixes: EnvironmentFix[]): EnvironmentFix[] {
   return fixes.filter((f) => f.kind !== 'manual');
 }
 
+function summarizePathList(paths: string[]): string {
+  if (paths.length <= 4) return paths.join(', ');
+  const dirs = [...new Set(paths.map((p) => path.posix.dirname(p)).filter((d) => d && d !== '.'))];
+  const preview = paths.slice(0, 3).join(', ');
+  const extra = paths.length - 3;
+  const location = dirs.length === 1 ? ` in ${dirs[0]}/` : '';
+  return `${paths.length} untracked files${location} (${preview}, and ${extra} more)`;
+}
+
 export function describeFix(fix: EnvironmentFix): string {
   switch (fix.kind) {
     case 'link_files':
-      return `link ${fix.paths.join(', ')} into the isolated copies so the tests can load it (the agents can read it there too)`;
+      return `link ${summarizePathList(fix.paths)} into the isolated copies so the tests can load ${fix.paths.length === 1 ? 'it' : 'them'} (the agents can read ${fix.paths.length === 1 ? 'it' : 'them'} there too)`;
     case 'pass_env':
       return `let the checks see ${fix.names.join(', ')} (verification.passEnv)`;
     case 'start_service':
@@ -255,8 +284,8 @@ export async function applyEnvironmentFixes(repoRoot: string, fixes: Environment
         result.linksAdded.push(...fix.paths);
         result.applied.push(
           added.length > 0
-            ? `Added ${added.join(', ')} to execution.worktreeLinks in .taskforge/config.yaml`
-            : `${fix.paths.join(', ')} was already linked`,
+            ? `Added ${summarizePathList(added)} to execution.worktreeLinks in .taskforge/config.yaml`
+            : `${summarizePathList(fix.paths)} was already linked`,
         );
       } else if (fix.kind === 'pass_env') {
         const { added } = addToProjectConfigList(repoRoot, ['verification', 'passEnv'], fix.names, []);

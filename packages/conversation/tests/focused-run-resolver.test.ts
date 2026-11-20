@@ -284,4 +284,20 @@ describe('InteractiveShell open-text resolution of stopped runs', () => {
     );
     expect(resumes).toHaveLength(1);
   });
+
+  it('answers "Por que falhou ?" without polluting guidance, and retries immediately on "Tente de novo"', async () => {
+    seedPreflightPortFailure('run-1790000000000104');
+    shell = openShell();
+    await enterStopped(shell, 'run-1790000000000104');
+
+    const explanation = plain(await shell.handleInput('Por que falhou ?'));
+    expect(explanation).toContain('Por que run-1790000000000104 parou');
+    expect(explanation).toContain('8765');
+    expect(resumes).toHaveLength(0);
+
+    await shell.handleInput('Tente de novo');
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0].runId).toBe('run-1790000000000104');
+    expect(resumes[0].guidance).toBeUndefined();
+  });
 });

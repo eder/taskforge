@@ -159,4 +159,22 @@ describe('a missing file: link it when your checkout has it, blame the change wh
       'server/audio/third.wav',
     ]);
   });
+
+  it('links a large untracked fixture directory as a single directory entry and summarizes large file lists cleanly', async () => {
+    const { linkableMissingPaths } = await import('../src/environment-repair.js');
+    fs.mkdirSync(path.join(repo, 'testdata'), { recursive: true });
+    fs.appendFileSync(path.join(repo, '.gitignore'), 'testdata/\n');
+    for (let i = 0; i < 8; i++) {
+      fs.writeFileSync(path.join(repo, `testdata/sample_${i}.pcm`), 'pcm');
+    }
+    const text = "Command: cd server && pytest\nFileNotFoundError: [Errno 2] No such file or directory: '../testdata/sample_0.pcm'";
+    expect(linkableMissingPaths(repo, text)).toEqual(['testdata']);
+
+    const longDesc = describeFix({
+      kind: 'link_files',
+      paths: Array.from({ length: 12 }, (_, i) => `mixed/f${i}.pcm`),
+    });
+    expect(longDesc).toContain('12 untracked files in mixed/');
+    expect(longDesc).toContain('and 9 more');
+  });
 });

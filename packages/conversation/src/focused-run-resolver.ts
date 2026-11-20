@@ -2,6 +2,8 @@ import type { RunFocus } from './run-focus.js';
 
 export type FocusedInstructionResolution =
   | { kind: 'accept_proposal' }
+  | { kind: 'retry_now' }
+  | { kind: 'explain'; language: 'pt' | 'en' }
   | { kind: 'leave' }
   | { kind: 'skip_preflight'; guidance?: string }
   | { kind: 'set_check_command'; command: string }
@@ -37,6 +39,35 @@ export function classifyFocusedInstruction(
     )
   ) {
     return { kind: 'leave' };
+  }
+
+  // 1b. Questions asking why it failed / what happened (never pass as agent guidance!).
+  const asksExplainPt =
+    /^(?:por\s*que|pq|porque)\b[^.\n]{0,80}(?:falh|erro|parou|bloque|n[aã]o\s+(?:rodou|passou|funcionou|foi)|aconteceu)/i.test(
+      lower,
+    ) ||
+    /^(?:o\s+que\s+(?:aconteceu|deu\s+errado|falhou|houve)|qual\s+(?:foi\s+)?o\s+erro|me\s+explica|explica(?:\s+isso|\s+esse\s+erro|\s+melhor)?|n[aã]o\s+entendi(?:\s+nada|\s+esse\s+erro|\s+o\s+erro)?)[.!?\s]*$/i.test(
+      lower,
+    );
+  if (asksExplainPt) {
+    return { kind: 'explain', language: 'pt' };
+  }
+  const asksExplainEn =
+    /^(?:why\s+(?:did\s+(?:it|this|that)\s+)?(?:fail|stop|block|error)|what\s+(?:happened|went\s+wrong|failed|is\s+(?:this|the)\s+error)|explain(?:\s+(?:this|that|the\s+error|why))?|i\s+don'?t\s+understand)[.!?\s]*$/i.test(
+      lower,
+    );
+  if (asksExplainEn) {
+    return { kind: 'explain', language: 'en' };
+  }
+
+  // 1c. Bare retry / re-run requests in PT or EN (retry immediately without
+  //     asking for Enter again or passing "Tente de novo" as agent guidance).
+  if (
+    /^(?:tent[ae](?:r)?\s+(?:de\s+novo|novamente|outra\s+vez)|rod[ae](?:r)?\s+(?:de\s+novo|novamente)|execut[ae](?:r)?\s+(?:de\s+novo|novamente)|test[ae](?:r)?\s+(?:de\s+novo|novamente)|verific[ae](?:r)?\s+(?:de\s+novo|novamente)|try\s+again|retry|run\s+again|re-?run|check\s+again|test\s+again)[.!?\s]*$/i.test(
+      lower,
+    )
+  ) {
+    return { kind: 'retry_now' };
   }
 
   // 2. Explicit skip / bypass preflight (works even if a question is pending).

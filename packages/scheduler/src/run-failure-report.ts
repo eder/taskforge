@@ -145,21 +145,37 @@ export function describeRunFailures(
   const bad = new Set(tasks.filter((t) => t.status === 'failed' || t.status === 'blocked').map((t) => t.id));
   const lines: RunFailureLine[] = [...budgetLines];
 
+  // Track where the latest resume began so fixed blockers from an earlier attempt
+  // (e.g. a port that is already up) do not leak into the current attempt's diagnosis.
+  let lastResumeIndex = -1;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === 'RUN_RESUMED') {
+      lastResumeIndex = i;
+      break;
+    }
+  }
+
   for (const task of tasks) {
     if (bad.has(task.id)) {
-      const mine = events
-        .filter((e) => e.taskId === task.id)
-        .map((e) => ({ type: e.type, payload: e.payload ?? {}, timestamp: new Date(e.timestamp) }))
-        // Newest first. Events written in the same millisecond have no reliable order, so
-        // ties go to the event that carries the most detail (the recorded block with the
-        // check output), not to a short "Preflight: ..." note: otherwise two tasks blocked
-        // by the same cause are described differently from run to run.
-        .sort(
-          (a, b) =>
-            b.timestamp.getTime() - a.timestamp.getTime() || detailRank(b.type) - detailRank(a.type),
-        );
+      const toReasonEvents = (slice: typeof events) =>
+        slice
+          .filter((e) => e.taskId === task.id)
+          .map((e) => ({ type: e.type, payload: e.payload ?? {}, timestamp: new Date(e.timestamp) }))
+          // Newest first. Events written in the same millisecond have no reliable order, so
+          // ties go to the event that carries the most detail (the recorded block with the
+          // check output), not to a short "Preflight: ..." note: otherwise two tasks blocked
+          // by the same cause are described differently from run to run.
+          .sort(
+            (a, b) =>
+              b.timestamp.getTime() - a.timestamp.getTime() || detailRank(b.type) - detailRank(a.type),
+          );
+
+      const allMine = toReasonEvents(events);
+      const sinceResume = lastResumeIndex >= 0 ? toReasonEvents(events.slice(lastResumeIndex + 1)) : [];
+      const mine = sinceResume.length > 0 ? sinceResume : allMine;
+
       const reason = mine.map(reasonFromEvent).find((r) => r);
-      const kept = mine.find((e) => e.type === 'TASK_CANDIDATE_PRESERVED');
+      const kept = allMine.find((e) => e.type === 'TASK_CANDIDATE_PRESERVED');
       lines.push({
         taskId: task.id,
         title: task.title,
@@ -167,9 +183,9 @@ export function describeRunFailures(
         reason,
         keptBranch: typeof kept?.payload.branch === 'string' ? kept.payload.branch : undefined,
         failureClass: mine.map((e) => e.payload.failureClass).find((c) => typeof c === 'string') as string | undefined,
-        // Every recorded text for this task, not just the newest event's: events written
-        // in the same millisecond have no reliable order, and the full check output can
-        // sit on any of them. Diagnosis needs all of it.
+        // Every recorded text for this task in the latest attempt, not just the newest
+        // event's: events written in the same millisecond have no reliable order, and the
+        // full check output can sit on any of them. Diagnosis needs all of it.
         evidence:
           [...new Set(mine.flatMap((e) => [e.payload.reason, e.payload.evidence]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0))]
             .join('\n') || undefined,

@@ -69,6 +69,7 @@ import {
   describeRunFailures,
   formatRunFailureLines,
   planRunRepair,
+  refusedPort,
   capRoles,
   taskProducesChanges,
   repairRun,
@@ -2097,6 +2098,12 @@ export class InteractiveShell {
       this.focusedRun = undefined;
       return `${colors.dim}Left ${left}. It stays in /runs and can be continued any time with /retry.${colors.reset}`;
     }
+    if (resolution.kind === 'explain') {
+      return this.explainFocusedFailure(focus, resolution.language);
+    }
+    if (resolution.kind === 'retry_now') {
+      return this.continueRun(focus.runId, focus.guidance, { tokenBudget: effectiveBudget });
+    }
     if (resolution.kind === 'accept_proposal') {
       return this.acceptFocus();
     }
@@ -2145,6 +2152,95 @@ export class InteractiveShell {
       }
     }
     return this.respondToUnfinishedRun(focus.runId, text, false, effectiveBudget);
+  }
+
+  /** Explains why the focused run stopped in plain language (PT or EN) without changing focus or guidance. */
+  private explainFocusedFailure(focus: RunFocus, language: 'pt' | 'en'): string {
+    const pt = language === 'pt';
+    const failures = describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, focus.runId);
+    const primary = failures.find((l) => l.kind !== 'not_started');
+    const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, focus.runId);
+    const evidenceText = [primary?.reason, primary?.evidence].filter(Boolean).join('\n');
+    const detailLine = primary?.evidence
+      ?.split('\n')
+      .map((l) => l.trim())
+      .find((l) => l.length > 0 && l !== primary.reason && !/^last output:?$/i.test(l));
+    const hasLinkFix = plan.fixes.some((f) => f.kind === 'link_files');
+    const serviceFix = plan.fixes.find((f) => f.kind === 'start_service');
+    const blockedPort =
+      serviceFix && serviceFix.kind === 'start_service' ? serviceFix.port : refusedPort(evidenceText);
+
+    const lines: string[] = [
+      `${colors.brand}✦ ${colors.bold}${pt ? `Por que ${focus.runId} parou` : `Why ${focus.runId} stopped`}${colors.reset}`,
+    ];
+
+    if (primary?.reason) {
+      lines.push(`  ${colors.bold}${pt ? 'Erro registrado:' : 'Recorded error:'}${colors.reset} ${primary.reason}`);
+    }
+    if (detailLine && !primary?.reason?.includes(detailLine)) {
+      lines.push(`  ${colors.bold}${pt ? 'Detalhe:' : 'Detail:'}${colors.reset} ${detailLine.slice(0, 220)}`);
+    }
+
+    if (primary?.failureClass === 'environment') {
+      if (hasLinkFix) {
+        lines.push(
+          pt
+            ? '  O TaskForge executa cada tarefa em uma cópia isolada (`git worktree`), que contém apenas arquivos versionados no Git. Arquivos ou pastas ignorados pelo `.gitignore` (como `.env` ou dados de teste em `testdata/`) não existem nessa cópia até serem linkados em `.taskforge/config.yaml` (`execution.worktreeLinks`).'
+            : '  TaskForge runs each task in an isolated `git worktree`, which only contains git-tracked files. Gitignored files or folders (such as `.env` or fixture directories) are absent there until linked via `execution.worktreeLinks` in `.taskforge/config.yaml`.',
+        );
+      }
+      if (blockedPort) {
+        const svcName =
+          serviceFix && serviceFix.kind === 'start_service' ? ` ("${serviceFix.service}")` : '';
+        lines.push(
+          pt
+            ? `  Os testes tentaram conectar na porta ${blockedPort}, mas nenhum serviço${svcName} estava respondendo (ex.: Docker desligado ou container parado).`
+            : `  The tests tried to connect to port ${blockedPort}, but no service${svcName} was listening (for example, Docker was stopped or the container was down).`,
+        );
+      }
+      if (!hasLinkFix && !blockedPort) {
+        lines.push(
+          pt
+            ? '  O preflight rodou a suíte de verificação no código inalterado antes de chamar qualquer agente (0 tokens gastos) e falhou por dependência de ambiente.'
+            : '  Preflight ran the verification suite on the unchanged code before calling any agent (0 tokens spent) and hit an environment blocker.',
+        );
+      }
+    } else if (primary?.failureClass === 'verification_configuration') {
+      lines.push(
+        pt
+          ? '  O comando de verificação configurado para o projeto não conseguiu executar neste ambiente.'
+          : '  The verification command configured for this project could not run in this environment.',
+      );
+    } else if (primary?.kind === 'budget') {
+      lines.push(
+        pt
+          ? '  A execução atingiu o limite configurado de tokens antes de iniciar as próximas tarefas. O trabalho já feito foi preservado.'
+          : '  The run reached its configured token cap before starting the remaining tasks. Completed work was preserved.',
+      );
+    } else if (evidenceText) {
+      lines.push(
+        pt
+          ? '  A tarefa parou por uma falha de código, teste ou política de validação. O trabalho já integrado foi mantido.'
+          : '  The task stopped on a code, test, or policy failure. Already integrated work was kept.',
+      );
+    }
+
+    if (plan.descriptions.length > 0) {
+      lines.push(
+        `  ${colors.bold}${pt ? 'Reparo sugerido:' : 'Suggested repair:'}${colors.reset}`,
+        ...plan.descriptions.map((d) => `    ${colors.green}•${colors.reset} ${d}`),
+      );
+    }
+
+    lines.push(
+      `  ${colors.dim}${
+        pt
+          ? 'Próximos passos: aperte Enter (ou diga "pode fazer") para aplicar o reparo e continuar · diga "tenta de novo" se você já resolveu fora · peça para o agente corrigir o teste · ou diga "pula o preflight".'
+          : 'Next: press Enter (or say "go ahead") to apply the repair and continue · say "try again" if you fixed it externally · ask an agent to fix the test · or say "skip preflight".'
+      }${colors.reset}`,
+    );
+
+    return lines.join('\n');
   }
 
   /** Runs a shell command the user explicitly asked for to unblock a stopped run, then continues. */
