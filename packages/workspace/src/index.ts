@@ -6,3 +6,4 @@ export * from './project-instructions.js';
 export * from './project-setup.js';
 export * from './project-check.js';
 export * from './project-root.js';
+export * from './repo-indexer.js';

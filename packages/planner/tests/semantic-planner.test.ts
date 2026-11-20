@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Goal } from '@taskforge/core';
 import {
   SemanticPlanner,
+  HeuristicPlanner,
   TaskGraphValidator,
   RawPlanOutput,
   isSmallGoal,
@@ -446,6 +447,15 @@ describe('SemanticPlanner', () => {
         hasECC: false,
         summary: 'repo',
         repositoryMap: ['packages/storage/ — 30 files (ts 30)', 'packages/http/ — 20 files (ts 20)'],
+        indexContext: {
+          indexedFiles: 50,
+          matches: [],
+          suggestedScopes: ['packages/storage/**', 'packages/http/**'],
+          relatedTests: ['packages/storage/tests/store.test.ts'],
+          summaryLines: [
+            'packages/storage/src/store.ts (symbols: Store; tests: packages/storage/tests/store.test.ts)',
+          ],
+        },
       });
 
       const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
@@ -453,6 +463,33 @@ describe('SemanticPlanner', () => {
       expect(user.repository.repositoryMap).toEqual([
         'packages/storage/ — 30 files (ts 30)',
         'packages/http/ — 20 files (ts 20)',
+      ]);
+      expect(user.repository.relevantFiles).toEqual([
+        'packages/storage/src/store.ts (symbols: Store; tests: packages/storage/tests/store.test.ts)',
+      ]);
+
+      const heuristic = await new HeuristicPlanner().plan(goal, {
+        languages: ['TypeScript'],
+        frameworks: [],
+        testCommands: [],
+        lintCommands: [],
+        typecheckCommands: [],
+        buildCommands: [],
+        hasECC: false,
+        summary: 'repo',
+        indexContext: {
+          indexedFiles: 50,
+          matches: [],
+          suggestedScopes: ['packages/storage/**', 'packages/http/**'],
+          relatedTests: ['packages/storage/tests/store.test.ts'],
+          summaryLines: ['packages/storage/src/store.ts (symbols: Store)'],
+        },
+      });
+      const implTask = heuristic.getAllTasks().find((t) => t.type === 'implementation');
+      expect(implTask?.contract.allowedScope).toEqual([
+        'packages/storage/**',
+        'packages/http/**',
+        'packages/storage/tests/store.test.ts',
       ]);
     } finally {
       vi.unstubAllGlobals();

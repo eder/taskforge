@@ -380,6 +380,24 @@ export interface CheckBaseline {
   environmental?: boolean;
 }
 
+export interface RepositoryIndexHit {
+  path: string;
+  score: number;
+  isTest: boolean;
+  symbols: string[];
+  imports: string[];
+  importedBy: string[];
+  relatedTests: string[];
+}
+
+export interface RepositoryIndexContext {
+  indexedFiles: number;
+  matches: RepositoryIndexHit[];
+  suggestedScopes: string[];
+  relatedTests: string[];
+  summaryLines: string[];
+}
+
 export interface RepositoryProfile {
   languages: string[];
   frameworks: string[];
@@ -392,6 +410,8 @@ export interface RepositoryProfile {
   summary: string;
   /** Where the code lives (directories with file counts), so plans can use real, non-overlapping scopes. */
   repositoryMap?: string[];
+  /** Offline BM25 + import-graph architectural context relevant to the current goal. */
+  indexContext?: RepositoryIndexContext;
   /**
    * Repository-authored Markdown instructions discovered from files such as
    * AGENTS.md/CLAUDE.md/GEMINI.md and documents they explicitly reference.
