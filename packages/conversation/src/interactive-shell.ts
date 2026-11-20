@@ -129,6 +129,7 @@ import {
   formatRunSummary,
   formatUsageEstimate,
 } from './shell-formatters.js';
+import { classifyFocusedInstruction } from './focused-run-resolver.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -672,6 +673,11 @@ export class InteractiveShell {
         ...proposal.lines,
         '',
         `↵ ${proposal.hint}   ·   or just tell me what you want   ·   /back to leave this run`,
+        ...(proposal.focus.action.kind === 'fix' || proposal.focus.question
+          ? [
+              '  (Tip: you can also reply in plain text to ask an agent to fix a failing test/inconsistency, change the check command, run a setup command, or skip preflight.)',
+            ]
+          : []),
       );
     } else {
       this.focusedRun = undefined;
@@ -893,8 +899,9 @@ export class InteractiveShell {
       hasDeliverable: Boolean(this.activeRunId && this.deliveryService.getDelivery(this.activeRunId)),
     });
 
-    // The REPL is "in" a stopped run: a plain yes/no answers its proposal, and a
-    // message is about that run unless the planner says it is a new task.
+    // The REPL is "in" a stopped run: a plain yes/no answers its proposal, and
+    // any open-text message resolves or guides that run unless the planner says
+    // it is an unrelated new task.
     if (this.focusedRun && !text.startsWith('/') && !this.currentGraph) {
       if (intent.type === 'approve_plan') return this.acceptFocus();
       if (intent.type === 'reject_plan') {
@@ -902,12 +909,10 @@ export class InteractiveShell {
         this.focusedRun = undefined;
         return `${colors.dim}Left ${left}. It stays in /runs and can be continued any time with /retry.${colors.reset}`;
       }
-      // "I approve the commands, run the tests" is an instruction for the run, not an answer to an
-      // interaction request, unless one is actually waiting.
-      const nothingToApprove =
+      const pendingInteractionReply =
         (intent.type === 'approve_interaction' || intent.type === 'deny_interaction') &&
-        this.interactionGateway.getPendingRequests().length === 0;
-      if (intent.type === 'submit_goal' || nothingToApprove) {
+        this.interactionGateway.getPendingRequests().length > 0;
+      if (!pendingInteractionReply) {
         const reply = await this.handleFocusedMessage(text);
         if (reply !== undefined) return reply;
       }
@@ -2083,6 +2088,41 @@ export class InteractiveShell {
     const focus = this.focusedRun;
     if (!focus) return undefined;
 
+    const effectiveBudget =
+      focus.raiseBudgetTo ?? (focus.action.kind === 'raise_budget' ? focus.action.budget : undefined);
+    const resolution = classifyFocusedInstruction(text, focus);
+
+    if (resolution.kind === 'leave') {
+      const left = focus.runId;
+      this.focusedRun = undefined;
+      return `${colors.dim}Left ${left}. It stays in /runs and can be continued any time with /retry.${colors.reset}`;
+    }
+    if (resolution.kind === 'accept_proposal') {
+      return this.acceptFocus();
+    }
+    if (resolution.kind === 'skip_preflight') {
+      return this.continueRun(focus.runId, resolution.guidance, {
+        tokenBudget: effectiveBudget,
+        skipPreflight: true,
+      });
+    }
+    if (resolution.kind === 'set_check_command') {
+      return this.saveCheckCommand(focus, resolution.command);
+    }
+    if (resolution.kind === 'run_shell_command') {
+      return this.runShellAndContinue(focus, resolution.command);
+    }
+    if (resolution.kind === 'fix_with_agent') {
+      const failureSummary = this.describeUnfinished(focus.runId)?.summary;
+      const agentGuidance = failureSummary
+        ? `${resolution.guidance}\n\nRecorded inconsistency/failure to resolve:\n${failureSummary}`
+        : resolution.guidance;
+      return this.continueRun(focus.runId, agentGuidance, {
+        tokenBudget: effectiveBudget,
+        skipPreflight: true,
+      });
+    }
+
     if (focus.question?.kind === 'start_command') return this.startServiceWith(focus, focus.question.port, text);
     if (focus.question?.kind === 'check_command') return this.saveCheckCommand(focus, text);
 
@@ -2104,12 +2144,26 @@ export class InteractiveShell {
         return undefined;
       }
     }
-    return this.respondToUnfinishedRun(
-      focus.runId,
-      text,
-      false,
-      focus.raiseBudgetTo ?? (focus.action.kind === 'raise_budget' ? focus.action.budget : undefined),
+    return this.respondToUnfinishedRun(focus.runId, text, false, effectiveBudget);
+  }
+
+  /** Runs a shell command the user explicitly asked for to unblock a stopped run, then continues. */
+  private async runShellAndContinue(focus: RunFocus, command: string): Promise<string> {
+    this.viewport.writeUpper(
+      `\n  ${colors.brand}✦ ${colors.bold}Running command to unblock ${focus.runId}${colors.reset}\n  ${colors.dim}$ ${command}${colors.reset}\n`,
     );
+    const result = await ProcessRunner.run({
+      command: 'sh',
+      args: ['-c', command],
+      cwd: this.repoRoot,
+      timeoutMs: 120_000,
+    });
+    const tail = `${result.stdout}\n${result.stderr}`.trim().split('\n').slice(-8).join('\n');
+    if (result.exitCode !== 0) {
+      return `${colors.red}✖ Command failed (exit ${result.exitCode}).${colors.reset}${tail ? `\n${tail}` : ''}\n${colors.dim}Tell me another fix, say "pula o preflight" to continue anyway, or /back to leave.${colors.reset}`;
+    }
+    this.viewport.writeUpper(`  ${colors.green}✔${colors.reset} Command completed.\n`);
+    return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.raiseBudgetTo });
   }
 
   /** The person typed the command that starts the service the checks need: run it, wait for the port, continue. */
@@ -2138,7 +2192,11 @@ export class InteractiveShell {
   }
 
   /** Continues an unfinished run (the REPL's `tf resume`), optionally with what the user just asked for. */
-  private async continueRun(runId: string, guidance?: string, options: { tokenBudget?: number } = {}): Promise<string> {
+  private async continueRun(
+    runId: string,
+    guidance?: string,
+    options: { tokenBudget?: number; skipPreflight?: boolean } = {},
+  ): Promise<string> {
         const orchestrator = this.buildOrchestrator();
         const notResumable = await orchestrator.checkResumable(runId);
         if (notResumable) return notResumable;
@@ -2166,6 +2224,7 @@ export class InteractiveShell {
           activityTracker: this.activityTracker,
           guidance,
           tokenBudget: options.tokenBudget,
+          skipPreflight: options.skipPreflight,
           onProgress: (msg) => this.viewport.writeUpper(theme.formatProgressMessage(msg)),
         });
         if (this.options.asyncExecution ?? this.viewport.isInteractive) {

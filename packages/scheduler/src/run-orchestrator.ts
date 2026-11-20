@@ -134,6 +134,8 @@ export interface RunOptions {
   guidance?: string;
   /** Token cap for this run; overrides `execution.tokenBudget` (on resume it is the new total cap). */
   tokenBudget?: number;
+  /** Skip verification preflight (used when the user explicitly bypasses preflight or asks an agent to repair the failing check). */
+  skipPreflight?: boolean;
 }
 
 export interface OrchestrationResult {
@@ -1002,6 +1004,7 @@ export class RunOrchestrator {
       tokenBudget: options.tokenBudget ?? this.config.execution.tokenBudget,
       tokensSpent: () => this.telemetry.getRunTokenTotal(runId),
       resumeState,
+      skipPreflight: options.skipPreflight,
     });
 
     const schedulerResult = await scheduler.run();

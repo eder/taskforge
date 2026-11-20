@@ -189,4 +189,31 @@ describe('preflight and tf fix: an environment problem is repaired once, not pai
     expect(progress.join('\n')).toContain("The project's checks run in this environment");
     ok.db.close();
   });
+
+  it('resume({ skipPreflight: true }) hands directly to the agent when the user asks to bypass or repair preflight', async () => {
+    const { db, writer, orchestrator } = build();
+    const first = await orchestrator.run('Add feature.txt', {
+      preplannedGraph: new TaskGraph([writableTask()]),
+    });
+    expect(first.status).toBe('failed');
+    expect(writer.calls).toBe(0);
+
+    // Ensure the very first failure preserved full evidence and failureClass (not overwritten by bare TASK_FAILED).
+    const firstLines = describeRunFailures(
+      { taskRepo: new TaskRepository(db), eventRepo: new EventRepository(db) },
+      first.runId,
+    );
+    expect(firstLines[0].failureClass).toBe('environment');
+    expect(firstLines[0].evidence).toContain('no LLM api_key configured');
+
+    const progress: string[] = [];
+    await orchestrator.resume(first.runId, {
+      skipPreflight: true,
+      guidance: 'Fix the failing environment check in tests',
+      onProgress: (m) => progress.push(m),
+    });
+    expect(progress.join('\n')).toContain('Skipping preflight checks as requested');
+    expect(writer.calls).toBeGreaterThanOrEqual(1);
+    db.close();
+  });
 });
