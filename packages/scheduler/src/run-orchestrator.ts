@@ -109,6 +109,15 @@ function hasIntentJudge(
   return typeof (planner as { judgeExecutionIntent?: unknown })?.judgeExecutionIntent === 'function';
 }
 
+export interface RepairPreTaskOptions {
+  /** Short human-readable title (e.g. "Repair: isolate test_multiturn.py from port 8765"). */
+  title: string;
+  /** Full repair objective including user instructions and recorded failure evidence. */
+  description: string;
+  /** Optional agent id explicitly requested by the user (e.g. 'codex', 'claude', 'agy'). */
+  preferredAgent?: string;
+}
+
 export interface RunOptions {
   runId?: string;
   baseCommit?: string;
@@ -136,6 +145,13 @@ export interface RunOptions {
   tokenBudget?: number;
   /** Skip verification preflight (used when the user explicitly bypasses preflight or asks an agent to repair the failing check). */
   skipPreflight?: boolean;
+  /**
+   * Inject a dedicated repair task ahead of the remaining pending tasks on
+   * resume so an agent can fix a blocking test/env/code inconsistency without
+   * violating the original task's scope, and the original workflow continues
+   * automatically on top of that integrated fix.
+   */
+  repairTask?: RepairPreTaskOptions;
 }
 
 export interface OrchestrationResult {
@@ -652,8 +668,90 @@ export class RunOrchestrator {
     }
     for (const task of pending) this.taskRepo.updateStatus(task.id, 'accepted');
 
-    const graph = new TaskGraph(tasks);
     const integratedIds = tasks.filter((t) => t.status === 'integrated').map((t) => t.id);
+
+    // Optional repair pre-task: runs FIRST on the run's integration branch with full
+    // repair scope, then the original pending tasks automatically continue on top of
+    // its integrated commit while keeping their own original contracts and scopes.
+    if (options.repairTask) {
+      let repairSeq = 1;
+      while (this.taskRepo.idExists(`REPAIR-${repairSeq}`)) {
+        repairSeq++;
+      }
+      const repairId = `REPAIR-${repairSeq}`;
+      const integratedSet = new Set(integratedIds);
+      const rootPending = pending.filter((t) =>
+        (t.dependencies ?? []).every((dep) => integratedSet.has(dep)),
+      );
+      const now = new Date();
+      const repairTask: Task = {
+        id: repairId,
+        goalId: run.goalId ?? '',
+        title: options.repairTask.title,
+        description: options.repairTask.description,
+        type: 'implementation',
+        status: 'accepted',
+        dependencies: [...integratedIds],
+        contract: {
+          objective: options.repairTask.description,
+          allowedScope: ['**'],
+          forbiddenChanges: [],
+          acceptanceCriteria: [
+            'Resolve the blocking inconsistency described by the user so the project verification checks pass.',
+          ],
+          dependencies: [...integratedIds],
+          metadata: {
+            repairPreTask: true,
+            ...(options.repairTask.preferredAgent
+              ? { preferredAgent: options.repairTask.preferredAgent }
+              : {}),
+          },
+        },
+        acceptanceCriteria: [
+          'Resolve the blocking inconsistency described by the user so the project verification checks pass.',
+        ],
+        reworkCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.taskRepo.create({ ...repairTask, runId });
+
+      for (const root of rootPending) {
+        root.dependencies = [...new Set([...(root.dependencies ?? []), repairId])];
+        root.contract = {
+          ...root.contract,
+          dependencies: [...new Set([...(root.contract.dependencies ?? []), repairId])],
+        };
+        this.taskRepo.addDependency(root.id, repairId);
+        // Any pre-repair preserved candidate predates the repair commit; let the task
+        // start cleanly on top of the newly integrated repair.
+        delete candidates[root.id];
+      }
+
+      tasks.unshift(repairTask);
+      pending.unshift(repairTask);
+
+      this.eventRepo.append({
+        id: `evt-${randomUUID()}`,
+        runId,
+        taskId: repairId,
+        type: 'REPAIR_TASK_INJECTED',
+        payload: {
+          repairTaskId: repairId,
+          title: repairTask.title,
+          preferredAgent: options.repairTask.preferredAgent ?? null,
+          blocksTasks: rootPending.map((t) => t.id),
+        },
+        timestamp: now,
+      });
+      options.onProgress?.(
+        rootPending.length > 0
+          ? `Injected repair task ${repairId} ("${repairTask.title}") before ${rootPending.map((t) => t.id).join(', ')} — once integrated, the original tasks continue automatically.`
+          : `Injected repair task ${repairId} ("${repairTask.title}") on the run branch.`,
+      );
+    }
+
+    const graph = new TaskGraph(tasks);
     const hasIntegratedCommits =
       branchExists && (await this.gitService.resolveRef(integrationBranch)) !== baseCommit;
 
@@ -798,6 +896,18 @@ export class RunOrchestrator {
       if (options.fakeFallback && fallbackAgent) {
         preferredAgentMapping[task.id] = fallbackAgent.id;
         continue;
+      }
+
+      const explicitAgent =
+        typeof task.contract.metadata?.preferredAgent === 'string'
+          ? task.contract.metadata.preferredAgent
+          : undefined;
+      if (explicitAgent && this.agentRegistry.get(explicitAgent)) {
+        const availableForExplicit = await this.agentSelector.listAvailableAgentIds();
+        if (availableForExplicit.includes(explicitAgent)) {
+          preferredAgentMapping[task.id] = explicitAgent;
+          continue;
+        }
       }
 
       try {

@@ -92,7 +92,12 @@ describe('InteractiveShell open-text resolution of stopped runs', () => {
   let dir: string;
   let db: TaskForgeDatabase;
   let shell: InteractiveShell | undefined;
-  const resumes: Array<{ runId: string; guidance?: string; skipPreflight?: boolean }> = [];
+  const resumes: Array<{
+    runId: string;
+    guidance?: string;
+    skipPreflight?: boolean;
+    repairTask?: { title: string; description: string; preferredAgent?: string };
+  }> = [];
 
   beforeEach(() => {
     resumes.length = 0;
@@ -167,14 +172,23 @@ describe('InteractiveShell open-text resolution of stopped runs', () => {
           checkResumable: () => Promise<undefined>;
           resume: (
             runId: string,
-            opts: { guidance?: string; skipPreflight?: boolean },
+            opts: {
+              guidance?: string;
+              skipPreflight?: boolean;
+              repairTask?: { title: string; description: string; preferredAgent?: string };
+            },
           ) => Promise<unknown>;
         };
       }
     ).buildOrchestrator = () => ({
       checkResumable: async () => undefined,
       resume: async (runId, opts) => {
-        resumes.push({ runId, guidance: opts.guidance, skipPreflight: opts.skipPreflight });
+        resumes.push({
+          runId,
+          guidance: opts.guidance,
+          skipPreflight: opts.skipPreflight,
+          repairTask: opts.repairTask,
+        });
         return {
           runId,
           goalId: 'g',
@@ -215,8 +229,8 @@ describe('InteractiveShell open-text resolution of stopped runs', () => {
     expect(resumes).toHaveLength(1);
     expect(resumes[0].runId).toBe('run-1790000000000101');
     expect(resumes[0].skipPreflight).toBe(true);
-    expect(resumes[0].guidance).toContain('corrige o test_multiturn.py');
-    expect(resumes[0].guidance).toContain('8765');
+    expect(resumes[0].repairTask?.description).toContain('corrige o test_multiturn.py');
+    expect(resumes[0].repairTask?.description).toContain('8765');
   });
 
   it('accepts proposed environment fix via Portuguese open text without looping', async () => {

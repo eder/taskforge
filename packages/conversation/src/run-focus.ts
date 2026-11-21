@@ -32,6 +32,16 @@ export type FocusQuestion =
   | { kind: 'start_command'; port: number }
   | { kind: 'check_command' };
 
+export type PendingAdvisorAction =
+  | { kind: 'apply_repair' }
+  | { kind: 'add_worktree_links'; paths: string[] }
+  | { kind: 'set_check_command'; command: string }
+  | { kind: 'run_shell_command'; command: string }
+  | { kind: 'fix_with_agent'; guidance: string }
+  | { kind: 'investigate_with_agent'; question: string }
+  | { kind: 'skip_preflight'; guidance?: string }
+  | { kind: 'retry_now' };
+
 export interface RunFocus {
   runId: string;
   action: FocusAction;
@@ -42,6 +52,10 @@ export interface RunFocus {
   raiseBudgetTo?: number;
   /** What the person was just asked, in words; lets the planner read a short reply such as "ok" or "aprovo" as an answer. */
   asked?: string;
+  /** Short multi-turn Q&A history while resolving this stopped run. */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Concrete action most recently proposed by the conversational advisor (accepted via Enter / "sim"). */
+  pendingAction?: PendingAdvisorAction;
 }
 
 export interface FocusProposal {

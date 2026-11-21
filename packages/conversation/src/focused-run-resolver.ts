@@ -8,6 +8,7 @@ export type FocusedInstructionResolution =
   | { kind: 'skip_preflight'; guidance?: string }
   | { kind: 'set_check_command'; command: string }
   | { kind: 'run_shell_command'; command: string }
+  | { kind: 'investigate_with_agent'; question: string }
   | { kind: 'fix_with_agent'; guidance: string }
   | { kind: 'continue_with_guidance'; guidance: string };
 
@@ -118,6 +119,25 @@ export function classifyFocusedInstruction(
     return { kind: 'run_shell_command', command: text };
   }
 
+  // 4b. Asking a real coding agent to investigate/diagnose the failure in read-only mode
+  //     (e.g. "pede pro agente investigar esse erro", "analisa esse erro com o codex",
+  //      "investigate this failure with an agent before editing").
+  const withoutReadOnlyGuardClauses = lower.replace(
+    /\b(?:antes\s+de|sem|n[aã]o\s+(?:quero\s+)?|before|without)\s+\w+(?:\s+\w+)?/gi,
+    '',
+  );
+  const asksAgentToInvestigate =
+    /\b(?:investig\w*|analis\w*|diagnostic\w*|analy[sz]\w*|diagnos\w*|inspect\w*)\b/i.test(lower) &&
+    /\b(?:agente|agent|claude|codex|antigravity|agy|c[oó]digo|codebase|erro|falha|failure|error|causa|root\s+cause)\b/i.test(
+      lower,
+    ) &&
+    !/\b(?:corrig\w*|arrum\w*|consert\w*|alter\w*|edit\w*|modific\w*|fix(?:es|ed|ing)?|patch(?:es|ed|ing)?)\b/i.test(
+      withoutReadOnlyGuardClauses,
+    );
+  if (asksAgentToInvestigate) {
+    return { kind: 'investigate_with_agent', question: text };
+  }
+
   // 5. Asking the coding agent to fix the code/test/inconsistency itself
   //    (e.g. "corrige o test_multiturn.py para não depender da porta 8765",
   //     "resolve essa inconsistência no teste", "mocka a porta 8765").
@@ -138,13 +158,13 @@ export function classifyFocusedInstruction(
   //    Examples: "sim", "ok", "pode fazer", "pode subir", "sobe o zaira",
   //    "sobe o serviço e continua", "resolve isso pra mim", "conserta e continua",
   //    "bora", "manda ver", "go ahead", "do it", "fix it and continue", "start it".
-  if (focus.action.kind !== 'none') {
+  if (focus.action.kind !== 'none' || focus.pendingAction) {
     const shortAffirmation =
       /^(?:sim|s|ok|okay|beleza|blz|bora|manda\s+ver|vai|pode|claro|fechou|perfeito|confirmo|aprovo|concordo|yes|y|yep|yeah|sure|go\s+ahead|proceed|continue|do\s+it|fix\s+it|start\s+it|run\s+it|apply\s+it|go)[.!?\s]*$/i.test(
         lower,
       );
     const conversationalFixAccept =
-      focus.action.kind === 'fix' &&
+      (focus.action.kind === 'fix' || Boolean(focus.pendingAction)) &&
       text.length <= 120 &&
       /^(?:pode\s+(?:fazer|subir|iniciar|rodar|consertar|corrigir|resolver|continuar|aplicar)|faz(?:er)?\s+isso|sobe\s+(?:o\s+)?(?:servi[cç]o|container|docker|banco|\w+)|inicia\s+(?:o\s+)?(?:servi[cç]o|container|\w+)|resolve\s+isso|conserta\s+(?:isso|o\s+ambiente)|corrige\s+(?:isso|o\s+ambiente)|start\s+(?:the\s+)?service|fix\s+(?:this|it|the\s+environment)|please\s+(?:fix|start|do\s+that|go\s+ahead))/i.test(
         lower,
