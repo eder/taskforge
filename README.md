@@ -278,7 +278,9 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/tasks` | Show task and assignment status; accepts an optional task id |
 | `/status` | Open the full TUI dashboard |
 | `/agents` | Show detected agent harnesses and availability; `/agents reset <id>` forgets a recorded failure (also `tf agents reset <id>`) |
-| `/use` | Switch direct chat target (`/use <claude\|codex\|agy\|all\|auto>`); you can also prefix any message with `@claude`, `@codex`, `@agy`, `@all`, or `!cmd` for direct turns with shared cross-agent memory |
+| `/use` | Switch direct chat target (`/use <claude\|codex\|agy\|all\|auto>`); you can also use `@claude`, `@codex`, `@agy`, `@all`, `@codex -> @agy` (implement→review handoff), `@codex <-> @agy` (2-round debate), `#file` autocomplete, or `!cmd` |
+| `/model` | Show or set per-agent model and reasoning effort (`/model <agent> <model> [effort]`, `/model <agent> effort <level>`, `/model <agent> reset`); saved to `.taskforge/config.yaml` and active immediately |
+| `/checkpoints` | List automatic Direct Mode working-tree checkpoints available for instant `/undo` |
 | `/stream` | Enter live output; accepts an optional task id |
 | `/focus` | Focus one active agent by index, for example `/focus 2` |
 | `/back` | Leave agent Focus Mode |
@@ -298,7 +300,7 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/cost` | Show token usage and cost telemetry |
 | `/stats` | Show execution and orchestration efficiency metrics |
 | `/diff` | Inspect changes from a completed run; accepts an optional run id |
-| `/undo` | Undo the last applied run with a revert commit; nothing is rewritten |
+| `/undo` | Undo the last Direct Mode edit (instant checkpoint restore) or the last applied orchestrated run with a revert commit |
 | `/answer` | Answer a question an agent is waiting on (`/answer [request-id] <text>`); `/approve` and `/deny` stay for permissions |
 | `/workflow` | Show or set the Git workflow (`trunk`, `github-flow`, `gitflow`, `current-branch`); saved to `.taskforge/config.yaml` with its comments kept |
 | `/apply` | Apply a completed run to its target branch |

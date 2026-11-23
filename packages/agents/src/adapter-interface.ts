@@ -25,4 +25,8 @@ export interface AgentAdapter {
   cancel?(sessionId: string): Promise<void>;
   /** Release a completed assignment's session (event loop + adapter-side bookkeeping); not a cancellation. */
   releaseSession?(assignmentId: string): void;
+  /** Returns current per-agent model & reasoning effort overrides, if configured. */
+  getModelConfig?(): { model?: string; effort?: string };
+  /** Updates per-agent model & reasoning effort overrides at runtime (e.g. via `/model`). */
+  setModelConfig?(config: { model?: string; effort?: string }): void;
 }

@@ -13,6 +13,7 @@ import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { colors } from './theme.js';
 import { assessProblemAndSelectAgent } from './problem-size-router.js';
 import { resolveFileMentionsInPrompt } from './file-mention-completer.js';
+import type { DirectCheckpointManager } from './direct-checkpoint.js';
 
 export type DirectSessionEntry =
   | { seq?: number; kind: 'user'; text: string; timestamp: string }
@@ -170,6 +171,16 @@ export interface PendingCompetitiveEdit {
   recommendedIndex?: number;
 }
 
+export interface PendingPipelineFollowUp {
+  implementerId: string;
+  implementerName: string;
+  reviewerId: string;
+  reviewerName: string;
+  originalPrompt: string;
+  findings: string;
+  filesChanged: string[];
+}
+
 export type DirectConsensusSynthesizer = (
   prompt: string,
   outcomes: DirectAgentTurnOutcome[],
@@ -183,6 +194,8 @@ export interface DirectRunnerOptions {
   onLiveLine?: (line: string) => void;
   gitService?: GitService;
   worktreeManager?: WorktreeManager;
+  /** Optional checkpoint manager for instant `/undo` before direct-mode write turns. */
+  checkpointManager?: DirectCheckpointManager;
   /** Optional custom consensus synthesizer (overrides OpenAI lookup; great for deterministic tests). */
   consensusSynthesizer?: DirectConsensusSynthesizer;
   /** Optional OpenAI credentials used to synthesize Consensus & Divergences on `@all` multi-agent turns. */
@@ -246,6 +259,7 @@ export class DirectAgentRunner {
   private readonly onLiveLine?: (line: string) => void;
   private readonly gitService?: GitService;
   private readonly worktreeManager?: WorktreeManager;
+  private readonly checkpointManager?: DirectCheckpointManager;
   private readonly consensusSynthesizer?: DirectConsensusSynthesizer;
   private readonly openAiApiKey?: string;
   private readonly openAiBaseUrl: string;
@@ -264,6 +278,7 @@ export class DirectAgentRunner {
     this.onLiveLine = options.onLiveLine;
     this.gitService = options.gitService;
     this.worktreeManager = options.worktreeManager;
+    this.checkpointManager = options.checkpointManager;
     this.consensusSynthesizer = options.consensusSynthesizer;
     this.openAiApiKey = options.openAiApiKey;
     this.openAiBaseUrl = (options.openAiBaseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/$/, '');
@@ -438,6 +453,10 @@ export class DirectAgentRunner {
     const historySnapshot = this.memory.formatForPrompt();
     const seqBeforeCurrentUser = this.memory.getSequence();
     const beforeDirty = mutationAllowed ? await snapshotDirtyFiles(this.repoRoot, this.gitService) : new Set<string>();
+    const preTurnCheckpoint =
+      mutationAllowed && this.checkpointManager
+        ? await this.checkpointManager.capture(prompt, adapters[0].id)
+        : undefined;
 
     this.memory.record({
       kind: 'user',
@@ -587,9 +606,32 @@ export class DirectAgentRunner {
 
     const outcomes = await Promise.all(adapters.map((adapter) => runOne(adapter)));
 
+    let savedCheckpointId: string | undefined;
     if (mutationAllowed && outcomes.length === 1) {
       const afterDirty = await snapshotDirtyFiles(this.repoRoot, this.gitService);
-      outcomes[0].filesChanged = [...afterDirty].filter((f) => !beforeDirty.has(f));
+      // Detect both newly dirty files AND already-dirty files modified again during the turn.
+      const changedFiles = [...afterDirty].filter((f) => !beforeDirty.has(f));
+      if (changedFiles.length === 0 && preTurnCheckpoint) {
+        const git = this.gitService ?? new GitService(this.repoRoot);
+        const diffSinceCkpt = await git
+          .exec(['diff', '--name-only', preTurnCheckpoint.treeHash], this.repoRoot)
+          .catch(() => '');
+        const modifiedSinceCkpt = diffSinceCkpt
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean);
+        outcomes[0].filesChanged = modifiedSinceCkpt;
+      } else {
+        outcomes[0].filesChanged = changedFiles;
+      }
+      if (preTurnCheckpoint) {
+        if (outcomes[0].filesChanged.length > 0) {
+          this.checkpointManager?.annotateFilesTouched(preTurnCheckpoint.id, outcomes[0].filesChanged);
+          savedCheckpointId = preTurnCheckpoint.id;
+        } else {
+          await this.checkpointManager?.discard(preTurnCheckpoint.id);
+        }
+      }
     }
 
     for (const outcome of outcomes) {
@@ -647,7 +689,7 @@ export class DirectAgentRunner {
         : `${colors.red}${outcome.error || outcome.response}${colors.reset}`;
       const filesBlock =
         outcome.filesChanged.length > 0
-          ? `\n  ${colors.cyan}Modified files:${colors.reset} ${outcome.filesChanged.join(', ')}`
+          ? `\n  ${colors.cyan}Modified files:${colors.reset} ${outcome.filesChanged.join(', ')}${savedCheckpointId ? `\n  ${colors.dim}↻ Checkpoint saved (${savedCheckpointId}) — type /undo or "desfaz" to revert.${colors.reset}` : ''}`
           : '';
       sections.push(body ? `${header}\n${body}${filesBlock}` : `${header}${filesBlock}`);
     }
@@ -1059,9 +1101,18 @@ export class DirectAgentRunner {
     }
 
     const git = this.gitService ?? new GitService(this.repoRoot);
+    const checkpoint = this.checkpointManager
+      ? await this.checkpointManager.capture(`competitive apply: ${pending.prompt}`, candidate.agentId)
+      : undefined;
     try {
       await git.exec(['cherry-pick', '--no-commit', candidate.commitHash], this.repoRoot);
+      if (checkpoint) {
+        this.checkpointManager?.annotateFilesTouched(checkpoint.id, candidate.filesChanged);
+      }
     } catch (err) {
+      if (checkpoint) {
+        await this.checkpointManager?.discard(checkpoint.id);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       return `${colors.red}✖ Could not apply candidate #${candidate.index} (${candidate.agentName}) cleanly:${colors.reset} ${msg}\n  ${colors.dim}Temporary worktrees are kept; resolve conflicts or /back to discard.${colors.reset}`;
     }
@@ -1091,6 +1142,535 @@ export class DirectAgentRunner {
       await wtManager.removeWorktree(c.taskId, c.assignmentId, true, true).catch(() => {});
     }
   }
+
+  /**
+   * Executes an expressive Direct Handoff Pipeline (`@codex -> @agy <task>` or
+   * multi-stage `@codex -> @agy -> @claude <task>`):
+   * - Stage 1 executes the task directly (with auto-checkpoint if mutating).
+   * - Subsequent stages receive Stage 1's summary + exact working-tree diff
+   *   and perform an independent read-only review/refinement.
+   * - If Stage 1 mutated files and the final reviewer surfaced actionable issues,
+   *   returns a `PendingPipelineFollowUp` for 1-Enter fix application.
+   */
+  public async runPipeline(
+    stages: string[],
+    rawPrompt: string,
+    options: { priorContext?: string; abortSignal?: AbortSignal } = {},
+  ): Promise<{
+    formatted: string;
+    outcomes: DirectAgentTurnOutcome[];
+    pendingFollowUp?: PendingPipelineFollowUp;
+  }> {
+    const resolvedMentions = resolveFileMentionsInPrompt(rawPrompt, this.repoRoot);
+    const prompt = resolvedMentions.cleanedPrompt;
+
+    // Resolve each stage (expanding `smart` via problem-size router).
+    const resolvedAdapters: AgentAdapter[] = [];
+    const unavailable: string[] = [];
+    for (const stage of stages) {
+      if (stage === 'smart') {
+        const { adapters } = await this.resolveTargets('smart', prompt, resolvedMentions.files);
+        if (adapters[0]) {
+          resolvedAdapters.push(adapters[0]);
+        } else {
+          unavailable.push('smart (no ready agent)');
+        }
+      } else {
+        const { adapters, unavailable: unavail } = await this.resolveTargets([stage], prompt, resolvedMentions.files);
+        if (adapters[0]) {
+          resolvedAdapters.push(adapters[0]);
+        } else {
+          unavailable.push(...unavail);
+        }
+      }
+    }
+
+    if (resolvedAdapters.length < 2) {
+      const detail =
+        unavailable.length > 0
+          ? `Unavailable: ${unavailable.join(', ')}.`
+          : 'At least 2 ready agents are required for a handoff pipeline.';
+      return {
+        formatted: `${colors.red}✖ Cannot run direct handoff pipeline.${colors.reset} ${detail}`,
+        outcomes: [],
+      };
+    }
+
+    const intent = detectExecutionIntent(prompt);
+    const stage1Mutation = intent.mutationAllowed;
+    const chainLabel = resolvedAdapters.map((a) => `${colors.bold}${a.name}${colors.reset}`).join(' → ');
+    this.onLiveLine?.(
+      `\n  ${colors.brand}✦${colors.reset} Direct Pipeline: ${chainLabel} ${colors.dim}(${stage1Mutation ? 'implement → review' : 'analyze → refine'})${colors.reset}\n`,
+    );
+
+    const outcomes: DirectAgentTurnOutcome[] = [];
+    const stageSections: string[] = [];
+    const git = this.gitService ?? new GitService(this.repoRoot);
+
+    let stage1FilesChanged: string[] = [];
+    let stage1DiffSnippet = '';
+    let stage1CheckpointId: string | undefined;
+
+    for (let i = 0; i < resolvedAdapters.length; i++) {
+      const adapter = resolvedAdapters[i];
+      const isFirst = i === 0;
+      const allowWrite = isFirst && stage1Mutation;
+      const stageTag = isFirst
+        ? allowWrite
+          ? 'Stage 1 · Implement'
+          : 'Stage 1 · Lead'
+        : `Stage ${i + 1} · ${stage1Mutation ? 'Independent Review' : 'Critique & Refine'}`;
+
+      const preCheckpoint =
+        allowWrite && this.checkpointManager
+          ? await this.checkpointManager.capture(`pipeline: ${prompt}`, adapter.id)
+          : undefined;
+      const beforeDirty = allowWrite ? await snapshotDirtyFiles(this.repoRoot, git) : new Set<string>();
+
+      let stagePrompt = prompt;
+      if (!isFirst) {
+        const prev = outcomes[outcomes.length - 1];
+        const parts = [
+          `Original user request:\n${prompt}`,
+          `\nPrevious stage (${prev.agentName} · ${prev.agentId}) output:\n${prev.response.slice(0, 4000)}`,
+        ];
+        if (stage1FilesChanged.length > 0) {
+          parts.push(`\nModified files: ${stage1FilesChanged.join(', ')}`);
+        }
+        if (stage1DiffSnippet) {
+          parts.push(`\nExact git diff produced:\n\`\`\`diff\n${stage1DiffSnippet}\n\`\`\``);
+        }
+        parts.push(
+          stage1Mutation
+            ? '\nYour role: Independent reviewer (read-only). Audit the changes carefully for bugs, edge cases, regressions, missing tests, or cleaner approaches. If everything looks solid with no fixes needed, start with "LGTM:" and summarize why. Otherwise list concrete, actionable fixes.'
+            : '\nYour role: Independent second-opinion reviewer (read-only). Critique the previous stage output, catch any blind spots or inaccuracies, and provide a sharper refined answer.',
+        );
+        stagePrompt = parts.join('\n');
+      }
+
+      if (isFirst) {
+        this.memory.record({
+          kind: 'user',
+          text: `[pipeline ${resolvedAdapters.map((a) => a.id).join(' -> ')}] ${prompt}`,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      this.onLiveLine?.(
+        `\n  ${colors.cyan}▸ ${stageTag}:${colors.reset} ${colors.bold}${adapter.name}${colors.reset}\n`,
+      );
+
+      const start = Date.now();
+      const assignment: AgentAssignment = {
+        id: `pipe-${i + 1}-${adapter.id}-${randomUUID().slice(0, 8)}`,
+        taskId: `PIPE-${i + 1}`,
+        agentId: adapter.id,
+        role: allowWrite ? 'implementer' : 'reviewer',
+        objective: stagePrompt,
+        status: 'running',
+      };
+      const lastSeen = { line: '', streamed: '' };
+      let startedTextStream = false;
+      const context: AgentContext = {
+        worktreePath: this.repoRoot,
+        originalUserRequest: prompt,
+        priorContext: options.priorContext,
+        conversationHistory: isFirst ? this.memory.formatForPrompt() || undefined : undefined,
+        directMode: true,
+        mutationAllowed: allowWrite,
+        timeoutMs: this.timeoutMs,
+        abortSignal: options.abortSignal,
+        assignment,
+        task: {
+          objective: stagePrompt,
+          allowedScope: allowWrite ? ['**'] : [],
+          forbiddenChanges: allowWrite ? [] : ['*'],
+          acceptanceCriteria: [
+            allowWrite
+              ? 'Complete the requested change cleanly'
+              : 'Provide an accurate, concrete independent review',
+          ],
+          dependencies: [],
+        },
+        onStreamEvent: (ev) => {
+          if (ev.type === 'agent_message' && this.onLiveLine && ev.text) {
+            const incoming = ev.text;
+            if (
+              lastSeen.streamed.trim().length > 0 &&
+              (incoming.trim() === lastSeen.streamed.trim() || lastSeen.streamed.endsWith(incoming))
+            ) {
+              return;
+            }
+            if (!startedTextStream) {
+              startedTextStream = true;
+              this.onLiveLine('\n');
+            }
+            const chunk =
+              incoming.startsWith(lastSeen.streamed) && lastSeen.streamed.length > 0
+                ? incoming.slice(lastSeen.streamed.length)
+                : incoming;
+            if (chunk) {
+              lastSeen.streamed += chunk;
+              this.onLiveLine(chunk);
+            }
+            return;
+          }
+          const line = formatStreamLine(adapter.name, ev);
+          if (line && line !== lastSeen.line) {
+            lastSeen.line = line;
+            if (startedTextStream) {
+              this.onLiveLine?.('\n');
+              startedTextStream = false;
+            }
+            this.onLiveLine?.(`${line}\n`);
+          }
+        },
+      };
+
+      let outcome: DirectAgentTurnOutcome;
+      try {
+        const res = await adapter.execute(assignment, context);
+        if (startedTextStream && !lastSeen.streamed.endsWith('\n')) {
+          this.onLiveLine?.('\n');
+        }
+        outcome = {
+          agentId: adapter.id,
+          agentName: adapter.name,
+          success: res.success,
+          response: (res.output || res.message || '').trim() || (res.success ? '(completed)' : 'Execution failed'),
+          durationMs: res.durationMs || Date.now() - start,
+          tokensUsed: res.usage?.totalTokens,
+          filesChanged: [],
+          error: res.success ? undefined : res.message || 'Execution failed',
+        };
+      } catch (err) {
+        outcome = {
+          agentId: adapter.id,
+          agentName: adapter.name,
+          success: false,
+          response: '',
+          durationMs: Date.now() - start,
+          filesChanged: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+
+      if (allowWrite) {
+        const afterDirty = await snapshotDirtyFiles(this.repoRoot, git);
+        let changed = [...afterDirty].filter((f) => !beforeDirty.has(f));
+        if (changed.length === 0 && preCheckpoint) {
+          const rawNames = await git
+            .exec(['diff', '--name-only', preCheckpoint.treeHash], this.repoRoot)
+            .catch(() => '');
+          changed = rawNames.split('\n').map((l) => l.trim()).filter(Boolean);
+        }
+        outcome.filesChanged = changed;
+        stage1FilesChanged = changed;
+        if (preCheckpoint) {
+          if (changed.length > 0) {
+            this.checkpointManager?.annotateFilesTouched(preCheckpoint.id, changed);
+            stage1CheckpointId = preCheckpoint.id;
+          } else {
+            await this.checkpointManager?.discard(preCheckpoint.id);
+          }
+        }
+        if (changed.length > 0) {
+          const baseRef = preCheckpoint?.treeHash ?? 'HEAD';
+          const diffRaw = await git.exec(['diff', baseRef], this.repoRoot).catch(() => '');
+          stage1DiffSnippet = diffRaw.slice(0, 9000);
+        }
+      }
+
+      outcomes.push(outcome);
+      if (outcome.response) {
+        this.memory.record({
+          kind: 'agent',
+          agentId: outcome.agentId,
+          agentName: `${outcome.agentName} (${stageTag})`,
+          response: outcome.response,
+          durationMs: outcome.durationMs,
+          filesChanged: outcome.filesChanged,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const secs = `${(outcome.durationMs / 1000).toFixed(1)}s`;
+      const badge = outcome.success ? `${colors.green}✔${colors.reset}` : `${colors.red}✖${colors.reset}`;
+      const alreadyStreamed =
+        outcome.success &&
+        lastSeen.streamed.trim() === outcome.response.trim() &&
+        outcome.response.trim().length > 0;
+      const body = outcome.success
+        ? alreadyStreamed
+          ? ''
+          : outcome.response
+        : `${colors.red}${outcome.error || outcome.response}${colors.reset}`;
+      const filesNote =
+        outcome.filesChanged.length > 0
+          ? `\n  ${colors.cyan}Modified files:${colors.reset} ${outcome.filesChanged.join(', ')}${stage1CheckpointId ? ` ${colors.dim}(checkpoint ${stage1CheckpointId})${colors.reset}` : ''}`
+          : '';
+      stageSections.push(
+        `${badge} ${colors.brand}${colors.bold}${stageTag} — ${outcome.agentName}${colors.reset} ${colors.dim}(${outcome.agentId} · ${secs})${colors.reset}${body ? `\n${body}` : ''}${filesNote}`,
+      );
+
+      // Stop pipeline early if a stage failed.
+      if (!outcome.success) break;
+    }
+
+    this.onStateChanged?.();
+
+    let pendingFollowUp: PendingPipelineFollowUp | undefined;
+    const first = outcomes[0];
+    const last = outcomes[outcomes.length - 1];
+    if (
+      stage1Mutation &&
+      outcomes.length >= 2 &&
+      first?.success &&
+      last?.success &&
+      stage1FilesChanged.length > 0 &&
+      !looksLikeCleanApproval(last.response)
+    ) {
+      pendingFollowUp = {
+        implementerId: first.agentId,
+        implementerName: first.agentName,
+        reviewerId: last.agentId,
+        reviewerName: last.agentName,
+        originalPrompt: prompt,
+        findings: last.response,
+        filesChanged: stage1FilesChanged,
+      };
+      stageSections.push(
+        `  ${colors.dim}↵ Enter: apply reviewer fixes (via ${last.agentName})   ·   type "${first.agentId}" to send fixes back to ${first.agentName}   ·   /undo to revert   ·   /back to keep as-is${colors.reset}`,
+      );
+    }
+
+    return {
+      formatted: stageSections.join(`\n\n${colors.darkGray}${'─'.repeat(60)}${colors.reset}\n\n`),
+      outcomes,
+      pendingFollowUp,
+    };
+  }
+
+  /** Applies the findings from a Direct Handoff Pipeline review in 1 Enter. */
+  public async applyPipelineFollowUp(
+    pending: PendingPipelineFollowUp,
+    targetAgentId: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    const fixPrompt = [
+      `Apply the review improvements below to the workspace changes made for: "${pending.originalPrompt}"`,
+      `Files previously modified: ${pending.filesChanged.join(', ')}`,
+      `\nReview findings from ${pending.reviewerName}:\n${pending.findings.slice(0, 4500)}`,
+      '\nApply only the concrete fixes needed, keeping changes minimal and clean.',
+    ].join('\n');
+    const res = await this.runAgents([targetAgentId], fixPrompt, {
+      abortSignal,
+      autoReason: `applying review fixes from ${pending.reviewerName}`,
+    });
+    return res.formatted;
+  }
+
+  /**
+   * Executes a 2-round structured Direct Debate (`@codex <-> @agy <question>`):
+   * - Round 1: all target agents answer independently in parallel (read-only).
+   * - Round 2: each agent reads the peers' Round 1 answers and delivers a
+   *   focused cross-critique + refined position in parallel (read-only).
+   * - Synthesis: produces a concise `✦ Debate Verdict`.
+   */
+  public async runDebate(
+    targets: 'all' | string[],
+    rawPrompt: string,
+    options: { priorContext?: string; abortSignal?: AbortSignal } = {},
+  ): Promise<{ formatted: string; round1: DirectAgentTurnOutcome[]; round2: DirectAgentTurnOutcome[] }> {
+    const resolvedMentions = resolveFileMentionsInPrompt(rawPrompt, this.repoRoot);
+    const prompt = resolvedMentions.cleanedPrompt;
+    const { adapters, unavailable } = await this.resolveTargets(targets, prompt, resolvedMentions.files);
+
+    if (adapters.length < 2) {
+      const detail =
+        unavailable.length > 0
+          ? `Unavailable: ${unavailable.join(', ')}.`
+          : 'At least 2 ready agents are required for a structured debate (<->).';
+      return {
+        formatted: `${colors.red}✖ Cannot run direct debate.${colors.reset} ${detail}`,
+        round1: [],
+        round2: [],
+      };
+    }
+
+    this.memory.record({
+      kind: 'user',
+      text: `[debate ${adapters.map((a) => a.id).join(' <-> ')}] ${prompt}`,
+      timestamp: new Date().toISOString(),
+    });
+
+    const headerNames = adapters.map((a) => `${colors.bold}${a.name}${colors.reset}`).join(' ↔ ');
+    this.onLiveLine?.(
+      `\n  ${colors.brand}✦${colors.reset} Structured Direct Debate: ${headerNames} ${colors.dim}(2 rounds · read-only)${colors.reset}\n`,
+    );
+
+    const historySnapshot = this.memory.formatForPrompt();
+    const runReadOnly = async (
+      adapter: AgentAdapter,
+      roundNum: number,
+      turnPrompt: string,
+    ): Promise<DirectAgentTurnOutcome> => {
+      const start = Date.now();
+      const assignment: AgentAssignment = {
+        id: `debate-r${roundNum}-${adapter.id}-${randomUUID().slice(0, 8)}`,
+        taskId: `DEBATE-R${roundNum}`,
+        agentId: adapter.id,
+        role: 'researcher',
+        objective: turnPrompt,
+        status: 'running',
+      };
+      const lastSeen = { line: '' };
+      const context: AgentContext = {
+        worktreePath: this.repoRoot,
+        originalUserRequest: prompt,
+        priorContext: options.priorContext,
+        conversationHistory: roundNum === 1 ? historySnapshot || undefined : undefined,
+        directMode: true,
+        mutationAllowed: false,
+        timeoutMs: this.timeoutMs,
+        abortSignal: options.abortSignal,
+        assignment,
+        task: {
+          objective: turnPrompt,
+          allowedScope: [],
+          forbiddenChanges: ['*'],
+          acceptanceCriteria: ['Provide a clear, evidence-backed engineering position'],
+          dependencies: [],
+        },
+        onStreamEvent: (ev) => {
+          const line = formatStreamLine(`${adapter.name}·R${roundNum}`, ev);
+          if (line && line !== lastSeen.line) {
+            lastSeen.line = line;
+            this.onLiveLine?.(`${line}\n`);
+          }
+        },
+      };
+      try {
+        const res = await adapter.execute(assignment, context);
+        return {
+          agentId: adapter.id,
+          agentName: adapter.name,
+          success: res.success,
+          response: (res.output || res.message || '').trim() || (res.success ? '(no output)' : 'Failed'),
+          durationMs: res.durationMs || Date.now() - start,
+          tokensUsed: res.usage?.totalTokens,
+          filesChanged: [],
+          error: res.success ? undefined : res.message || 'Execution failed',
+        };
+      } catch (err) {
+        return {
+          agentId: adapter.id,
+          agentName: adapter.name,
+          success: false,
+          response: '',
+          durationMs: Date.now() - start,
+          filesChanged: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    };
+
+    // Round 1 — Independent positions in parallel
+    this.onLiveLine?.(`  ${colors.cyan}▸ Round 1:${colors.reset} Independent positions...\n`);
+    const round1 = await Promise.all(adapters.map((a) => runReadOnly(a, 1, prompt)));
+    const okR1 = round1.filter((o) => o.success && o.response.trim().length > 0);
+
+    // Round 2 — Cross-critique in parallel (only if >= 2 agents succeeded in Round 1)
+    let round2: DirectAgentTurnOutcome[] = [];
+    if (okR1.length >= 2) {
+      this.onLiveLine?.(`  ${colors.cyan}▸ Round 2:${colors.reset} Cross-critique & refinement...\n`);
+      round2 = await Promise.all(
+        adapters.map((adapter) => {
+          const own = okR1.find((o) => o.agentId === adapter.id);
+          const peers = okR1.filter((o) => o.agentId !== adapter.id);
+          const critiquePrompt = [
+            `Original question:\n${prompt}`,
+            own ? `\nYour Round 1 position:\n${own.response.slice(0, 2200)}` : '',
+            ...peers.map(
+              (p) => `\nPeer position — ${p.agentName} (${p.agentId}):\n${p.response.slice(0, 2200)}`,
+            ),
+            '\nRound 2 instructions (concise, read-only):',
+            '1. Identify concrete blind spots, trade-offs, or flaws in the peer position(s).',
+            '2. Note what you agree with or would adopt from the peer(s).',
+            '3. Give your refined final recommendation.',
+          ]
+            .filter(Boolean)
+            .join('\n');
+          return runReadOnly(adapter, 2, critiquePrompt);
+        }),
+      );
+    }
+
+    const okR2 = round2.filter((o) => o.success && o.response.trim().length > 0);
+    const synthesisOutcomes = okR2.length >= 2 ? okR2 : okR1;
+    const verdict =
+      synthesisOutcomes.length >= 2
+        ? await this.synthesizeConsensus(
+            `Debate verdict for: ${prompt}`,
+            synthesisOutcomes,
+          )
+        : undefined;
+
+    for (const o of synthesisOutcomes) {
+      this.memory.record({
+        kind: 'agent',
+        agentId: o.agentId,
+        agentName: `${o.agentName} (Debate)`,
+        response: o.response,
+        durationMs: o.durationMs,
+        filesChanged: [],
+        timestamp: new Date().toISOString(),
+      });
+    }
+    this.onStateChanged?.();
+
+    const sections: string[] = [];
+    if (unavailable.length > 0) {
+      sections.push(`  ${colors.yellow}⚠ Skipped unavailable:${colors.reset} ${unavailable.join(', ')}`);
+    }
+
+    const renderRound = (title: string, items: DirectAgentTurnOutcome[]) => {
+      const lines = [`${colors.brand}✦ ${colors.bold}${title}${colors.reset}`];
+      for (const o of items) {
+        const secs = `${(o.durationMs / 1000).toFixed(1)}s`;
+        const badge = o.success ? `${colors.green}✔${colors.reset}` : `${colors.red}✖${colors.reset}`;
+        lines.push(
+          `\n${badge} ${colors.bold}${o.agentName}${colors.reset} ${colors.dim}(${o.agentId} · ${secs})${colors.reset}`,
+        );
+        lines.push(o.success ? o.response : `${colors.red}${o.error || o.response}${colors.reset}`);
+      }
+      return lines.join('\n');
+    };
+
+    sections.push(renderRound('Round 1 — Independent Positions', round1));
+    if (round2.length > 0) {
+      sections.push(renderRound('Round 2 — Cross-Critique & Refinement', round2));
+    }
+    if (verdict) {
+      sections.push(`${colors.brand}✦ ${colors.bold}Debate Verdict${colors.reset}\n${verdict}`);
+    }
+
+    return {
+      formatted: sections.join(`\n\n${colors.darkGray}${'─'.repeat(60)}${colors.reset}\n\n`),
+      round1,
+      round2,
+    };
+  }
+}
+
+function looksLikeCleanApproval(reviewText: string): boolean {
+  const trimmed = reviewText.trim();
+  if (!trimmed) return true;
+  const firstLine = trimmed.split('\n')[0] ?? '';
+  if (/^\s*(?:\*\*?)?(?:lgtm|looks\s+good(?:\s+to\s+me)?|no\s+issues\s+found|approved|sem\s+problemas|tudo\s+certo)\b/i.test(firstLine)) {
+    return !/\b(?:bug|fix|issue|error|problem|corrig|ajust|falha|risco)\b/i.test(trimmed.slice(firstLine.length));
+  }
+  return false;
 }
 
 function buildDeterministicConsensusFallback(outcomes: DirectAgentTurnOutcome[]): string {

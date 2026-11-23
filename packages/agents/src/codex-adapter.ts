@@ -52,15 +52,28 @@ export class CodexAdapter extends BaseCliAdapter {
    * agent configuration is left alone.
    */
   protected formatArgs(prompt: string, context?: AgentContext): string[] {
-    const chosenByUser = (this.options.defaultArgs ?? []).some(
+    const userArgs = this.options.defaultArgs ?? [];
+    const chosenByUser = userArgs.some(
       (a) => a === '-s' || a.startsWith('--sandbox') || a.startsWith('--dangerously-bypass') || a === '--full-auto',
     );
+    const modelChosenByUser = userArgs.some(
+      (a) => a === '-m' || a === '--model' || a.startsWith('--model=') || a.startsWith('model='),
+    );
+    const effortChosenByUser = userArgs.some((a) => a.includes('model_reasoning_effort'));
     const readOnly = context
       ? context.mutationAllowed === false || context.task.forbiddenChanges.includes('*')
       : false;
 
+    const modelFlagsForResume: string[] = [];
+    if (!modelChosenByUser && this.options.model) {
+      modelFlagsForResume.push('-c', `model="${this.options.model}"`);
+    }
+    if (!effortChosenByUser && this.options.effort) {
+      modelFlagsForResume.push('-c', `model_reasoning_effort="${this.options.effort}"`);
+    }
+
     if (!this.hasCustomDefaultArgs && context?.providerSessionId) {
-      const resumeArgs = ['exec', 'resume', '--json'];
+      const resumeArgs = ['exec', 'resume', '--json', ...modelFlagsForResume];
       if (!chosenByUser) {
         resumeArgs.push('-c', `sandbox_mode="${readOnly ? 'read-only' : 'workspace-write'}"`);
       }
@@ -72,8 +85,18 @@ export class CodexAdapter extends BaseCliAdapter {
     if (!this.hasCustomDefaultArgs && context?.persistProviderSession) {
       args = args.filter((a) => a !== '--ephemeral');
     }
-    if (chosenByUser || !context) return args;
-    return [...args.slice(0, -1), '--sandbox', readOnly ? 'read-only' : 'workspace-write', args[args.length - 1]];
+    const extraBeforePrompt: string[] = [];
+    if (!modelChosenByUser && this.options.model) {
+      extraBeforePrompt.push('--model', this.options.model);
+    }
+    if (!effortChosenByUser && this.options.effort) {
+      extraBeforePrompt.push('-c', `model_reasoning_effort="${this.options.effort}"`);
+    }
+    if (!chosenByUser && context) {
+      extraBeforePrompt.push('--sandbox', readOnly ? 'read-only' : 'workspace-write');
+    }
+    if (extraBeforePrompt.length === 0) return args;
+    return [...args.slice(0, -1), ...extraBeforePrompt, args[args.length - 1]];
   }
 
   async capabilities(): Promise<AgentCapabilities> {

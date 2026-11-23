@@ -8,9 +8,17 @@ import { ConfigurationError } from './errors.js';
 /** Single source of truth for `git.workflow`; also used to validate `/workflow`. */
 export const GIT_WORKFLOW_KINDS = ['trunk', 'github-flow', 'gitflow', 'current-branch'] as const;
 
+/** Valid reasoning effort levels accepted by `/model <agent> ...` and `agents.<id>.effort`. */
+export const AGENT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type AgentEffortLevel = (typeof AGENT_EFFORT_LEVELS)[number];
+
 export const AgentConfigSchema = z.object({
   enabled: z.boolean().default(true),
   maxParallel: z.number().int().positive().default(1),
+  /** Optional model override passed to the agent CLI (e.g. "o3", "claude-sonnet-4-6", "gemini-2.5-pro"). */
+  model: z.string().min(1).optional(),
+  /** Optional reasoning effort override passed to the agent CLI when supported. */
+  effort: z.enum(AGENT_EFFORT_LEVELS).optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string()).optional(),
