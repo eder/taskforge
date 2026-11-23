@@ -209,4 +209,65 @@ describe('independent tasks use every idle agent', () => {
     expect(seen.peak).toBe(1);
     db.close();
   }, 30_000);
+
+  it('spreads across completely idle agents before stacking a 2nd task onto an agent with maxParallel > 1', async () => {
+    const seen = new Concurrency(3);
+    const registry = new AgentRegistry(false);
+    registry.register(new SlowWritingAgent('alpha', seen));
+    registry.register(new SlowWritingAgent('beta', seen));
+
+    const router: RoutingProvider = {
+      id: 'same-preference-router',
+      route: async () => ({
+        strategy: 'single',
+        complexity: 'medium',
+        risk: 'medium',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canRead', 'canWrite'],
+            objective: 'Implement',
+            preferredAgent: 'alpha',
+          },
+        ],
+        communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
+        reason: 'prefers alpha',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+    config.verification.review = false;
+    config.execution.maxParallelTasks = 3;
+    config.agents = {
+      alpha: { enabled: true, maxParallel: 2 },
+      beta: { enabled: true, maxParallel: 1 },
+    };
+
+    const graph = new TaskGraph();
+    for (const id of ['TASK-1', 'TASK-2', 'TASK-3']) graph.addTask(independentTask(id));
+
+    const db = new TaskForgeDatabase(':memory:');
+    const orchestrator = new RunOrchestrator({
+      repoRoot: repo,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router,
+      gitService: git,
+      worktreeManager: worktrees,
+    });
+    const result = await orchestrator.run('Three independent changes', { preplannedGraph: graph });
+
+    expect(result.status).toBe('completed');
+    expect(result.tasksCompleted).toBe(3);
+    // Both alpha (2 slots) and beta (1 slot) run simultaneously -> peak 3, both providers used!
+    expect(seen.agentsUsed.size).toBe(2);
+    expect(seen.peak).toBe(3);
+    db.close();
+  }, 30_000);
 });

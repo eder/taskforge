@@ -381,7 +381,11 @@ export class DeterministicScheduler {
    * agent that already failed this task, one out of quota, or one the ownership
    * policy does not allow to write this scope.
    */
-  private idleAlternativeAgentId(task: Task, busyAgentId: string): string | undefined {
+  private idleAlternativeAgentId(
+    task: Task,
+    busyAgentId: string,
+    requireZeroActive = false,
+  ): string | undefined {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
     const quotaTracker = AgentQuotaTracker.getInstance();
     const allowedWriters = allowedWritersForTask(task, this.ctx.config);
@@ -393,6 +397,7 @@ export class DeterministicScheduler {
           !failed.has(agent.id) &&
           quotaTracker.isAvailable(agent.id) &&
           (allowedWriters === undefined || allowedWriters.has(agent.id)) &&
+          (!requireZeroActive || this.concurrency.getAgentActiveCount(agent.id) === 0) &&
           this.concurrency.canSchedule(agent.id),
       )?.id;
   }
@@ -1175,10 +1180,20 @@ export class DeterministicScheduler {
           this.ctx.taskRepo.updateStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
           continue;
         }
-        // Another task already holds the chosen agent: use an idle one instead of waiting.
-        const slotAgentId = this.concurrency.canSchedule(agentId)
-          ? agentId
-          : this.idleAlternativeAgentId(task, agentId);
+        // Spread independent ready tasks across completely idle agents first so multiple
+        // providers (e.g. Codex + Antigravity + Claude) work simultaneously, rather than
+        // stacking a 2nd task onto an agent with maxParallel > 1 while another sits idle.
+        const hasExplicitUserPin = typeof task.contract.metadata?.preferredAgent === 'string';
+        const preferredBusy = this.concurrency.getAgentActiveCount(agentId) > 0;
+        const spreadIdleAgent =
+          preferredBusy && !hasExplicitUserPin
+            ? this.idleAlternativeAgentId(task, agentId, true)
+            : undefined;
+        const slotAgentId =
+          spreadIdleAgent ??
+          (this.concurrency.canSchedule(agentId)
+            ? agentId
+            : this.idleAlternativeAgentId(task, agentId, false));
         if (slotAgentId) {
           if (slotAgentId !== agentId) {
             this.ctx.onProgress?.(
