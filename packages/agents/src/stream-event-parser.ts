@@ -54,7 +54,13 @@ interface StructuredLine {
     type?: string;
     name?: string;
   };
+  delta?: {
+    type?: string;
+    text?: string;
+  };
   step_update?: {
+    step_type?: string;
+    text_delta?: string;
     description?: string;
     tool?: string;
   };
@@ -99,10 +105,28 @@ function parseStructuredLine(raw: unknown, identity: AgentStreamEventIdentity): 
     out.push({ ...base, type: 'tool_started', tool: obj.content_block.name });
   }
 
-  // Antigravity: step_update
+  // Claude Code: streamed text delta
+  if (
+    obj.type === 'content_block_delta' &&
+    obj.delta?.type === 'text_delta' &&
+    typeof obj.delta.text === 'string' &&
+    obj.delta.text.length > 0
+  ) {
+    out.push({ ...base, type: 'agent_message', text: obj.delta.text });
+  }
+
+  // Antigravity: step_update (live agent_response text_delta or operational step status)
   if (obj.event === 'step_update') {
-    const desc: string = obj.step_update?.description || obj.step_update?.tool || 'Executing step...';
-    out.push({ ...base, type: 'status', status: desc });
+    if (
+      obj.step_update?.step_type === 'agent_response' &&
+      typeof obj.step_update.text_delta === 'string' &&
+      obj.step_update.text_delta.length > 0
+    ) {
+      out.push({ ...base, type: 'agent_message', text: obj.step_update.text_delta });
+    } else {
+      const desc: string = obj.step_update?.description || obj.step_update?.tool || 'Executing step...';
+      out.push({ ...base, type: 'status', status: desc });
+    }
   }
 
   // Codex JSONL lifecycle. Current codex exec --json emits

@@ -147,9 +147,16 @@ import {
 import {
   DirectConversationMemory,
   DirectAgentRunner,
+  type DirectSessionEntry,
   type PendingCompetitiveEdit,
 } from './direct-agent-session.js';
 import { assessProblemAndSelectAgent } from './problem-size-router.js';
+import {
+  completeFileMentionAtCursor,
+  listRepositoryFiles,
+  resolveFileMentionsInPrompt,
+} from './file-mention-completer.js';
+import { decideAutoDispatch } from './smart-auto-dispatcher.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -176,6 +183,12 @@ export interface ShellOptions {
   interactive?: boolean;
   /** Start with a clean context: earlier runs are not offered to new requests (`tf --new`). */
   freshSession?: boolean;
+  /**
+   * Auto-dispatch small conversational questions and localized edits straight to
+   * Direct Mode without Plan/Worktree ceremony (defaults to true in live CLI,
+   * opt-in during Vitest so existing orchestrated-plan tests remain deterministic).
+   */
+  smartDirectDispatch?: boolean;
 }
 
 /** An agent reading the repository to plan can take a minute or more (measured: 25-60 s with Codex). */
@@ -199,6 +212,8 @@ export class InteractiveShell {
   private stickyAgentMode: 'auto' | 'all' | string = 'auto';
   /** Pending competitive multi-agent direct edit (`@codex @agy --edit`) awaiting winner pick. */
   private pendingCompetitiveEdit?: PendingCompetitiveEdit;
+  /** Whether plain small requests in `auto` mode fast-path straight to Direct Mode. */
+  private smartDirectDispatch: boolean;
   private negotiator: NegotiationManager;
   private router: RoutingProvider;
   private agentSelector: AgentSelector;
@@ -332,6 +347,7 @@ export class InteractiveShell {
       new RunRepository(this.db),
     );
     this.githubWorkflowService = new GitHubWorkflowService(this.db, this.repoRoot);
+    this.smartDirectDispatch = options.smartDirectDispatch ?? !process.env.VITEST;
     this.directRunner = new DirectAgentRunner({
       repoRoot: this.repoRoot,
       agentRegistry: this.agentRegistry,
@@ -348,7 +364,11 @@ export class InteractiveShell {
       openAiBaseUrl: openaiBaseUrl,
       openAiModel: advisorModel,
       verificationCommands: this.config.verification.commands,
+      onStateChanged: () => this.persistDirectSessionState(),
     });
+    if (!options.freshSession) {
+      this.hydrateDirectSessionState();
+    }
     this.setupActivitySubscription();
     this.setupCockpitEventSubscription();
   }
@@ -1006,10 +1026,12 @@ export class InteractiveShell {
     if (directCmd.kind === 'switch_mode') {
       if (directCmd.mode === 'auto') {
         this.stickyAgentMode = 'auto';
-        return `${colors.green}✔${colors.reset} Mode set to ${colors.bold}Hybrid Smart (auto)${colors.reset}. ${colors.dim}Plain messages use smart orchestration; prefix with @claude, @codex, @agy, @all or !cmd for direct turns.${colors.reset}`;
+        this.persistDirectSessionState();
+        return `${colors.green}✔${colors.reset} Mode set to ${colors.bold}Hybrid Smart (auto)${colors.reset}. ${colors.dim}Quick Q&A and small edits go straight to the best agent; multi-file/complex work scales to parallel worktrees.${colors.reset}`;
       }
       if (directCmd.mode === 'all') {
         this.stickyAgentMode = 'all';
+        this.persistDirectSessionState();
         return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}@all (parallel multi-agent)${colors.reset}. ${colors.dim}Every message goes to all ready agents in parallel with shared memory. Type @auto or /use auto to return.${colors.reset}`;
       }
       const adapter = this.agentRegistry.get(directCmd.mode);
@@ -1017,6 +1039,7 @@ export class InteractiveShell {
         return `${colors.red}✖ Unknown agent "${directCmd.mode}".${colors.reset} Available: ${registeredIds.join(', ')}, all, auto.`;
       }
       this.stickyAgentMode = adapter.id;
+      this.persistDirectSessionState();
       return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}${adapter.name} (${adapter.id})${colors.reset}. ${colors.dim}Messages go straight to ${adapter.name} with shared cross-agent memory. Switch anytime with @codex/@claude/@agy/@all or @auto.${colors.reset}`;
     }
     if (directCmd.kind === 'direct_agents') {
@@ -1531,7 +1554,6 @@ export class InteractiveShell {
       }
 
       case 'clear_context': {
-        new SessionRepository(this.db).clearContext();
         this.pendingPriorContext = undefined;
         this.focusedRun = undefined;
         this.directMemory.clear();
@@ -1540,6 +1562,7 @@ export class InteractiveShell {
           await this.directRunner.discardCompetitiveEdit(this.pendingCompetitiveEdit);
           this.pendingCompetitiveEdit = undefined;
         }
+        new SessionRepository(this.db).clearContext();
         // A plan that has not been approved is part of the conversation being
         // cleared; a run that is executing is not, and is left alone.
         let discarded = '';
@@ -1686,6 +1709,50 @@ export class InteractiveShell {
                     ? `  ${colors.dim}The latest completed run is ${latestCompleted.runId} (${latestCompleted.goal}). Tell me what next step you want to run from it.${colors.reset}`
                     : `  ${colors.dim}Tell me what you want to build or investigate.${colors.reset}`,
                 ].join('\n');
+          }
+        }
+
+        // Smart Auto-Dispatch (Wave A): in `auto` mode, route focused Q&A and small
+        // localized single-file edits directly to the best ready agent with native
+        // session continuity (zero Plan/Worktree ceremony), while keeping complex,
+        // multi-file, or explicit-plan work on the Orchestrated Multi-Agent Pipeline.
+        if (
+          this.smartDirectDispatch &&
+          this.stickyAgentMode === 'auto' &&
+          !explicitRunIdEarly &&
+          !this.focusedRun &&
+          this.inRepo
+        ) {
+          const notBefore = new SessionRepository(this.db).getContextBoundary();
+          const hasUnfinishedFollowUp =
+            isShortFollowUp(intent.goal) &&
+            Boolean(
+              await this.findUnfinishedRun({
+                maxAgeHours: this.config.context?.maxAgeHours,
+                notBefore,
+              }),
+            );
+          if (!hasUnfinishedFollowUp) {
+            const reports = await AgentDetector.detect(this.agentRegistry.list());
+            const readyIds = reports.filter((r) => r.ready).map((r) => r.id);
+            const resolved = resolveFileMentionsInPrompt(intent.goal, this.repoRoot);
+            const decision = decideAutoDispatch({
+              text: resolved.cleanedPrompt,
+              availableAgents: readyIds,
+              mentionedFiles: resolved.files,
+              hasPriorContext: Boolean(this.pendingPriorContext),
+            });
+            if (decision.mode === 'direct' && decision.targetAgentId) {
+              const directRes = await this.directRunner.runAgents(
+                [decision.targetAgentId],
+                intent.goal,
+                {
+                  abortSignal,
+                  autoReason: decision.reason,
+                },
+              );
+              return directRes.formatted;
+            }
           }
         }
 
@@ -3177,6 +3244,44 @@ export class InteractiveShell {
     return undefined;
   }
 
+  /** Hydrates Direct Mode conversation memory, native provider session IDs, and sticky mode from SQLite. */
+  private hydrateDirectSessionState(): void {
+    try {
+      const saved = new SessionRepository(this.db).getDirectSessionState();
+      if (!saved) return;
+      this.directMemory.restoreState({
+        entries: saved.entries as unknown as DirectSessionEntry[],
+        seq: saved.seq,
+      });
+      this.directRunner.restoreSessionMap(saved.providerSessions);
+      if (
+        saved.stickyAgentMode &&
+        (saved.stickyAgentMode === 'auto' ||
+          saved.stickyAgentMode === 'all' ||
+          this.agentRegistry.get(saved.stickyAgentMode))
+      ) {
+        this.stickyAgentMode = saved.stickyAgentMode;
+      }
+    } catch {
+      // Best-effort hydration: never block shell startup.
+    }
+  }
+
+  /** Persists Direct Mode conversation memory, native provider session IDs, and sticky mode into SQLite. */
+  private persistDirectSessionState(): void {
+    try {
+      const memState = this.directMemory.exportState();
+      new SessionRepository(this.db).saveDirectSessionState({
+        entries: memState.entries as unknown as Array<Record<string, unknown>>,
+        seq: memState.seq,
+        providerSessions: this.directRunner.exportSessionMap(),
+        stickyAgentMode: this.stickyAgentMode,
+      });
+    } catch {
+      // Best-effort persistence: ignore if database is already closed during shutdown.
+    }
+  }
+
   /** Applies and persists a natural-language parallelism/budget update immediately. */
   private applyNaturalConfigChange(change: NaturalConfigChange): string {
     let configFile = '.taskforge/config.yaml';
@@ -3625,6 +3730,31 @@ export class InteractiveShell {
         insertPastedText(str);
         this.viewport.renderInputLine(buffer, cursorIndex, '');
         return;
+      }
+
+      // Tab shortcut: `#file` repository path autocomplete (non-colliding with `@agent`)
+      if (!this.slashMenu.isOpen && key?.name === 'tab' && buffer.length > 0 && this.inRepo) {
+        const completion = completeFileMentionAtCursor(
+          buffer,
+          cursorIndex,
+          listRepositoryFiles(this.repoRoot),
+        );
+        if (completion) {
+          buffer = completion.nextBuffer;
+          cursorIndex = completion.nextCursor;
+          this.viewport.renderInputLine(buffer, cursorIndex, '');
+          if (completion.matches.length > 1) {
+            const preview = completion.matches.slice(0, 5).join('  ·  ');
+            const more =
+              completion.matches.length > 5 ? `  (+${completion.matches.length - 5} more)` : '';
+            this.viewport.drawFooter('', [
+              `  ${colors.dim}Files: ${preview}${more}${colors.reset}`,
+            ]);
+          } else {
+            this.renderActivityTicker();
+          }
+          return;
+        }
       }
 
       // Tab shortcut: auto-fill /stream if prompt is empty and agents are actively working
