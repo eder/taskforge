@@ -10,6 +10,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   { cmd: '/help', desc: 'Display the complete command reference' },
   { cmd: '/health', desc: 'Inspect Router, agents, provider quota, and local database health' },
   { cmd: '/plan', desc: 'Inspect the current proposed or active plan' },
+  { cmd: '/blueprint', desc: 'Create, inspect, refine, or advance a Living Plan (.taskforge/plan.md) across execution waves' },
   { cmd: '/runs', desc: 'List past execution runs and delivery status' },
   { cmd: '/inspect', desc: 'Inspect run → task → assignment history; accepts an optional run id' },
   { cmd: '/tasks', desc: 'List task and assignment status for the current run' },
