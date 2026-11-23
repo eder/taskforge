@@ -39,11 +39,26 @@ export class AntigravityAdapter extends BaseCliAdapter {
   }
 
   protected formatArgs(prompt: string, context?: AgentContext): string[] {
-    const args = super.formatArgs(prompt, context);
-    if (!this.hasCustomDefaultArgs && context?.providerSessionId) {
+    let args = super.formatArgs(prompt, context);
+    const userArgs = this.options.defaultArgs ?? [];
+    const modelChosenByUser = userArgs.some((a) => a === '--model' || a.startsWith('--model='));
+    const effortChosenByUser = userArgs.some((a) => a === '--effort' || a.startsWith('--effort='));
+
+    const insertBeforePrompt = (flags: string[]) => {
+      if (flags.length === 0) return;
       const at = args.indexOf('-p');
       const insertAt = at >= 0 ? at : args.length - 1;
-      return [...args.slice(0, insertAt), '--conversation', context.providerSessionId, ...args.slice(insertAt)];
+      args = [...args.slice(0, insertAt), ...flags, ...args.slice(insertAt)];
+    };
+
+    if (!this.hasCustomDefaultArgs && context?.providerSessionId) {
+      insertBeforePrompt(['--conversation', context.providerSessionId]);
+    }
+    if (!modelChosenByUser && this.options.model) {
+      insertBeforePrompt(['--model', this.options.model]);
+    }
+    if (!effortChosenByUser && this.options.effort) {
+      insertBeforePrompt(['--effort', this.options.effort]);
     }
     return args;
   }

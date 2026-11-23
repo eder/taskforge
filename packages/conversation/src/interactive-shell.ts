@@ -10,7 +10,10 @@ import {
   loadConfig,
   getDefaultConfig,
   GIT_WORKFLOW_KINDS,
+  AGENT_EFFORT_LEVELS,
+  type AgentEffortLevel,
   setProjectConfigValue,
+  deleteProjectConfigKey,
   DeliveryError,
   ConversationState,
   generateRunId,
@@ -142,6 +145,7 @@ import {
   parseDirectRouteCommand,
   extractOrchestratedAgentPreferences,
   parseNaturalConfigChange,
+  type DirectRouteCommand,
   type NaturalConfigChange,
 } from './direct-agent-router.js';
 import {
@@ -149,6 +153,7 @@ import {
   DirectAgentRunner,
   type DirectSessionEntry,
   type PendingCompetitiveEdit,
+  type PendingPipelineFollowUp,
 } from './direct-agent-session.js';
 import { assessProblemAndSelectAgent } from './problem-size-router.js';
 import {
@@ -157,6 +162,18 @@ import {
   resolveFileMentionsInPrompt,
 } from './file-mention-completer.js';
 import { decideAutoDispatch } from './smart-auto-dispatcher.js';
+import { DirectCheckpointManager } from './direct-checkpoint.js';
+import {
+  parseDirectGitIntent,
+  formatWorkingTreeDiff,
+  formatWorkingTreeStatus,
+  prepareDirectCommit,
+  executeDirectCommit,
+  prepareDirectPr,
+  executeDirectPr,
+  type DirectGitIntent,
+  type PendingDirectGitAction,
+} from './direct-git-actions.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -207,11 +224,16 @@ export class InteractiveShell {
   private planner: SemanticPlanner | HeuristicPlanner;
   private focusedAdvisor: FocusedRunAdvisor;
   private directMemory = new DirectConversationMemory();
+  private checkpointManager: DirectCheckpointManager;
   private directRunner: DirectAgentRunner;
   /** Sticky direct chat target: 'auto' (Hybrid Smart Mode), 'all' (parallel multi-agent), or an agent id. */
   private stickyAgentMode: 'auto' | 'all' | string = 'auto';
   /** Pending competitive multi-agent direct edit (`@codex @agy --edit`) awaiting winner pick. */
   private pendingCompetitiveEdit?: PendingCompetitiveEdit;
+  /** Pending `@codex -> @agy` review follow-up awaiting 1-Enter fix application. */
+  private pendingPipelineFollowUp?: PendingPipelineFollowUp;
+  /** Pending conversational direct git commit or PR confirmation. */
+  private pendingDirectGitAction?: PendingDirectGitAction;
   /** Whether plain small requests in `auto` mode fast-path straight to Direct Mode. */
   private smartDirectDispatch: boolean;
   private negotiator: NegotiationManager;
@@ -348,6 +370,7 @@ export class InteractiveShell {
     );
     this.githubWorkflowService = new GitHubWorkflowService(this.db, this.repoRoot);
     this.smartDirectDispatch = options.smartDirectDispatch ?? !process.env.VITEST;
+    this.checkpointManager = new DirectCheckpointManager(this.repoRoot, this.gitService);
     this.directRunner = new DirectAgentRunner({
       repoRoot: this.repoRoot,
       agentRegistry: this.agentRegistry,
@@ -355,6 +378,7 @@ export class InteractiveShell {
       timeoutMs: (this.config.execution.defaultTimeoutMinutes ?? 10) * 60_000,
       onLiveLine: (line) => this.viewport.writeUpper(line),
       gitService: this.gitService,
+      checkpointManager: this.checkpointManager,
       worktreeManager: new WorktreeManager(
         this.repoRoot,
         this.config.execution.worktreesDir,
@@ -933,6 +957,16 @@ export class InteractiveShell {
   async handleInput(input: string, abortSignal?: AbortSignal): Promise<string> {
     const text = input.trim();
     if (!text) {
+      if (this.pendingDirectGitAction) {
+        const action = this.pendingDirectGitAction;
+        this.pendingDirectGitAction = undefined;
+        return this.executePendingDirectGitAction(action);
+      }
+      if (this.pendingPipelineFollowUp) {
+        const pending = this.pendingPipelineFollowUp;
+        this.pendingPipelineFollowUp = undefined;
+        return this.directRunner.applyPipelineFollowUp(pending, pending.reviewerId, abortSignal);
+      }
       if (this.pendingCompetitiveEdit) {
         const pending = this.pendingCompetitiveEdit;
         if (pending.recommendedIndex) {
@@ -943,6 +977,18 @@ export class InteractiveShell {
       }
       // Enter alone accepts what the stopped run proposed, if the REPL is in one.
       return this.focusedRun ? this.acceptFocus() : '';
+    }
+
+    // Pending direct git commit/PR confirmation
+    if (this.pendingDirectGitAction) {
+      const handled = await this.handleDirectGitActionReply(text);
+      if (handled !== undefined) return handled;
+    }
+
+    // Pending `@codex -> @agy` review follow-up
+    if (this.pendingPipelineFollowUp) {
+      const handled = await this.handlePipelineFollowUpReply(text, abortSignal);
+      if (handled !== undefined) return handled;
     }
 
     // Competitive direct edit selection (`@codex @agy --edit <task>`)
@@ -962,6 +1008,10 @@ export class InteractiveShell {
       );
       const deletedBranches = await worktreeManager.cleanOrphanedWorktreesAndBranches();
       return `Cleaned up orphaned worktrees and ${deletedBranches} temporary branch(es).`;
+    }
+
+    if (text === '/checkpoints' || text === '/undo list') {
+      return this.formatCheckpointsList();
     }
 
     // Focus Mode navigation. Recognized as literal commands (not routed
@@ -1042,6 +1092,23 @@ export class InteractiveShell {
       this.persistDirectSessionState();
       return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}${adapter.name} (${adapter.id})${colors.reset}. ${colors.dim}Messages go straight to ${adapter.name} with shared cross-agent memory. Switch anytime with @codex/@claude/@agy/@all or @auto.${colors.reset}`;
     }
+    if (directCmd.kind === 'model_config') {
+      return this.handleModelConfigCommand(directCmd);
+    }
+    if (directCmd.kind === 'direct_pipeline') {
+      this.pendingPipelineFollowUp = undefined;
+      const pipeRes = await this.directRunner.runPipeline(directCmd.stages, directCmd.prompt, {
+        abortSignal,
+      });
+      this.pendingPipelineFollowUp = pipeRes.pendingFollowUp;
+      return pipeRes.formatted;
+    }
+    if (directCmd.kind === 'direct_debate') {
+      const debateRes = await this.directRunner.runDebate(directCmd.targets, directCmd.prompt, {
+        abortSignal,
+      });
+      return debateRes.formatted;
+    }
     if (directCmd.kind === 'direct_agents') {
       const wantsMultiCompete =
         Boolean(directCmd.editMode) &&
@@ -1065,6 +1132,23 @@ export class InteractiveShell {
       });
       return result.formatted;
     }
+
+    // Conversational Direct Mode Git & Undo actions ("desfaz", "mostra o diff",
+    // "faz commit disso", "abre um pr") work in both sticky direct mode and auto mode.
+    if (
+      this.inRepo &&
+      !text.startsWith('/') &&
+      !this.currentGraph &&
+      !this.focusedRun &&
+      this.interactionGateway.getPendingRequests().length === 0
+    ) {
+      const gitIntent = parseDirectGitIntent(text);
+      if (gitIntent) {
+        const handled = await this.handleDirectGitIntent(gitIntent);
+        if (handled !== undefined) return handled;
+      }
+    }
+
     if (
       this.stickyAgentMode !== 'auto' &&
       !text.startsWith('/') &&
@@ -1072,6 +1156,10 @@ export class InteractiveShell {
       !this.focusedRun &&
       this.interactionGateway.getPendingRequests().length === 0
     ) {
+      const naturalConfigInSticky = parseNaturalConfigChange(text);
+      if (naturalConfigInSticky) {
+        return this.applyNaturalConfigChange(naturalConfigInSticky);
+      }
       const targets = this.stickyAgentMode === 'all' ? 'all' : [this.stickyAgentMode];
       const result = await this.directRunner.runAgents(targets, text, { abortSignal });
       return result.formatted;
@@ -1502,10 +1590,13 @@ export class InteractiveShell {
       }
 
       case 'undo_run': {
+        if (!intent.runId && this.checkpointManager.getLatest()) {
+          return this.handleDirectUndo('en');
+        }
         const target = intent.runId
           ? this.resolveDeliveryRunId(intent.runId)
           : this.deliveryService.findLatestApplied()?.runId;
-        if (!target) return 'No applied run to undo. Use /runs to see delivery status.';
+        if (!target) return 'No applied run to undo (and no direct-mode checkpoint). Use /checkpoints or /runs.';
         try {
           const result = await this.deliveryService.undo(target);
           return [
@@ -1556,8 +1647,11 @@ export class InteractiveShell {
       case 'clear_context': {
         this.pendingPriorContext = undefined;
         this.focusedRun = undefined;
+        this.pendingPipelineFollowUp = undefined;
+        this.pendingDirectGitAction = undefined;
         this.directMemory.clear();
         this.directRunner.clearSessions();
+        await this.checkpointManager.clear();
         if (this.pendingCompetitiveEdit) {
           await this.directRunner.discardCompetitiveEdit(this.pendingCompetitiveEdit);
           this.pendingCompetitiveEdit = undefined;
@@ -3244,7 +3338,7 @@ export class InteractiveShell {
     return undefined;
   }
 
-  /** Hydrates Direct Mode conversation memory, native provider session IDs, and sticky mode from SQLite. */
+  /** Hydrates Direct Mode conversation memory, native provider session IDs, checkpoints, and sticky mode from SQLite. */
   private hydrateDirectSessionState(): void {
     try {
       const saved = new SessionRepository(this.db).getDirectSessionState();
@@ -3254,6 +3348,9 @@ export class InteractiveShell {
         seq: saved.seq,
       });
       this.directRunner.restoreSessionMap(saved.providerSessions);
+      if (Array.isArray(saved.checkpoints)) {
+        this.checkpointManager.restoreState(saved.checkpoints);
+      }
       if (
         saved.stickyAgentMode &&
         (saved.stickyAgentMode === 'auto' ||
@@ -3267,7 +3364,7 @@ export class InteractiveShell {
     }
   }
 
-  /** Persists Direct Mode conversation memory, native provider session IDs, and sticky mode into SQLite. */
+  /** Persists Direct Mode conversation memory, native provider session IDs, checkpoints, and sticky mode into SQLite. */
   private persistDirectSessionState(): void {
     try {
       const memState = this.directMemory.exportState();
@@ -3276,28 +3373,324 @@ export class InteractiveShell {
         seq: memState.seq,
         providerSessions: this.directRunner.exportSessionMap(),
         stickyAgentMode: this.stickyAgentMode,
+        checkpoints: this.checkpointManager.exportState() as unknown as Array<Record<string, unknown>>,
       });
     } catch {
       // Best-effort persistence: ignore if database is already closed during shutdown.
     }
   }
 
-  /** Applies and persists a natural-language parallelism/budget update immediately. */
+  /** Lists saved Direct Mode working-tree checkpoints available for `/undo`. */
+  private formatCheckpointsList(): string {
+    const list = this.checkpointManager.list();
+    if (list.length === 0) {
+      return `${colors.dim}No direct-mode checkpoints saved yet. Checkpoints are created automatically before Direct Mode edits.${colors.reset}`;
+    }
+    const lines = [
+      `${colors.brand}✦ ${colors.bold}Direct Mode Checkpoints${colors.reset} ${colors.dim}(${list.length} saved — newest first)${colors.reset}`,
+    ];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const cp = list[i];
+      const filesNote =
+        cp.filesTouched && cp.filesTouched.length > 0
+          ? ` · ${cp.filesTouched.slice(0, 4).join(', ')}${cp.filesTouched.length > 4 ? ` +${cp.filesTouched.length - 4}` : ''}`
+          : '';
+      const latestTag = i === list.length - 1 ? ` ${colors.green}← /undo${colors.reset}` : '';
+      lines.push(
+        `  • ${colors.cyan}${cp.id}${colors.reset} ${colors.bold}${cp.agentId}${colors.reset} — ${cp.label}${colors.dim}${filesNote}${colors.reset}${latestTag}`,
+      );
+    }
+    return lines.join('\n');
+  }
+
+  /** Restores the latest Direct Mode working-tree checkpoint cleanly. */
+  private async handleDirectUndo(language: 'pt' | 'en'): Promise<string> {
+    const res = await this.checkpointManager.restoreLatest();
+    if (!res.success) {
+      return `${colors.red}✖ ${res.error ?? 'Could not restore checkpoint.'}${colors.reset}`;
+    }
+    this.persistDirectSessionState();
+    const touched = [...res.restoredFiles, ...res.removedFiles];
+    const filesSummary =
+      touched.length > 0
+        ? `  ${colors.cyan}${language === 'pt' ? 'Arquivos restaurados' : 'Restored files'}:${colors.reset} ${touched.join(', ')}`
+        : '';
+    const remainingNote =
+      res.remainingCount > 0
+        ? `  ${colors.dim}${language === 'pt' ? `${res.remainingCount} checkpoint(s) anterior(es) ainda no histórico (/checkpoints).` : `${res.remainingCount} earlier checkpoint(s) remain (/checkpoints).`}${colors.reset}`
+        : '';
+    const headline =
+      language === 'pt'
+        ? `${colors.green}✔${colors.reset} Alteração direta desfeita (${colors.bold}${res.checkpoint?.agentId}${colors.reset}: "${res.checkpoint?.label}").`
+        : `${colors.green}✔${colors.reset} Undid direct edit (${colors.bold}${res.checkpoint?.agentId}${colors.reset}: "${res.checkpoint?.label}").`;
+    return [headline, filesSummary, remainingNote].filter(Boolean).join('\n');
+  }
+
+  /** Handles `/model` inspection and per-agent model/effort overrides. */
+  private handleModelConfigCommand(
+    cmd: Extract<DirectRouteCommand, { kind: 'model_config' }>,
+  ): string {
+    if (cmd.error) {
+      return `${colors.red}✖${colors.reset} ${cmd.error}`;
+    }
+
+    if (cmd.action === 'show') {
+      const adapters = cmd.agentId
+        ? [this.agentRegistry.get(cmd.agentId)].filter((a): a is NonNullable<typeof a> => Boolean(a))
+        : this.agentRegistry.list();
+      if (adapters.length === 0) {
+        return `${colors.red}✖ Unknown agent "${cmd.agentId}".${colors.reset}`;
+      }
+      const lines = [`${colors.brand}✦ ${colors.bold}Per-Agent Model Configuration${colors.reset}`];
+      for (const adapter of adapters) {
+        const cfg = this.config.agents[adapter.id];
+        const live = adapter.getModelConfig?.();
+        const model = live?.model ?? cfg?.model;
+        const effort = live?.effort ?? cfg?.effort;
+        const modelText = model ? `${colors.cyan}${model}${colors.reset}` : `${colors.dim}(CLI default)${colors.reset}`;
+        const effortText = effort ? `  ${colors.dim}effort:${colors.reset} ${colors.cyan}${effort}${colors.reset}` : '';
+        lines.push(`  • ${colors.bold}${adapter.name}${colors.reset} ${colors.dim}(${adapter.id})${colors.reset}: ${modelText}${effortText}`);
+      }
+      lines.push(
+        `  ${colors.dim}Usage: /model <agent> <model> [effort]  ·  /model <agent> effort <${AGENT_EFFORT_LEVELS.join('|')}>  ·  /model <agent> reset${colors.reset}`,
+      );
+      return lines.join('\n');
+    }
+
+    const agentId = cmd.agentId!;
+    const adapter = this.agentRegistry.get(agentId);
+    if (!adapter) {
+      return `${colors.red}✖ Unknown agent "${agentId}".${colors.reset} Registered: ${this.agentRegistry.list().map((a) => a.id).join(', ')}.`;
+    }
+
+    if (cmd.action === 'reset') {
+      const effortOnly = cmd.model === '__effort_only__';
+      const current = this.config.agents[agentId] ?? { enabled: true, maxParallel: 1 };
+      if (!effortOnly) {
+        if (this.inRepo) deleteProjectConfigKey(this.repoRoot, ['agents', agentId, 'model']);
+        delete current.model;
+      }
+      if (this.inRepo) deleteProjectConfigKey(this.repoRoot, ['agents', agentId, 'effort']);
+      delete current.effort;
+      this.config.agents[agentId] = current;
+      adapter.setModelConfig?.(
+        effortOnly ? { effort: undefined } : { model: undefined, effort: undefined },
+      );
+      return effortOnly
+        ? `${colors.green}✔${colors.reset} Reset ${colors.bold}${adapter.name}${colors.reset} reasoning effort back to CLI default.`
+        : `${colors.green}✔${colors.reset} Reset ${colors.bold}${adapter.name}${colors.reset} model & effort back to CLI default.`;
+    }
+
+    const updates: string[] = [];
+    const current = this.config.agents[agentId] ?? { enabled: true, maxParallel: 1 };
+    let configFile = '.taskforge/config.yaml';
+    if (cmd.model) {
+      if (this.inRepo) {
+        configFile = setProjectConfigValue(this.repoRoot, ['agents', agentId, 'model'], cmd.model).file;
+      }
+      current.model = cmd.model;
+      adapter.setModelConfig?.({ model: cmd.model });
+      updates.push(`model = ${cmd.model}`);
+    }
+    if (cmd.effort) {
+      if (this.inRepo) {
+        configFile = setProjectConfigValue(this.repoRoot, ['agents', agentId, 'effort'], cmd.effort).file;
+      }
+      current.effort = cmd.effort;
+      adapter.setModelConfig?.({ effort: cmd.effort });
+      updates.push(`effort = ${cmd.effort}`);
+    }
+    this.config.agents[agentId] = current;
+    const relFile = path.relative(this.repoRoot, configFile) || configFile;
+    return [
+      `${colors.green}✔${colors.reset} Updated ${colors.bold}${adapter.name} (${agentId})${colors.reset}: ${colors.cyan}${updates.join(', ')}${colors.reset}`,
+      `  ${colors.dim}Saved to ${relFile} and active immediately for Direct Mode and Orchestrated runs.${colors.reset}`,
+    ].join('\n');
+  }
+
+  /** Handles conversational direct git/PR/undo intents (`desfaz`, `mostra o diff`, `faz commit`, `abre um pr`). */
+  private async handleDirectGitIntent(gitIntent: DirectGitIntent): Promise<string | undefined> {
+    if (gitIntent.kind === 'undo') {
+      if (this.checkpointManager.getLatest()) {
+        return this.handleDirectUndo(gitIntent.language);
+      }
+      const applied = this.deliveryService.findLatestApplied()?.runId;
+      if (applied) {
+        const result = await this.deliveryService.undo(applied);
+        return gitIntent.language === 'pt'
+          ? `${colors.green}✔${colors.reset} Run ${colors.bold}${applied}${colors.reset} revertida com commit ${result.revertCommit.slice(0, 7)}.`
+          : `${colors.green}✔${colors.reset} Undid ${colors.bold}${applied}${colors.reset} with revert commit ${result.revertCommit.slice(0, 7)}.`;
+      }
+      return gitIntent.language === 'pt'
+        ? `${colors.dim}Nenhuma alteração direta ou run aplicada para desfazer.${colors.reset}`
+        : `${colors.dim}No direct edit checkpoint or applied run to undo.${colors.reset}`;
+    }
+
+    if (gitIntent.kind === 'diff') {
+      const diffRes = await formatWorkingTreeDiff(this.repoRoot, this.gitService, gitIntent.language);
+      if (!diffRes.hasChanges && this.resolveDeliveryRunId()) {
+        return undefined; // Let orchestrated `/diff` inspect the completed run instead.
+      }
+      return diffRes.formatted;
+    }
+
+    if (gitIntent.kind === 'status') {
+      return formatWorkingTreeStatus(this.repoRoot, this.gitService);
+    }
+
+    if (gitIntent.kind === 'commit') {
+      const prep = await prepareDirectCommit(
+        this.repoRoot,
+        this.gitService,
+        gitIntent.message,
+        this.directMemory.getEntries(),
+        gitIntent.language,
+      );
+      this.pendingDirectGitAction = prep.pending;
+      return prep.formatted;
+    }
+
+    if (gitIntent.kind === 'pr') {
+      const prep = await prepareDirectPr(
+        this.repoRoot,
+        this.gitService,
+        gitIntent.title,
+        this.directMemory.getEntries(),
+        gitIntent.language,
+      );
+      if (!prep.pending && this.resolveDeliveryRunId()) {
+        return undefined; // Let orchestrated `/pr` open the PR for the completed run.
+      }
+      this.pendingDirectGitAction = prep.pending;
+      return prep.formatted;
+    }
+
+    return undefined;
+  }
+
+  private async executePendingDirectGitAction(action: PendingDirectGitAction): Promise<string> {
+    if (action.kind === 'commit') {
+      return executeDirectCommit(this.repoRoot, this.gitService, action.message, action.language);
+    }
+    return executeDirectPr(this.repoRoot, this.gitService, action);
+  }
+
+  private async handleDirectGitActionReply(text: string): Promise<string | undefined> {
+    const pending = this.pendingDirectGitAction;
+    if (!pending) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:\/back|\/cancel|cancel(?:ar)?|n[aã]o|no|q)$/.test(lower)) {
+      this.pendingDirectGitAction = undefined;
+      return pending.language === 'pt'
+        ? `${colors.dim}Ação git cancelada.${colors.reset}`
+        : `${colors.dim}Git action cancelled.${colors.reset}`;
+    }
+
+    if (/^(?:y|yes|s|sim|ok|confirm(?:ar)?|pode|vai|go)$/.test(lower)) {
+      this.pendingDirectGitAction = undefined;
+      return this.executePendingDirectGitAction(pending);
+    }
+
+    // If the user typed another slash/direct command, clear pending and let it run.
+    if (text.startsWith('/') || text.startsWith('@') || text.startsWith('!')) {
+      this.pendingDirectGitAction = undefined;
+      return undefined;
+    }
+
+    // Otherwise treat non-command text as a custom commit message or PR title!
+    this.pendingDirectGitAction = undefined;
+    if (pending.kind === 'commit') {
+      return executeDirectCommit(this.repoRoot, this.gitService, text, pending.language);
+    }
+    return executeDirectPr(this.repoRoot, this.gitService, {
+      ...pending,
+      title: text,
+      ...(pending.needsCommit ? { commitMessage: text } : {}),
+    });
+  }
+
+  private async handlePipelineFollowUpReply(
+    text: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const pending = this.pendingPipelineFollowUp;
+    if (!pending) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:\/back|\/cancel|cancel(?:ar)?|n[aã]o|no|keep|manter|deixa|q)$/.test(lower)) {
+      this.pendingPipelineFollowUp = undefined;
+      return `${colors.dim}Kept Stage 1 changes as-is.${colors.reset}`;
+    }
+
+    if (/^(?:y|yes|s|sim|aplica(?:r)?|apply|fix|corrig(?:e|ir)|reviewer)$/.test(lower)) {
+      this.pendingPipelineFollowUp = undefined;
+      return this.directRunner.applyPipelineFollowUp(pending, pending.reviewerId, abortSignal);
+    }
+
+    if (
+      lower === 'implementer' ||
+      lower === pending.implementerId ||
+      (lower === 'antigravity' && pending.implementerId === 'agy')
+    ) {
+      this.pendingPipelineFollowUp = undefined;
+      return this.directRunner.applyPipelineFollowUp(pending, pending.implementerId, abortSignal);
+    }
+
+    if (
+      lower === pending.reviewerId ||
+      (lower === 'antigravity' && pending.reviewerId === 'agy')
+    ) {
+      this.pendingPipelineFollowUp = undefined;
+      return this.directRunner.applyPipelineFollowUp(pending, pending.reviewerId, abortSignal);
+    }
+
+    // Any other message dismisses the pending follow-up and continues normally.
+    this.pendingPipelineFollowUp = undefined;
+    return undefined;
+  }
+
+  /** Applies and persists a natural-language parallelism, budget, or model/effort update immediately. */
   private applyNaturalConfigChange(change: NaturalConfigChange): string {
     let configFile = '.taskforge/config.yaml';
     for (const update of change.updates) {
-      const saved = setProjectConfigValue(this.repoRoot, update.keyPath, update.value);
-      configFile = saved.file;
+      if (update.action === 'delete') {
+        if (this.inRepo) {
+          configFile = deleteProjectConfigKey(this.repoRoot, update.keyPath).file;
+        }
+      } else if (update.value !== null) {
+        if (this.inRepo) {
+          configFile = setProjectConfigValue(this.repoRoot, update.keyPath, update.value).file;
+        }
+      }
+
       const [section, key, subKey] = update.keyPath;
-      if (section === 'execution' && key === 'maxParallelTasks') {
+      if (section === 'execution' && key === 'maxParallelTasks' && typeof update.value === 'number') {
         this.config.execution.maxParallelTasks = update.value;
-      } else if (section === 'execution' && key === 'tokenBudget') {
+      } else if (section === 'execution' && key === 'tokenBudget' && typeof update.value === 'number') {
         this.config.execution.tokenBudget = update.value;
-      } else if (section === 'planner' && key === 'maxTasks') {
+      } else if (section === 'planner' && key === 'maxTasks' && typeof update.value === 'number') {
         this.config.planner = { ...(this.config.planner ?? {}), maxTasks: update.value };
-      } else if (section === 'agents' && key && subKey === 'maxParallel') {
+      } else if (section === 'agents' && key && subKey === 'maxParallel' && typeof update.value === 'number') {
         const current = this.config.agents[key] ?? { enabled: true };
         this.config.agents[key] = { ...current, enabled: true, maxParallel: update.value };
+      } else if (section === 'agents' && key && subKey === 'model') {
+        const current = this.config.agents[key] ?? { enabled: true, maxParallel: 1 };
+        const modelVal = update.action === 'delete' || typeof update.value !== 'string' ? undefined : update.value;
+        if (modelVal) current.model = modelVal;
+        else delete current.model;
+        this.config.agents[key] = current;
+        this.agentRegistry.get(key)?.setModelConfig?.({ model: modelVal });
+      } else if (section === 'agents' && key && subKey === 'effort') {
+        const current = this.config.agents[key] ?? { enabled: true, maxParallel: 1 };
+        const effortVal =
+          update.action === 'delete' || typeof update.value !== 'string'
+            ? undefined
+            : (update.value as AgentEffortLevel);
+        if (effortVal) current.effort = effortVal;
+        else delete current.effort;
+        this.config.agents[key] = current;
+        this.agentRegistry.get(key)?.setModelConfig?.({ effort: effortVal });
       }
     }
 

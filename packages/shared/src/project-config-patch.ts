@@ -59,3 +59,24 @@ export function setProjectConfigValue(
   fs.renameSync(temp, file);
   return { file };
 }
+
+/**
+ * Deletes a key from the project's `.taskforge/config.yaml`, preserving the rest
+ * of the file (including comments). No-op if the file or key does not exist.
+ */
+export function deleteProjectConfigKey(
+  repoRoot: string,
+  keyPath: string[],
+): { file: string; deleted: boolean } {
+  const file = path.join(repoRoot, CONFIG_PATH);
+  if (!fs.existsSync(file)) return { file, deleted: false };
+  const text = fs.readFileSync(file, 'utf8');
+  if (!text.trim()) return { file, deleted: false };
+  const doc: Document = parseDocument(text);
+  const deleted = doc.deleteIn(keyPath);
+  if (!deleted) return { file, deleted: false };
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, doc.toString());
+  fs.renameSync(temp, file);
+  return { file, deleted: true };
+}
