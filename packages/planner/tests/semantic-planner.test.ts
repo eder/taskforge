@@ -658,6 +658,84 @@ describe('SemanticPlanner', () => {
     expect(graph.getTask('TASK-003')?.dependencies.sort()).toEqual(['TASK-001', 'TASK-002']);
   });
 
+  it('auto-includes companion unit test files from repository indexContext in single-file mutation scopes', async () => {
+    const planner = new SemanticPlanner({
+      apiKey: 'test-key',
+      customCaller: async () => ({
+        tasks: [
+          {
+            taskId: 'TASK-1',
+            title: 'Fix Retrieval Logic',
+            description: 'Use content field in ContextRetrievalEngine',
+            type: 'implementation',
+            completionMode: 'mutation',
+            dependencies: [],
+            objective: 'Fix format_for_llm in context_retrieval.py',
+            allowedScope: ['server/adapters/context_retrieval.py'],
+            forbiddenChanges: [],
+            acceptanceCriteria: ['Tests pass'],
+          },
+          {
+            taskId: 'TASK-2',
+            title: 'Fix Memory Expiration',
+            description: 'Add expiry polling in memory.py',
+            type: 'implementation',
+            completionMode: 'mutation',
+            dependencies: [],
+            objective: 'Add expiration poller',
+            allowedScope: ['server/adapters/memory.py'],
+            forbiddenChanges: [],
+            acceptanceCriteria: ['Tests pass'],
+          },
+        ],
+      }),
+    });
+
+    const graph = await planner.plan(
+      {
+        id: 'goal-companion-tests',
+        description: 'Fix retrieval and memory expiration',
+        repository: '/repo',
+        constraints: [],
+        acceptanceCriteria: [],
+        createdAt: new Date(),
+      },
+      {
+        languages: ['Python'],
+        frameworks: ['pytest'],
+        testCommands: ['pytest -q'],
+        lintCommands: [],
+        typecheckCommands: [],
+        buildCommands: [],
+        hasECC: false,
+        summary: 'Python repo',
+        indexContext: {
+          indexedFiles: 20,
+          matches: [
+            {
+              path: 'server/adapters/context_retrieval.py',
+              score: 10,
+              isTest: false,
+              symbols: ['ContextRetrievalEngine'],
+              imports: [],
+              importedBy: [],
+              relatedTests: ['server/test_context_retrieval.py'],
+            },
+          ],
+          suggestedScopes: ['server/**'],
+          relatedTests: ['server/test_context_retrieval.py'],
+          summaryLines: [],
+        },
+      },
+    );
+
+    expect(graph.getTask('TASK-1')?.contract.allowedScope).toEqual([
+      'server/adapters/context_retrieval.py',
+      'server/test_context_retrieval.py',
+    ]);
+    expect(graph.getTask('TASK-2')?.contract.allowedScope).toEqual(['server/adapters/memory.py']);
+  });
+
   it('Requirement 3: revises existing plan with typed revisions without creating new goal', async () => {
     const planner = new SemanticPlanner();
     const goal: Goal = {
