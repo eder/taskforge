@@ -152,7 +152,16 @@ export class RepositoryAnalyzer {
 
     // Not a repository (or git unavailable): plan without a map rather than fail.
     const tracked = await this.gitService!.exec(['-c', 'core.quotepath=off', 'ls-files']).catch(() => '');
-    const repositoryMap = tracked.trim() ? buildRepositoryMap(tracked.split('\n').filter(Boolean)) : undefined;
+    const trackedFiles = tracked.trim() ? tracked.split('\n').filter(Boolean) : [];
+    const repositoryMap = trackedFiles.length > 0 ? buildRepositoryMap(trackedFiles) : undefined;
+
+    // Greenfield detection: count non-boilerplate files so empty or freshly
+    // initialized repositories can trigger a phased Living Plan (Foundation ->
+    // Parallel Modules -> Integration) before fanning out parallel agents.
+    const BOILERPLATE_RE =
+      /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.prettierrc.*|\.nvmrc|\.env.*|license(?:\.[a-z]+)?|readme(?:\.[a-z]+)?|\.taskforge\/.*|\.github\/.*)$/i;
+    const sourceFileCount = trackedFiles.filter((f) => !BOILERPLATE_RE.test(f)).length;
+    const isGreenfield = sourceFileCount === 0 || (sourceFileCount <= 2 && languages.size === 0);
 
     let indexContext: RepositoryProfile['indexContext'];
     if (options.goalDescription?.trim() && repositoryMap && repositoryMap.length > 0) {
@@ -179,6 +188,8 @@ export class RepositoryAnalyzer {
       hasECC,
       summary,
       repositoryMap,
+      sourceFileCount,
+      isGreenfield,
       indexContext,
       projectInstructions: instructions.documents,
       instructionWarnings: instructions.warnings,

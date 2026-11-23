@@ -20,6 +20,8 @@ import { usageFromObject } from './usage-extraction.js';
 export interface CliAdapterOptions {
   binaryPath?: string;
   defaultArgs?: string[];
+  model?: string;
+  effort?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
   /** Extra parent-environment variable names to forward to this agent (opt-in, by name). */
@@ -88,6 +90,22 @@ export abstract class BaseCliAdapter implements AgentAdapter {
 
   constructor(options: CliAdapterOptions = {}) {
     this.options = options;
+  }
+
+  getModelConfig(): { model?: string; effort?: string } {
+    return {
+      ...(this.options.model ? { model: this.options.model } : {}),
+      ...(this.options.effort ? { effort: this.options.effort } : {}),
+    };
+  }
+
+  setModelConfig(config: { model?: string; effort?: string }): void {
+    if ('model' in config) {
+      this.options.model = config.model?.trim() || undefined;
+    }
+    if ('effort' in config) {
+      this.options.effort = config.effort?.trim() || undefined;
+    }
   }
 
   /** Credential variables this provider's CLI needs; nothing else is forwarded. */

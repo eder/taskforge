@@ -51,15 +51,30 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
    */
   protected formatArgs(prompt: string, context?: AgentContext): string[] {
     let args = super.formatArgs(prompt, context);
+    const userArgs = this.options.defaultArgs ?? [];
+    const modelChosenByUser = userArgs.some((a) => a === '--model' || a.startsWith('--model='));
+    const effortChosenByUser = userArgs.some((a) => a === '--effort' || a.startsWith('--effort='));
+
+    const insertBeforePrompt = (flags: string[]) => {
+      if (flags.length === 0) return;
+      const at = args.indexOf('-p');
+      const insertAt = at >= 0 ? at : args.length - 1;
+      args = [...args.slice(0, insertAt), ...flags, ...args.slice(insertAt)];
+    };
+
     if (!this.hasCustomDefaultArgs && (context?.persistProviderSession || context?.providerSessionId)) {
       args = args.filter((a) => a !== '--no-session-persistence');
     }
     if (!this.hasCustomDefaultArgs && context?.providerSessionId) {
-      const at = args.indexOf('-p');
-      const insertAt = at >= 0 ? at : args.length - 1;
-      args = [...args.slice(0, insertAt), '--resume', context.providerSessionId, ...args.slice(insertAt)];
+      insertBeforePrompt(['--resume', context.providerSessionId]);
     }
-    const chosenByUser = (this.options.defaultArgs ?? []).some(
+    if (!modelChosenByUser && this.options.model) {
+      insertBeforePrompt(['--model', this.options.model]);
+    }
+    if (!effortChosenByUser && this.options.effort) {
+      insertBeforePrompt(['--effort', this.options.effort]);
+    }
+    const chosenByUser = userArgs.some(
       (a) =>
         a.startsWith('--permission-mode') ||
         a.startsWith('--allowedTools') ||
@@ -70,9 +85,8 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
     const readOnly = context.mutationAllowed === false || context.task.forbiddenChanges.includes('*');
     if (readOnly) return args;
     // The prompt follows `-p`, so the flags go before it.
-    const at = args.indexOf('-p');
-    const insertAt = at >= 0 ? at : args.length - 1;
-    return [...args.slice(0, insertAt), '--permission-mode', 'acceptEdits', ...args.slice(insertAt)];
+    insertBeforePrompt(['--permission-mode', 'acceptEdits']);
+    return args;
   }
 
   async capabilities(): Promise<AgentCapabilities> {

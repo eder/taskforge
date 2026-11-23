@@ -10,7 +10,10 @@ import {
   loadConfig,
   getDefaultConfig,
   GIT_WORKFLOW_KINDS,
+  AGENT_EFFORT_LEVELS,
+  type AgentEffortLevel,
   setProjectConfigValue,
+  deleteProjectConfigKey,
   DeliveryError,
   ConversationState,
   generateRunId,
@@ -142,6 +145,7 @@ import {
   parseDirectRouteCommand,
   extractOrchestratedAgentPreferences,
   parseNaturalConfigChange,
+  type DirectRouteCommand,
   type NaturalConfigChange,
 } from './direct-agent-router.js';
 import {
@@ -149,6 +153,7 @@ import {
   DirectAgentRunner,
   type DirectSessionEntry,
   type PendingCompetitiveEdit,
+  type PendingPipelineFollowUp,
 } from './direct-agent-session.js';
 import { assessProblemAndSelectAgent } from './problem-size-router.js';
 import {
@@ -157,6 +162,40 @@ import {
   resolveFileMentionsInPrompt,
 } from './file-mention-completer.js';
 import { decideAutoDispatch } from './smart-auto-dispatcher.js';
+import { DirectCheckpointManager } from './direct-checkpoint.js';
+import {
+  parseDirectGitIntent,
+  formatWorkingTreeDiff,
+  formatWorkingTreeStatus,
+  prepareDirectCommit,
+  executeDirectCommit,
+  prepareDirectPr,
+  executeDirectPr,
+  type DirectGitIntent,
+  type PendingDirectGitAction,
+} from './direct-git-actions.js';
+import {
+  loadLivingPlan,
+  saveLivingPlan,
+  deleteLivingPlan,
+  getNextPendingWave,
+  markWaveStatus,
+  shouldOfferLivingPlan,
+  generateLivingPlanBlueprint,
+  refineLivingPlan,
+  buildWaveExecutionGoal,
+  formatLivingPlanDisplay,
+  type LivingPlan,
+  type LivingPlanGeneratorFn,
+} from './living-plan.js';
+import {
+  DebateCouncilRunner,
+  parseCouncilCommand,
+  formatCouncilProposalThread,
+  buildCouncilHandoffGoal,
+  type PendingCouncilDecision,
+  type CouncilSynthesizerFn,
+} from './debate-council.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -189,6 +228,15 @@ export interface ShellOptions {
    * opt-in during Vitest so existing orchestrated-plan tests remain deterministic).
    */
   smartDirectDispatch?: boolean;
+  /**
+   * Automatically offer a domain-agnostic Living Plan (`.taskforge/plan.md`) on
+   * greenfield repositories (defaults to true in live CLI, opt-in during Vitest).
+   */
+  enableLivingPlanAutoDetect?: boolean;
+  /** Optional custom generator for Living Plan blueprints (used in tests or custom providers). */
+  livingPlanGenerator?: LivingPlanGeneratorFn;
+  /** Optional custom synthesizer for Wave D Solution Debate Council verdicts. */
+  councilSynthesizer?: CouncilSynthesizerFn;
 }
 
 /** An agent reading the repository to plan can take a minute or more (measured: 25-60 s with Codex). */
@@ -207,13 +255,28 @@ export class InteractiveShell {
   private planner: SemanticPlanner | HeuristicPlanner;
   private focusedAdvisor: FocusedRunAdvisor;
   private directMemory = new DirectConversationMemory();
+  private checkpointManager: DirectCheckpointManager;
   private directRunner: DirectAgentRunner;
+  private debateCouncil: DebateCouncilRunner;
   /** Sticky direct chat target: 'auto' (Hybrid Smart Mode), 'all' (parallel multi-agent), or an agent id. */
   private stickyAgentMode: 'auto' | 'all' | string = 'auto';
   /** Pending competitive multi-agent direct edit (`@codex @agy --edit`) awaiting winner pick. */
   private pendingCompetitiveEdit?: PendingCompetitiveEdit;
+  /** Pending `@codex -> @agy` review follow-up awaiting 1-Enter fix application. */
+  private pendingPipelineFollowUp?: PendingPipelineFollowUp;
+  /** Pending conversational direct git commit or PR confirmation. */
+  private pendingDirectGitAction?: PendingDirectGitAction;
+  /** Pending Wave D Multi-Agent Solution Debate Council verdict awaiting handoff choice. */
+  private pendingCouncilDecision?: PendingCouncilDecision;
+  /** Active interactive Living Plan blueprint awaiting refinement or wave launch. */
+  private pendingLivingPlan?: LivingPlan;
+  /** Tracks the wave number currently being planned/executed from `.taskforge/plan.md`. */
+  private activeLivingPlanWave?: { waveNumber: number; waveName: string };
   /** Whether plain small requests in `auto` mode fast-path straight to Direct Mode. */
   private smartDirectDispatch: boolean;
+  /** Whether greenfield repositories automatically enter the Living Plan blueprint flow. */
+  private enableLivingPlanAutoDetect: boolean;
+  private livingPlanGenerator?: LivingPlanGeneratorFn;
   private negotiator: NegotiationManager;
   private router: RoutingProvider;
   private agentSelector: AgentSelector;
@@ -348,6 +411,9 @@ export class InteractiveShell {
     );
     this.githubWorkflowService = new GitHubWorkflowService(this.db, this.repoRoot);
     this.smartDirectDispatch = options.smartDirectDispatch ?? !process.env.VITEST;
+    this.enableLivingPlanAutoDetect = options.enableLivingPlanAutoDetect ?? !process.env.VITEST;
+    this.livingPlanGenerator = options.livingPlanGenerator;
+    this.checkpointManager = new DirectCheckpointManager(this.repoRoot, this.gitService);
     this.directRunner = new DirectAgentRunner({
       repoRoot: this.repoRoot,
       agentRegistry: this.agentRegistry,
@@ -355,6 +421,7 @@ export class InteractiveShell {
       timeoutMs: (this.config.execution.defaultTimeoutMinutes ?? 10) * 60_000,
       onLiveLine: (line) => this.viewport.writeUpper(line),
       gitService: this.gitService,
+      checkpointManager: this.checkpointManager,
       worktreeManager: new WorktreeManager(
         this.repoRoot,
         this.config.execution.worktreesDir,
@@ -364,6 +431,18 @@ export class InteractiveShell {
       openAiBaseUrl: openaiBaseUrl,
       openAiModel: advisorModel,
       verificationCommands: this.config.verification.commands,
+      onStateChanged: () => this.persistDirectSessionState(),
+    });
+    this.debateCouncil = new DebateCouncilRunner({
+      repoRoot: this.repoRoot,
+      agentRegistry: this.agentRegistry,
+      memory: this.directMemory,
+      timeoutMs: (this.config.execution.defaultTimeoutMinutes ?? 10) * 60_000,
+      onLiveLine: (line) => this.viewport.writeUpper(line),
+      openAiApiKey: openaiApiKey,
+      openAiBaseUrl: openaiBaseUrl,
+      openAiModel: advisorModel,
+      synthesizer: options.councilSynthesizer,
       onStateChanged: () => this.persistDirectSessionState(),
     });
     if (!options.freshSession) {
@@ -933,6 +1012,24 @@ export class InteractiveShell {
   async handleInput(input: string, abortSignal?: AbortSignal): Promise<string> {
     const text = input.trim();
     if (!text) {
+      if (this.pendingDirectGitAction) {
+        const action = this.pendingDirectGitAction;
+        this.pendingDirectGitAction = undefined;
+        return this.executePendingDirectGitAction(action);
+      }
+      if (this.pendingCouncilDecision) {
+        const decision = this.pendingCouncilDecision;
+        this.pendingCouncilDecision = undefined;
+        return this.launchCouncilHandoff(decision, 'verdict', abortSignal);
+      }
+      if (this.pendingLivingPlan) {
+        return this.launchNextLivingPlanWave(abortSignal);
+      }
+      if (this.pendingPipelineFollowUp) {
+        const pending = this.pendingPipelineFollowUp;
+        this.pendingPipelineFollowUp = undefined;
+        return this.directRunner.applyPipelineFollowUp(pending, pending.reviewerId, abortSignal);
+      }
       if (this.pendingCompetitiveEdit) {
         const pending = this.pendingCompetitiveEdit;
         if (pending.recommendedIndex) {
@@ -943,6 +1040,30 @@ export class InteractiveShell {
       }
       // Enter alone accepts what the stopped run proposed, if the REPL is in one.
       return this.focusedRun ? this.acceptFocus() : '';
+    }
+
+    // Pending direct git commit/PR confirmation
+    if (this.pendingDirectGitAction) {
+      const handled = await this.handleDirectGitActionReply(text);
+      if (handled !== undefined) return handled;
+    }
+
+    // Pending Wave D Solution Debate Council handoff
+    if (this.pendingCouncilDecision) {
+      const handled = await this.handleCouncilDecisionReply(text, abortSignal);
+      if (handled !== undefined) return handled;
+    }
+
+    // Pending Living Plan blueprint refinement / launch
+    if (this.pendingLivingPlan && !text.startsWith('/') && !text.startsWith('@') && !text.startsWith('!')) {
+      const handled = await this.handleLivingPlanReply(text, abortSignal);
+      if (handled !== undefined) return handled;
+    }
+
+    // Pending `@codex -> @agy` review follow-up
+    if (this.pendingPipelineFollowUp) {
+      const handled = await this.handlePipelineFollowUpReply(text, abortSignal);
+      if (handled !== undefined) return handled;
     }
 
     // Competitive direct edit selection (`@codex @agy --edit <task>`)
@@ -964,12 +1085,58 @@ export class InteractiveShell {
       return `Cleaned up orphaned worktrees and ${deletedBranches} temporary branch(es).`;
     }
 
+    if (text === '/checkpoints' || text === '/undo list') {
+      return this.formatCheckpointsList();
+    }
+
+    const blueprintMatch = text.match(/^\/(?:blueprint|waves)(?:\s+(.*))?$/i);
+    if (blueprintMatch) {
+      return this.handleBlueprintCommand((blueprintMatch[1] ?? '').trim(), abortSignal);
+    }
+
+    // Wave D: Multi-Agent Solution Debate Council (`/council`, `/debate`, or PT/EN natural language)
+    if (!this.currentGraph && !this.focusedRun && this.interactionGateway.getPendingRequests().length === 0) {
+      const registeredForCouncil = this.agentRegistry.list().map((a) => a.id);
+      const councilCmd = parseCouncilCommand(text, registeredForCouncil);
+      if (councilCmd) {
+        if (!councilCmd.problem) {
+          return `${colors.dim}Usage: /council [@agent1 @agent2] <problem to debate>${colors.reset}\n  ${colors.dim}Example: /council Como desenhar fila distribuída com idempotência e retry exponencial?${colors.reset}`;
+        }
+        this.pendingCouncilDecision = undefined;
+        const { result, pending } = await this.debateCouncil.runCouncil(
+          councilCmd.targets,
+          councilCmd.problem,
+          { abortSignal, saveReport: this.inRepo },
+        );
+        this.pendingCouncilDecision = pending;
+        return result.formatted;
+      }
+    }
+
+    // Natural-language wave advancement when a `.taskforge/plan.md` exists
+    if (
+      this.inRepo &&
+      !this.currentGraph &&
+      !this.focusedRun &&
+      /^(?:(?:executa(?:r)?|roda(?:r)?|inicia(?:r)?|continua(?:r)?|run|start|launch|execute)\s+(?:a\s+|the\s+)?)?(?:pr[óo]xima\s+(?:wave|onda)|next\s+wave)[!.?]*$/i.test(
+        text,
+      )
+    ) {
+      if (loadLivingPlan(this.repoRoot)) {
+        return this.launchNextLivingPlanWave(abortSignal);
+      }
+    }
+
     // Focus Mode navigation. Recognized as literal commands (not routed
     // through the operator's NLU intent parser) precisely so they work the
     // same way whether or not the cockpit is currently focused.
     if (text === '/back' || text === '/overview' || text === 'q') {
       if (this.focusedAssignmentId) {
         return this.exitFocusMode();
+      }
+      if (this.pendingLivingPlan && text !== 'q') {
+        this.pendingLivingPlan = undefined;
+        return `${colors.dim}Paused interactive blueprint alignment. Your plan stays saved in .taskforge/plan.md — run /blueprint anytime.${colors.reset}`;
       }
       if (this.focusedRun && text !== 'q') {
         const left = this.focusedRun.runId;
@@ -1042,6 +1209,23 @@ export class InteractiveShell {
       this.persistDirectSessionState();
       return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}${adapter.name} (${adapter.id})${colors.reset}. ${colors.dim}Messages go straight to ${adapter.name} with shared cross-agent memory. Switch anytime with @codex/@claude/@agy/@all or @auto.${colors.reset}`;
     }
+    if (directCmd.kind === 'model_config') {
+      return this.handleModelConfigCommand(directCmd);
+    }
+    if (directCmd.kind === 'direct_pipeline') {
+      this.pendingPipelineFollowUp = undefined;
+      const pipeRes = await this.directRunner.runPipeline(directCmd.stages, directCmd.prompt, {
+        abortSignal,
+      });
+      this.pendingPipelineFollowUp = pipeRes.pendingFollowUp;
+      return pipeRes.formatted;
+    }
+    if (directCmd.kind === 'direct_debate') {
+      const debateRes = await this.directRunner.runDebate(directCmd.targets, directCmd.prompt, {
+        abortSignal,
+      });
+      return debateRes.formatted;
+    }
     if (directCmd.kind === 'direct_agents') {
       const wantsMultiCompete =
         Boolean(directCmd.editMode) &&
@@ -1065,6 +1249,23 @@ export class InteractiveShell {
       });
       return result.formatted;
     }
+
+    // Conversational Direct Mode Git & Undo actions ("desfaz", "mostra o diff",
+    // "faz commit disso", "abre um pr") work in both sticky direct mode and auto mode.
+    if (
+      this.inRepo &&
+      !text.startsWith('/') &&
+      !this.currentGraph &&
+      !this.focusedRun &&
+      this.interactionGateway.getPendingRequests().length === 0
+    ) {
+      const gitIntent = parseDirectGitIntent(text);
+      if (gitIntent) {
+        const handled = await this.handleDirectGitIntent(gitIntent);
+        if (handled !== undefined) return handled;
+      }
+    }
+
     if (
       this.stickyAgentMode !== 'auto' &&
       !text.startsWith('/') &&
@@ -1072,6 +1273,10 @@ export class InteractiveShell {
       !this.focusedRun &&
       this.interactionGateway.getPendingRequests().length === 0
     ) {
+      const naturalConfigInSticky = parseNaturalConfigChange(text);
+      if (naturalConfigInSticky) {
+        return this.applyNaturalConfigChange(naturalConfigInSticky);
+      }
       const targets = this.stickyAgentMode === 'all' ? 'all' : [this.stickyAgentMode];
       const result = await this.directRunner.runAgents(targets, text, { abortSignal });
       return result.formatted;
@@ -1502,10 +1707,13 @@ export class InteractiveShell {
       }
 
       case 'undo_run': {
+        if (!intent.runId && this.checkpointManager.getLatest()) {
+          return this.handleDirectUndo('en');
+        }
         const target = intent.runId
           ? this.resolveDeliveryRunId(intent.runId)
           : this.deliveryService.findLatestApplied()?.runId;
-        if (!target) return 'No applied run to undo. Use /runs to see delivery status.';
+        if (!target) return 'No applied run to undo (and no direct-mode checkpoint). Use /checkpoints or /runs.';
         try {
           const result = await this.deliveryService.undo(target);
           return [
@@ -1556,8 +1764,14 @@ export class InteractiveShell {
       case 'clear_context': {
         this.pendingPriorContext = undefined;
         this.focusedRun = undefined;
+        this.pendingPipelineFollowUp = undefined;
+        this.pendingDirectGitAction = undefined;
+        this.pendingCouncilDecision = undefined;
+        this.pendingLivingPlan = undefined;
+        this.activeLivingPlanWave = undefined;
         this.directMemory.clear();
         this.directRunner.clearSessions();
+        await this.checkpointManager.clear();
         if (this.pendingCompetitiveEdit) {
           await this.directRunner.discardCompetitiveEdit(this.pendingCompetitiveEdit);
           this.pendingCompetitiveEdit = undefined;
@@ -1857,6 +2071,37 @@ export class InteractiveShell {
               .analyze({ goalDescription: intent.goal })
               .catch(() => undefined)
           : undefined;
+
+        // Wave C: Greenfield / large phased project detection -> Living Plan (.taskforge/plan.md).
+        if (
+          this.inRepo &&
+          !this.activeLivingPlanWave &&
+          !explicitRunIdEarly &&
+          executionIntent.mutationAllowed
+        ) {
+          const lpCheck = shouldOfferLivingPlan(intent.goal, repoProfile, {
+            allowAutoGreenfield: this.enableLivingPlanAutoDetect,
+          });
+          if (lpCheck.shouldOffer) {
+            const plan = await generateLivingPlanBlueprint(intent.goal, {
+              repoProfile,
+              openAiApiKey: resolveOpenAIApiKey(this.config),
+              openAiBaseUrl: resolveOpenAIBaseUrl(this.config),
+              openAiModel: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini',
+              generator: this.livingPlanGenerator,
+            });
+            const savedPath = saveLivingPlan(this.repoRoot, plan);
+            this.pendingLivingPlan = plan;
+            this.conversationState = 'IDLE';
+            this.activeGoal = undefined;
+            this.currentGraph = undefined;
+            return formatLivingPlanDisplay(plan, {
+              savedPath: path.relative(this.repoRoot, savedPath) || savedPath,
+              interactivePrompt: true,
+            });
+          }
+        }
+
         const proposedGraph = await this.planner.plan(goal, repoProfile);
         const negotiatedGraph = await this.negotiator.negotiateGraph(
           proposedGraph,
@@ -1868,6 +2113,20 @@ export class InteractiveShell {
           executionIntent,
         );
         this.currentGraph = invariant.graph;
+
+        // Wave C: On a greenfield Wave 1 (Foundation & Contracts), the repo has no
+        // source directories yet, so mutating foundation tasks must be allowed to
+        // create new root/source files without tripping a stale README-only scope.
+        if (this.activeLivingPlanWave?.waveNumber === 1) {
+          const activePlan = loadLivingPlan(this.repoRoot);
+          if (activePlan?.isGreenfield) {
+            for (const task of this.currentGraph.getAllTasks()) {
+              if (taskProducesChanges(task)) {
+                task.contract.allowedScope = ['**'];
+              }
+            }
+          }
+        }
 
         // Honor natural-language agent preferences (e.g. "usa o claude para implementar e o codex para revisar").
         const agentPrefs = extractOrchestratedAgentPreferences(intent.goal);
@@ -2250,7 +2509,8 @@ export class InteractiveShell {
                   : 'IDLE';
 
               const summary = await this.formatRunSummary(result);
-              this.viewport.writeUpper(`\n${summary}\n`);
+              const waveBanner = this.recordLivingPlanWaveOutcome(result);
+              this.viewport.writeUpper(`\n${summary}${waveBanner ? `\n\n${waveBanner}` : ''}\n`);
               this.viewport.drawFooter('');
             })
             .catch((err) => {
@@ -2300,7 +2560,9 @@ export class InteractiveShell {
               ? 'DELIVERY_READY'
               : 'IDLE';
 
-          return await this.formatRunSummary(result);
+          const summary = await this.formatRunSummary(result);
+          const waveBanner = this.recordLivingPlanWaveOutcome(result);
+          return waveBanner ? `${summary}\n\n${waveBanner}` : summary;
         } catch (err) {
           this.conversationState = 'IDLE';
           return `${this.describeUnexpectedStop(runId, err)}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
@@ -3244,7 +3506,7 @@ export class InteractiveShell {
     return undefined;
   }
 
-  /** Hydrates Direct Mode conversation memory, native provider session IDs, and sticky mode from SQLite. */
+  /** Hydrates Direct Mode conversation memory, native provider session IDs, checkpoints, and sticky mode from SQLite. */
   private hydrateDirectSessionState(): void {
     try {
       const saved = new SessionRepository(this.db).getDirectSessionState();
@@ -3254,6 +3516,9 @@ export class InteractiveShell {
         seq: saved.seq,
       });
       this.directRunner.restoreSessionMap(saved.providerSessions);
+      if (Array.isArray(saved.checkpoints)) {
+        this.checkpointManager.restoreState(saved.checkpoints);
+      }
       if (
         saved.stickyAgentMode &&
         (saved.stickyAgentMode === 'auto' ||
@@ -3267,7 +3532,7 @@ export class InteractiveShell {
     }
   }
 
-  /** Persists Direct Mode conversation memory, native provider session IDs, and sticky mode into SQLite. */
+  /** Persists Direct Mode conversation memory, native provider session IDs, checkpoints, and sticky mode into SQLite. */
   private persistDirectSessionState(): void {
     try {
       const memState = this.directMemory.exportState();
@@ -3276,28 +3541,569 @@ export class InteractiveShell {
         seq: memState.seq,
         providerSessions: this.directRunner.exportSessionMap(),
         stickyAgentMode: this.stickyAgentMode,
+        checkpoints: this.checkpointManager.exportState() as unknown as Array<Record<string, unknown>>,
       });
     } catch {
       // Best-effort persistence: ignore if database is already closed during shutdown.
     }
   }
 
-  /** Applies and persists a natural-language parallelism/budget update immediately. */
+  /** Handles replies after a Wave D Multi-Agent Solution Debate Council verdict. */
+  private async handleCouncilDecisionReply(
+    text: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const decision = this.pendingCouncilDecision;
+    if (!decision) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:\/back|\/cancel|cancel(?:ar)?|n[aã]o|no|keep|manter|refer[eê]ncia|q)$/.test(lower)) {
+      this.pendingCouncilDecision = undefined;
+      return `${colors.dim}Kept Council verdict in session memory${decision.verdict.savedReportPath ? ` (${decision.verdict.savedReportPath})` : ''}.${colors.reset}`;
+    }
+
+    const inspectMatch = /^(?:inspect|ver|mostrar|detalhes?|thread)\s+#?(\d+)$/i.exec(lower);
+    if (inspectMatch) {
+      return formatCouncilProposalThread(decision, parseInt(inspectMatch[1], 10));
+    }
+
+    if (/^(?:blueprint|living\s+plan|waves?|plano|plan)$/i.test(lower)) {
+      this.pendingCouncilDecision = undefined;
+      const handoff = buildCouncilHandoffGoal(decision, 'verdict');
+      return this.handleBlueprintCommand(handoff, abortSignal);
+    }
+
+    if (/^(?:y|yes|s|sim|implement(?:ar|e)?|aplica(?:r)?|apply|verdict|veredito|go)$/.test(lower)) {
+      this.pendingCouncilDecision = undefined;
+      return this.launchCouncilHandoff(decision, 'verdict', abortSignal);
+    }
+
+    const pickMatch =
+      /^(?:#?(\d+)|(?:implement(?:ar|e)?|aplica(?:r)?|apply|usa(?:r)?|use|escolho|pick|solu[çc][aã]o|solution)\s+#?(\d+))$/i.exec(
+        lower,
+      );
+    if (pickMatch) {
+      const idx = parseInt(pickMatch[1] ?? pickMatch[2], 10);
+      if (idx >= 1 && idx <= decision.proposals.length) {
+        this.pendingCouncilDecision = undefined;
+        return this.launchCouncilHandoff(decision, idx, abortSignal);
+      }
+      return `${colors.red}✖ Invalid solution #${idx}.${colors.reset} Choose 1..${decision.proposals.length}, inspect <n>, blueprint, Enter, or /back.`;
+    }
+
+    // Any other message dismisses the pending council menu and proceeds normally.
+    this.pendingCouncilDecision = undefined;
+    return undefined;
+  }
+
+  /** Hands off a Council Verdict or chosen proposal directly into orchestrated planning. */
+  private async launchCouncilHandoff(
+    decision: PendingCouncilDecision,
+    choice: 'verdict' | number,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    const goal = buildCouncilHandoffGoal(decision, choice);
+    const prevSmart = this.smartDirectDispatch;
+    this.smartDirectDispatch = false;
+    try {
+      return await this.handleInput(goal, abortSignal);
+    } finally {
+      this.smartDirectDispatch = prevSmart;
+    }
+  }
+
+  /** Handles `/blueprint` (`/waves`) commands for creating, viewing, refining, resetting, or advancing `.taskforge/plan.md`. */
+  private async handleBlueprintCommand(argText: string, abortSignal?: AbortSignal): Promise<string> {
+    if (!this.inRepo) {
+      return `${colors.red}✖ /blueprint requires a Git repository.${colors.reset}`;
+    }
+    const lower = argText.toLowerCase();
+
+    if (!argText || lower === 'show' || lower === 'status') {
+      const existing = loadLivingPlan(this.repoRoot);
+      if (!existing) {
+        return `${colors.dim}No Living Plan found at .taskforge/plan.md. Create one with: /blueprint <your project goal>${colors.reset}`;
+      }
+      const next = getNextPendingWave(existing);
+      if (next) this.pendingLivingPlan = existing;
+      return formatLivingPlanDisplay(existing, {
+        savedPath: '.taskforge/plan.md',
+        interactivePrompt: Boolean(next),
+      });
+    }
+
+    if (lower === 'reset' || lower === 'clear' || lower === 'delete') {
+      this.pendingLivingPlan = undefined;
+      this.activeLivingPlanWave = undefined;
+      const deleted = deleteLivingPlan(this.repoRoot);
+      return deleted
+        ? `${colors.green}✔${colors.reset} Removed .taskforge/plan.md and cleared active Living Plan state.`
+        : `${colors.dim}No .taskforge/plan.md to remove.${colors.reset}`;
+    }
+
+    if (lower === 'next' || lower === 'run' || lower === 'start') {
+      return this.launchNextLivingPlanWave(abortSignal);
+    }
+
+    const refineMatch = /^refine\s+(.+)$/i.exec(argText);
+    if (refineMatch) {
+      const existing = loadLivingPlan(this.repoRoot);
+      if (!existing) {
+        return `${colors.red}✖ No active .taskforge/plan.md to refine.${colors.reset} Create one with /blueprint <goal>.`;
+      }
+      const repoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+        .analyze({ goalDescription: existing.goal })
+        .catch(() => undefined);
+      const refined = await refineLivingPlan(existing, refineMatch[1].trim(), {
+        repoProfile,
+        openAiApiKey: resolveOpenAIApiKey(this.config),
+        openAiBaseUrl: resolveOpenAIBaseUrl(this.config),
+        openAiModel: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini',
+        generator: this.livingPlanGenerator,
+      });
+      const savedPath = saveLivingPlan(this.repoRoot, refined);
+      this.pendingLivingPlan = refined;
+      return formatLivingPlanDisplay(refined, {
+        savedPath: path.relative(this.repoRoot, savedPath) || savedPath,
+        interactivePrompt: true,
+      });
+    }
+
+    // Generate a brand-new domain-agnostic blueprint for the given goal
+    const repoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+      .analyze({ goalDescription: argText })
+      .catch(() => undefined);
+    const plan = await generateLivingPlanBlueprint(argText, {
+      repoProfile,
+      openAiApiKey: resolveOpenAIApiKey(this.config),
+      openAiBaseUrl: resolveOpenAIBaseUrl(this.config),
+      openAiModel: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini',
+      generator: this.livingPlanGenerator,
+    });
+    const savedPath = saveLivingPlan(this.repoRoot, plan);
+    this.pendingLivingPlan = plan;
+    return formatLivingPlanDisplay(plan, {
+      savedPath: path.relative(this.repoRoot, savedPath) || savedPath,
+      interactivePrompt: true,
+    });
+  }
+
+  /** Handles conversational replies while aligning an interactive Living Plan blueprint. */
+  private async handleLivingPlanReply(
+    text: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const plan = this.pendingLivingPlan;
+    if (!plan) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:y|yes|s|sim|ok|go|start|inicia(?:r)?|executa(?:r)?|pode\s+ir|pr[óo]xima\s+wave|next\s+wave)$/.test(lower)) {
+      return this.launchNextLivingPlanWave(abortSignal);
+    }
+
+    if (/^(?:cancel(?:ar)?|descartar|discard|n[aã]o|no|q)$/.test(lower)) {
+      this.pendingLivingPlan = undefined;
+      return `${colors.dim}Paused Living Plan alignment (.taskforge/plan.md kept). Run /blueprint anytime.${colors.reset}`;
+    }
+
+    // Refine the Living Plan conversationally with the user's feedback!
+    const repoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+      .analyze({ goalDescription: plan.goal })
+      .catch(() => undefined);
+    const refined = await refineLivingPlan(plan, text, {
+      repoProfile,
+      openAiApiKey: resolveOpenAIApiKey(this.config),
+      openAiBaseUrl: resolveOpenAIBaseUrl(this.config),
+      openAiModel: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini',
+      generator: this.livingPlanGenerator,
+    });
+    const savedPath = saveLivingPlan(this.repoRoot, refined);
+    this.pendingLivingPlan = refined;
+    return formatLivingPlanDisplay(refined, {
+      savedPath: path.relative(this.repoRoot, savedPath) || savedPath,
+      interactivePrompt: true,
+    });
+  }
+
+  /** Re-scans the live repository and launches the next pending wave from `.taskforge/plan.md`. */
+  private async launchNextLivingPlanWave(abortSignal?: AbortSignal): Promise<string> {
+    const plan = loadLivingPlan(this.repoRoot) ?? this.pendingLivingPlan;
+    if (!plan) {
+      this.pendingLivingPlan = undefined;
+      return `${colors.dim}No Living Plan found at .taskforge/plan.md. Create one with /blueprint <goal>.${colors.reset}`;
+    }
+    const wave = getNextPendingWave(plan);
+    if (!wave) {
+      this.pendingLivingPlan = undefined;
+      return `${colors.green}✔${colors.reset} All ${plan.waves.length} waves in .taskforge/plan.md are already completed!`;
+    }
+
+    // Re-analyze the live repository right before planning this wave so Wave 2+
+    // plans strictly against the real files and directory topology created earlier!
+    const liveRepoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+      .analyze({ goalDescription: `${plan.goal} ${wave.objective}` })
+      .catch(() => undefined);
+
+    const updated = markWaveStatus(plan, wave.number, 'in_progress');
+    saveLivingPlan(this.repoRoot, updated);
+    this.pendingLivingPlan = undefined;
+    this.activeLivingPlanWave = { waveNumber: wave.number, waveName: wave.name };
+
+    const waveGoal = buildWaveExecutionGoal(updated, wave, liveRepoProfile);
+    const prevSmart = this.smartDirectDispatch;
+    this.smartDirectDispatch = false;
+    try {
+      return await this.handleInput(waveGoal, abortSignal);
+    } finally {
+      this.smartDirectDispatch = prevSmart;
+    }
+  }
+
+  /** Updates `.taskforge/plan.md` when a wave run completes or fails and surfaces next-wave prompt. */
+  private recordLivingPlanWaveOutcome(result: OrchestrationResult): string | undefined {
+    const active = this.activeLivingPlanWave;
+    if (!active) return undefined;
+    this.activeLivingPlanWave = undefined;
+
+    const plan = loadLivingPlan(this.repoRoot);
+    if (!plan) return undefined;
+
+    const status = result.status === 'completed' ? 'completed' : 'failed';
+    const updated = markWaveStatus(plan, active.waveNumber, status, {
+      runId: result.runId,
+      summary:
+        status === 'completed'
+          ? `Completed via ${result.runId} (${result.tasksCompleted} task(s))`
+          : `Stopped (${result.status}) via ${result.runId}`,
+    });
+    saveLivingPlan(this.repoRoot, updated);
+
+    if (status === 'completed') {
+      const next = getNextPendingWave(updated);
+      if (next) {
+        this.pendingLivingPlan = updated;
+        return [
+          `${colors.brand}✦ ${colors.bold}Living Plan Progress:${colors.reset} Wave ${active.waveNumber}/${updated.waves.length} (${active.waveName}) ${colors.green}✔ completed${colors.reset} and saved to .taskforge/plan.md.`,
+          `  ${colors.dim}↵ Enter (or /blueprint next): re-scan the repo and launch Wave ${next.number} — ${next.name} (${next.mode})   ·   /back to pause${colors.reset}`,
+        ].join('\n');
+      }
+      return `${colors.brand}✦ ${colors.bold}Living Plan Complete!${colors.reset} All ${updated.waves.length} waves in .taskforge/plan.md finished cleanly.`;
+    }
+
+    return `${colors.yellow}⚠${colors.reset} Living Plan Wave ${active.waveNumber} marked as failed in .taskforge/plan.md. Use /retry to finish it or /blueprint next to re-run.`;
+  }
+
+  /** Lists saved Direct Mode working-tree checkpoints available for `/undo`. */
+  private formatCheckpointsList(): string {
+    const list = this.checkpointManager.list();
+    if (list.length === 0) {
+      return `${colors.dim}No direct-mode checkpoints saved yet. Checkpoints are created automatically before Direct Mode edits.${colors.reset}`;
+    }
+    const lines = [
+      `${colors.brand}✦ ${colors.bold}Direct Mode Checkpoints${colors.reset} ${colors.dim}(${list.length} saved — newest first)${colors.reset}`,
+    ];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const cp = list[i];
+      const filesNote =
+        cp.filesTouched && cp.filesTouched.length > 0
+          ? ` · ${cp.filesTouched.slice(0, 4).join(', ')}${cp.filesTouched.length > 4 ? ` +${cp.filesTouched.length - 4}` : ''}`
+          : '';
+      const latestTag = i === list.length - 1 ? ` ${colors.green}← /undo${colors.reset}` : '';
+      lines.push(
+        `  • ${colors.cyan}${cp.id}${colors.reset} ${colors.bold}${cp.agentId}${colors.reset} — ${cp.label}${colors.dim}${filesNote}${colors.reset}${latestTag}`,
+      );
+    }
+    return lines.join('\n');
+  }
+
+  /** Restores the latest Direct Mode working-tree checkpoint cleanly. */
+  private async handleDirectUndo(language: 'pt' | 'en'): Promise<string> {
+    const res = await this.checkpointManager.restoreLatest();
+    if (!res.success) {
+      return `${colors.red}✖ ${res.error ?? 'Could not restore checkpoint.'}${colors.reset}`;
+    }
+    this.persistDirectSessionState();
+    const touched = [...res.restoredFiles, ...res.removedFiles];
+    const filesSummary =
+      touched.length > 0
+        ? `  ${colors.cyan}${language === 'pt' ? 'Arquivos restaurados' : 'Restored files'}:${colors.reset} ${touched.join(', ')}`
+        : '';
+    const remainingNote =
+      res.remainingCount > 0
+        ? `  ${colors.dim}${language === 'pt' ? `${res.remainingCount} checkpoint(s) anterior(es) ainda no histórico (/checkpoints).` : `${res.remainingCount} earlier checkpoint(s) remain (/checkpoints).`}${colors.reset}`
+        : '';
+    const headline =
+      language === 'pt'
+        ? `${colors.green}✔${colors.reset} Alteração direta desfeita (${colors.bold}${res.checkpoint?.agentId}${colors.reset}: "${res.checkpoint?.label}").`
+        : `${colors.green}✔${colors.reset} Undid direct edit (${colors.bold}${res.checkpoint?.agentId}${colors.reset}: "${res.checkpoint?.label}").`;
+    return [headline, filesSummary, remainingNote].filter(Boolean).join('\n');
+  }
+
+  /** Handles `/model` inspection and per-agent model/effort overrides. */
+  private handleModelConfigCommand(
+    cmd: Extract<DirectRouteCommand, { kind: 'model_config' }>,
+  ): string {
+    if (cmd.error) {
+      return `${colors.red}✖${colors.reset} ${cmd.error}`;
+    }
+
+    if (cmd.action === 'show') {
+      const adapters = cmd.agentId
+        ? [this.agentRegistry.get(cmd.agentId)].filter((a): a is NonNullable<typeof a> => Boolean(a))
+        : this.agentRegistry.list();
+      if (adapters.length === 0) {
+        return `${colors.red}✖ Unknown agent "${cmd.agentId}".${colors.reset}`;
+      }
+      const lines = [`${colors.brand}✦ ${colors.bold}Per-Agent Model Configuration${colors.reset}`];
+      for (const adapter of adapters) {
+        const cfg = this.config.agents[adapter.id];
+        const live = adapter.getModelConfig?.();
+        const model = live?.model ?? cfg?.model;
+        const effort = live?.effort ?? cfg?.effort;
+        const modelText = model ? `${colors.cyan}${model}${colors.reset}` : `${colors.dim}(CLI default)${colors.reset}`;
+        const effortText = effort ? `  ${colors.dim}effort:${colors.reset} ${colors.cyan}${effort}${colors.reset}` : '';
+        lines.push(`  • ${colors.bold}${adapter.name}${colors.reset} ${colors.dim}(${adapter.id})${colors.reset}: ${modelText}${effortText}`);
+      }
+      lines.push(
+        `  ${colors.dim}Usage: /model <agent> <model> [effort]  ·  /model <agent> effort <${AGENT_EFFORT_LEVELS.join('|')}>  ·  /model <agent> reset${colors.reset}`,
+      );
+      return lines.join('\n');
+    }
+
+    const agentId = cmd.agentId!;
+    const adapter = this.agentRegistry.get(agentId);
+    if (!adapter) {
+      return `${colors.red}✖ Unknown agent "${agentId}".${colors.reset} Registered: ${this.agentRegistry.list().map((a) => a.id).join(', ')}.`;
+    }
+
+    if (cmd.action === 'reset') {
+      const effortOnly = cmd.model === '__effort_only__';
+      const current = this.config.agents[agentId] ?? { enabled: true, maxParallel: 1 };
+      if (!effortOnly) {
+        if (this.inRepo) deleteProjectConfigKey(this.repoRoot, ['agents', agentId, 'model']);
+        delete current.model;
+      }
+      if (this.inRepo) deleteProjectConfigKey(this.repoRoot, ['agents', agentId, 'effort']);
+      delete current.effort;
+      this.config.agents[agentId] = current;
+      adapter.setModelConfig?.(
+        effortOnly ? { effort: undefined } : { model: undefined, effort: undefined },
+      );
+      return effortOnly
+        ? `${colors.green}✔${colors.reset} Reset ${colors.bold}${adapter.name}${colors.reset} reasoning effort back to CLI default.`
+        : `${colors.green}✔${colors.reset} Reset ${colors.bold}${adapter.name}${colors.reset} model & effort back to CLI default.`;
+    }
+
+    const updates: string[] = [];
+    const current = this.config.agents[agentId] ?? { enabled: true, maxParallel: 1 };
+    let configFile = '.taskforge/config.yaml';
+    if (cmd.model) {
+      if (this.inRepo) {
+        configFile = setProjectConfigValue(this.repoRoot, ['agents', agentId, 'model'], cmd.model).file;
+      }
+      current.model = cmd.model;
+      adapter.setModelConfig?.({ model: cmd.model });
+      updates.push(`model = ${cmd.model}`);
+    }
+    if (cmd.effort) {
+      if (this.inRepo) {
+        configFile = setProjectConfigValue(this.repoRoot, ['agents', agentId, 'effort'], cmd.effort).file;
+      }
+      current.effort = cmd.effort;
+      adapter.setModelConfig?.({ effort: cmd.effort });
+      updates.push(`effort = ${cmd.effort}`);
+    }
+    this.config.agents[agentId] = current;
+    const relFile = path.relative(this.repoRoot, configFile) || configFile;
+    return [
+      `${colors.green}✔${colors.reset} Updated ${colors.bold}${adapter.name} (${agentId})${colors.reset}: ${colors.cyan}${updates.join(', ')}${colors.reset}`,
+      `  ${colors.dim}Saved to ${relFile} and active immediately for Direct Mode and Orchestrated runs.${colors.reset}`,
+    ].join('\n');
+  }
+
+  /** Handles conversational direct git/PR/undo intents (`desfaz`, `mostra o diff`, `faz commit`, `abre um pr`). */
+  private async handleDirectGitIntent(gitIntent: DirectGitIntent): Promise<string | undefined> {
+    if (gitIntent.kind === 'undo') {
+      if (this.checkpointManager.getLatest()) {
+        return this.handleDirectUndo(gitIntent.language);
+      }
+      const applied = this.deliveryService.findLatestApplied()?.runId;
+      if (applied) {
+        const result = await this.deliveryService.undo(applied);
+        return gitIntent.language === 'pt'
+          ? `${colors.green}✔${colors.reset} Run ${colors.bold}${applied}${colors.reset} revertida com commit ${result.revertCommit.slice(0, 7)}.`
+          : `${colors.green}✔${colors.reset} Undid ${colors.bold}${applied}${colors.reset} with revert commit ${result.revertCommit.slice(0, 7)}.`;
+      }
+      return gitIntent.language === 'pt'
+        ? `${colors.dim}Nenhuma alteração direta ou run aplicada para desfazer.${colors.reset}`
+        : `${colors.dim}No direct edit checkpoint or applied run to undo.${colors.reset}`;
+    }
+
+    if (gitIntent.kind === 'diff') {
+      const diffRes = await formatWorkingTreeDiff(this.repoRoot, this.gitService, gitIntent.language);
+      if (!diffRes.hasChanges && this.resolveDeliveryRunId()) {
+        return undefined; // Let orchestrated `/diff` inspect the completed run instead.
+      }
+      return diffRes.formatted;
+    }
+
+    if (gitIntent.kind === 'status') {
+      return formatWorkingTreeStatus(this.repoRoot, this.gitService);
+    }
+
+    if (gitIntent.kind === 'commit') {
+      const prep = await prepareDirectCommit(
+        this.repoRoot,
+        this.gitService,
+        gitIntent.message,
+        this.directMemory.getEntries(),
+        gitIntent.language,
+      );
+      this.pendingDirectGitAction = prep.pending;
+      return prep.formatted;
+    }
+
+    if (gitIntent.kind === 'pr') {
+      const prep = await prepareDirectPr(
+        this.repoRoot,
+        this.gitService,
+        gitIntent.title,
+        this.directMemory.getEntries(),
+        gitIntent.language,
+      );
+      if (!prep.pending && this.resolveDeliveryRunId()) {
+        return undefined; // Let orchestrated `/pr` open the PR for the completed run.
+      }
+      this.pendingDirectGitAction = prep.pending;
+      return prep.formatted;
+    }
+
+    return undefined;
+  }
+
+  private async executePendingDirectGitAction(action: PendingDirectGitAction): Promise<string> {
+    if (action.kind === 'commit') {
+      return executeDirectCommit(this.repoRoot, this.gitService, action.message, action.language);
+    }
+    return executeDirectPr(this.repoRoot, this.gitService, action);
+  }
+
+  private async handleDirectGitActionReply(text: string): Promise<string | undefined> {
+    const pending = this.pendingDirectGitAction;
+    if (!pending) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:\/back|\/cancel|cancel(?:ar)?|n[aã]o|no|q)$/.test(lower)) {
+      this.pendingDirectGitAction = undefined;
+      return pending.language === 'pt'
+        ? `${colors.dim}Ação git cancelada.${colors.reset}`
+        : `${colors.dim}Git action cancelled.${colors.reset}`;
+    }
+
+    if (/^(?:y|yes|s|sim|ok|confirm(?:ar)?|pode|vai|go)$/.test(lower)) {
+      this.pendingDirectGitAction = undefined;
+      return this.executePendingDirectGitAction(pending);
+    }
+
+    // If the user typed another slash/direct command, clear pending and let it run.
+    if (text.startsWith('/') || text.startsWith('@') || text.startsWith('!')) {
+      this.pendingDirectGitAction = undefined;
+      return undefined;
+    }
+
+    // Otherwise treat non-command text as a custom commit message or PR title!
+    this.pendingDirectGitAction = undefined;
+    if (pending.kind === 'commit') {
+      return executeDirectCommit(this.repoRoot, this.gitService, text, pending.language);
+    }
+    return executeDirectPr(this.repoRoot, this.gitService, {
+      ...pending,
+      title: text,
+      ...(pending.needsCommit ? { commitMessage: text } : {}),
+    });
+  }
+
+  private async handlePipelineFollowUpReply(
+    text: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const pending = this.pendingPipelineFollowUp;
+    if (!pending) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:\/back|\/cancel|cancel(?:ar)?|n[aã]o|no|keep|manter|deixa|q)$/.test(lower)) {
+      this.pendingPipelineFollowUp = undefined;
+      return `${colors.dim}Kept Stage 1 changes as-is.${colors.reset}`;
+    }
+
+    if (/^(?:y|yes|s|sim|aplica(?:r)?|apply|fix|corrig(?:e|ir)|reviewer)$/.test(lower)) {
+      this.pendingPipelineFollowUp = undefined;
+      return this.directRunner.applyPipelineFollowUp(pending, pending.reviewerId, abortSignal);
+    }
+
+    if (
+      lower === 'implementer' ||
+      lower === pending.implementerId ||
+      (lower === 'antigravity' && pending.implementerId === 'agy')
+    ) {
+      this.pendingPipelineFollowUp = undefined;
+      return this.directRunner.applyPipelineFollowUp(pending, pending.implementerId, abortSignal);
+    }
+
+    if (
+      lower === pending.reviewerId ||
+      (lower === 'antigravity' && pending.reviewerId === 'agy')
+    ) {
+      this.pendingPipelineFollowUp = undefined;
+      return this.directRunner.applyPipelineFollowUp(pending, pending.reviewerId, abortSignal);
+    }
+
+    // Any other message dismisses the pending follow-up and continues normally.
+    this.pendingPipelineFollowUp = undefined;
+    return undefined;
+  }
+
+  /** Applies and persists a natural-language parallelism, budget, or model/effort update immediately. */
   private applyNaturalConfigChange(change: NaturalConfigChange): string {
     let configFile = '.taskforge/config.yaml';
     for (const update of change.updates) {
-      const saved = setProjectConfigValue(this.repoRoot, update.keyPath, update.value);
-      configFile = saved.file;
+      if (update.action === 'delete') {
+        if (this.inRepo) {
+          configFile = deleteProjectConfigKey(this.repoRoot, update.keyPath).file;
+        }
+      } else if (update.value !== null) {
+        if (this.inRepo) {
+          configFile = setProjectConfigValue(this.repoRoot, update.keyPath, update.value).file;
+        }
+      }
+
       const [section, key, subKey] = update.keyPath;
-      if (section === 'execution' && key === 'maxParallelTasks') {
+      if (section === 'execution' && key === 'maxParallelTasks' && typeof update.value === 'number') {
         this.config.execution.maxParallelTasks = update.value;
-      } else if (section === 'execution' && key === 'tokenBudget') {
+      } else if (section === 'execution' && key === 'tokenBudget' && typeof update.value === 'number') {
         this.config.execution.tokenBudget = update.value;
-      } else if (section === 'planner' && key === 'maxTasks') {
+      } else if (section === 'planner' && key === 'maxTasks' && typeof update.value === 'number') {
         this.config.planner = { ...(this.config.planner ?? {}), maxTasks: update.value };
-      } else if (section === 'agents' && key && subKey === 'maxParallel') {
+      } else if (section === 'agents' && key && subKey === 'maxParallel' && typeof update.value === 'number') {
         const current = this.config.agents[key] ?? { enabled: true };
         this.config.agents[key] = { ...current, enabled: true, maxParallel: update.value };
+      } else if (section === 'agents' && key && subKey === 'model') {
+        const current = this.config.agents[key] ?? { enabled: true, maxParallel: 1 };
+        const modelVal = update.action === 'delete' || typeof update.value !== 'string' ? undefined : update.value;
+        if (modelVal) current.model = modelVal;
+        else delete current.model;
+        this.config.agents[key] = current;
+        this.agentRegistry.get(key)?.setModelConfig?.({ model: modelVal });
+      } else if (section === 'agents' && key && subKey === 'effort') {
+        const current = this.config.agents[key] ?? { enabled: true, maxParallel: 1 };
+        const effortVal =
+          update.action === 'delete' || typeof update.value !== 'string'
+            ? undefined
+            : (update.value as AgentEffortLevel);
+        if (effortVal) current.effort = effortVal;
+        else delete current.effort;
+        this.config.agents[key] = current;
+        this.agentRegistry.get(key)?.setModelConfig?.({ effort: effortVal });
       }
     }
 

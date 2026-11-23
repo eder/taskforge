@@ -81,6 +81,8 @@ type AgentConfigs = Record<
   string,
   {
     enabled?: boolean;
+    model?: string;
+    effort?: string;
     command?: string;
     args?: string[];
     env?: Record<string, string>;
@@ -119,6 +121,8 @@ export class AgentRegistry {
       const options: CliAdapterOptions = {};
       if (agentConfig?.command) options.binaryPath = agentConfig.command;
       if (agentConfig?.args && agentConfig.args.length > 0) options.defaultArgs = agentConfig.args;
+      if (agentConfig?.model) options.model = agentConfig.model;
+      if (agentConfig?.effort) options.effort = agentConfig.effort;
       if (agentConfig?.env) options.env = agentConfig.env;
       if (agentConfig?.passEnv) options.passEnv = agentConfig.passEnv;
       this.register(harness.create(options));

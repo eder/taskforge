@@ -8,6 +8,7 @@ export interface PersistedDirectSessionState {
   seq: number;
   providerSessions: Record<string, { sessionId: string; lastSeq: number }>;
   stickyAgentMode?: string;
+  checkpoints?: Array<Record<string, unknown>>;
 }
 
 /**
@@ -59,6 +60,7 @@ export class SessionRepository {
             : {},
         stickyAgentMode:
           typeof parsed.stickyAgentMode === 'string' ? parsed.stickyAgentMode : undefined,
+        checkpoints: Array.isArray(parsed.checkpoints) ? parsed.checkpoints : [],
       };
     } catch {
       return undefined;
