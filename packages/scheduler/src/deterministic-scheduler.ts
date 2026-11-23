@@ -197,6 +197,8 @@ export class DeterministicScheduler {
   private failedAgentsByTask = new Map<string, Set<string>>();
   private recoveryIncidentsByTask = new Map<string, RecoveryIncident[]>();
   private recoveryBaseCommitByTask = new Map<string, string>();
+  /** The exact commit each task originally branched from, so sibling parallel integrations never pollute its diff or squash base. */
+  private initialBaseCommitByTask = new Map<string, string>();
 
   constructor(private ctx: SchedulerContext) {
     this.concurrency = new ConcurrencyManager(ctx.config);
@@ -381,7 +383,11 @@ export class DeterministicScheduler {
    * agent that already failed this task, one out of quota, or one the ownership
    * policy does not allow to write this scope.
    */
-  private idleAlternativeAgentId(task: Task, busyAgentId: string): string | undefined {
+  private idleAlternativeAgentId(
+    task: Task,
+    busyAgentId: string,
+    requireZeroActive = false,
+  ): string | undefined {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
     const quotaTracker = AgentQuotaTracker.getInstance();
     const allowedWriters = allowedWritersForTask(task, this.ctx.config);
@@ -393,6 +399,7 @@ export class DeterministicScheduler {
           !failed.has(agent.id) &&
           quotaTracker.isAvailable(agent.id) &&
           (allowedWriters === undefined || allowedWriters.has(agent.id)) &&
+          (!requireZeroActive || this.concurrency.getAgentActiveCount(agent.id) === 0) &&
           this.concurrency.canSchedule(agent.id),
       )?.id;
   }
@@ -439,7 +446,32 @@ export class DeterministicScheduler {
       return recoveryBase;
     }
 
-    return this.resolveCumulativeBase(task);
+    const base = await this.resolveCumulativeBase(task);
+    if (!this.initialBaseCommitByTask.has(task.id)) {
+      this.initialBaseCommitByTask.set(task.id, base);
+    }
+    return base;
+  }
+
+  /**
+   * Resolves the true base commit a task branched from (ignoring commits integrated
+   * later by sibling parallel tasks). Uses the pinned start base when available,
+   * or `git merge-base` against the current cumulative base on resumed runs.
+   */
+  private async resolveTaskStartBase(
+    task: Task,
+    commitHash: string,
+    worktreePath: string,
+  ): Promise<string> {
+    const pinned = this.initialBaseCommitByTask.get(task.id);
+    if (pinned) return pinned;
+    const cumulative = await this.resolveCumulativeBase(task);
+    const mergeBase = (
+      await new GitService(worktreePath)
+        .exec(['merge-base', cumulative, commitHash], worktreePath)
+        .catch(() => '')
+    ).trim();
+    return mergeBase || cumulative;
   }
 
   /** The run state a task started from, ignoring any recovery candidate. */
@@ -602,22 +634,22 @@ export class DeterministicScheduler {
   ): Promise<string | undefined> {
     if (!this.recoveryBaseCommitByTask.has(task.id)) return commitHash;
     const git = this.ctx.gitService;
-    const base = await this.resolveCumulativeBase(task);
+    const base = await this.resolveTaskStartBase(task, commitHash, worktreePath);
     const tree = await git.getTreeHash(commitHash, worktreePath);
     if (tree === (await git.getTreeHash(base, worktreePath))) return undefined;
     return git.commitTree(tree, base, `${task.title} (${task.id})`, worktreePath);
   }
 
-  /** Files the task changed, relative to the state it started from (recovery candidates ignored). */
+  /** Files the task changed, relative to the state it started from (recovery candidates and sibling parallel commits ignored). */
   private async changedFilesSinceTaskStart(
     task: Task,
     commitHash: string | undefined,
     worktreePath: string,
   ): Promise<string[]> {
     if (!commitHash) return [];
-    const base = await this.resolveCumulativeBase(task);
+    const base = await this.resolveTaskStartBase(task, commitHash, worktreePath);
     const out = await new GitService(worktreePath)
-      .exec(['diff', '--name-only', base, commitHash], worktreePath)
+      .exec(['diff', '--name-only', `${base}...${commitHash}`], worktreePath)
       .catch(() => '');
     return out
       .split('\n')
@@ -685,7 +717,7 @@ export class DeterministicScheduler {
   ): Promise<SemanticBoundaryViolation[]> {
     const auditCfg = this.ctx.config.verification.semanticAudit;
     if (!auditCfg?.enabled || !commitHash || !taskProducesChanges(task)) return [];
-    const base = await this.resolveCumulativeBase(task);
+    const base = await this.resolveTaskStartBase(task, commitHash, worktreePath);
     const changedFiles = await this.changedFilesSinceTaskStart(task, commitHash, worktreePath);
     if (changedFiles.length === 0) return [];
     const allowedSymbols = Array.isArray(task.contract.metadata?.allowedSymbols)
@@ -1175,10 +1207,20 @@ export class DeterministicScheduler {
           this.ctx.taskRepo.updateStatus(task.id, ownershipBlocked ? 'blocked' : 'failed');
           continue;
         }
-        // Another task already holds the chosen agent: use an idle one instead of waiting.
-        const slotAgentId = this.concurrency.canSchedule(agentId)
-          ? agentId
-          : this.idleAlternativeAgentId(task, agentId);
+        // Spread independent ready tasks across completely idle agents first so multiple
+        // providers (e.g. Codex + Antigravity + Claude) work simultaneously, rather than
+        // stacking a 2nd task onto an agent with maxParallel > 1 while another sits idle.
+        const hasExplicitUserPin = typeof task.contract.metadata?.preferredAgent === 'string';
+        const preferredBusy = this.concurrency.getAgentActiveCount(agentId) > 0;
+        const spreadIdleAgent =
+          preferredBusy && !hasExplicitUserPin
+            ? this.idleAlternativeAgentId(task, agentId, true)
+            : undefined;
+        const slotAgentId =
+          spreadIdleAgent ??
+          (this.concurrency.canSchedule(agentId)
+            ? agentId
+            : this.idleAlternativeAgentId(task, agentId, false));
         if (slotAgentId) {
           if (slotAgentId !== agentId) {
             this.ctx.onProgress?.(

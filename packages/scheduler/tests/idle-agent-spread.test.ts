@@ -209,4 +209,200 @@ describe('independent tasks use every idle agent', () => {
     expect(seen.peak).toBe(1);
     db.close();
   }, 30_000);
+
+  it('spreads across completely idle agents before stacking a 2nd task onto an agent with maxParallel > 1', async () => {
+    const seen = new Concurrency(3);
+    const registry = new AgentRegistry(false);
+    registry.register(new SlowWritingAgent('alpha', seen));
+    registry.register(new SlowWritingAgent('beta', seen));
+
+    const router: RoutingProvider = {
+      id: 'same-preference-router',
+      route: async () => ({
+        strategy: 'single',
+        complexity: 'medium',
+        risk: 'medium',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [
+          {
+            role: 'implementer',
+            requiredCapabilities: ['canRead', 'canWrite'],
+            objective: 'Implement',
+            preferredAgent: 'alpha',
+          },
+        ],
+        communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
+        reason: 'prefers alpha',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+    config.verification.review = false;
+    config.execution.maxParallelTasks = 3;
+    config.agents = {
+      alpha: { enabled: true, maxParallel: 2 },
+      beta: { enabled: true, maxParallel: 1 },
+    };
+
+    const graph = new TaskGraph();
+    for (const id of ['TASK-1', 'TASK-2', 'TASK-3']) graph.addTask(independentTask(id));
+
+    const db = new TaskForgeDatabase(':memory:');
+    const orchestrator = new RunOrchestrator({
+      repoRoot: repo,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router,
+      gitService: git,
+      worktreeManager: worktrees,
+    });
+    const result = await orchestrator.run('Three independent changes', { preplannedGraph: graph });
+
+    expect(result.status).toBe('completed');
+    expect(result.tasksCompleted).toBe(3);
+    // Both alpha (2 slots) and beta (1 slot) run simultaneously -> peak 3, both providers used!
+    expect(seen.agentsUsed.size).toBe(2);
+    expect(seen.peak).toBe(3);
+    db.close();
+  }, 30_000);
+
+  it('does not falsely blame a parallel sibling task for files integrated by another sibling after a shared dependency', async () => {
+    // Reproduces the exact zaira TASK-53/TASK-54 race: both depend on read-only TASK-52,
+    // start in parallel at the same commit, TASK-54 integrates first, then TASK-53 finishes.
+    let task54Integrated!: () => void;
+    const waitForTask54 = new Promise<void>((resolve) => {
+      task54Integrated = resolve;
+    });
+
+    const makeAgent = (id: string): AgentAdapter => ({
+      id,
+      name: id,
+      detect: async () => true,
+      capabilities: async () => ({
+        canRead: true,
+        canWrite: true,
+        canExecute: false,
+        languages: ['TypeScript'],
+        tools: ['file_editor'],
+      }),
+      execute: async (assignment: AgentAssignment, context: AgentContext): Promise<AgentResult> => {
+        if (assignment.taskId === 'TASK-52') {
+          return { success: true, output: 'Architecture analysis report.', durationMs: 5 };
+        }
+        if (assignment.taskId === 'TASK-54') {
+          fs.writeFileSync(path.join(context.worktreePath, 'TASK-54.txt'), 'memory fix\n', 'utf8');
+          const wtGit = new GitService(context.worktreePath);
+          await wtGit.stageAndCommit('TASK-54 memory fix', context.worktreePath);
+          const commitHash = await wtGit.getHeadCommit(context.worktreePath);
+          setTimeout(() => task54Integrated(), 150);
+          return { success: true, commitHash, message: 'done', durationMs: 5 };
+        }
+        // TASK-53 waits until TASK-54 has finished and integrated onto the run branch.
+        await waitForTask54;
+        fs.writeFileSync(path.join(context.worktreePath, 'TASK-53.txt'), 'retrieval fix\n', 'utf8');
+        const wtGit = new GitService(context.worktreePath);
+        await wtGit.stageAndCommit('TASK-53 retrieval fix', context.worktreePath);
+        const commitHash = await wtGit.getHeadCommit(context.worktreePath);
+        return { success: true, commitHash, message: 'done', durationMs: 5 };
+      },
+    });
+
+    const registry = new AgentRegistry(false);
+    registry.register(makeAgent('alpha'));
+    registry.register(makeAgent('beta'));
+
+    const router: RoutingProvider = {
+      id: 'parallel-router',
+      route: async ({ task }) => ({
+        strategy: 'single',
+        complexity: 'low',
+        risk: 'low',
+        uncertainty: 'low',
+        teamSize: 1,
+        roles: [
+          {
+            role: task.type === 'architecture' ? 'researcher' : 'implementer',
+            requiredCapabilities: task.type === 'architecture' ? ['canRead'] : ['canRead', 'canWrite'],
+            objective: task.title,
+            preferredAgent: task.id === 'TASK-54' ? 'beta' : 'alpha',
+          },
+        ],
+        communication: { required: false, initialAlignment: false, synthesisBeforeImplementation: false },
+        reason: 'test',
+      }),
+    };
+
+    const config = getDefaultConfig();
+    config.verification.tests = false;
+    config.verification.lint = false;
+    config.verification.typecheck = false;
+    config.verification.review = false;
+    config.verification.enforceScope = true;
+    config.execution.maxParallelTasks = 3;
+
+    const now = new Date();
+    const graph = new TaskGraph([
+      {
+        id: 'TASK-52',
+        goalId: 'g-race',
+        title: 'Architecture Review',
+        description: 'Review',
+        type: 'architecture',
+        status: 'accepted',
+        dependencies: [],
+        contract: {
+          objective: 'Review architecture',
+          allowedScope: [],
+          forbiddenChanges: ['*'],
+          acceptanceCriteria: ['Report produced'],
+          dependencies: [],
+          completionMode: 'report',
+        },
+        acceptanceCriteria: ['Report produced'],
+        reworkCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        ...independentTask('TASK-53'),
+        dependencies: ['TASK-52'],
+        contract: {
+          ...independentTask('TASK-53').contract,
+          allowedScope: ['TASK-53.txt'],
+          dependencies: ['TASK-52'],
+        },
+      },
+      {
+        ...independentTask('TASK-54'),
+        dependencies: ['TASK-52'],
+        contract: {
+          ...independentTask('TASK-54').contract,
+          allowedScope: ['TASK-54.txt'],
+          dependencies: ['TASK-52'],
+        },
+      },
+    ]);
+
+    const db = new TaskForgeDatabase(':memory:');
+    const orchestrator = new RunOrchestrator({
+      repoRoot: repo,
+      config,
+      database: db,
+      agentRegistry: registry,
+      router,
+      gitService: git,
+      worktreeManager: worktrees,
+    });
+    const result = await orchestrator.run('Fix retrieval and memory in parallel', { preplannedGraph: graph });
+
+    expect(result.status).toBe('completed');
+    expect(result.tasksCompleted).toBe(3);
+    expect(result.tasksFailed).toBe(0);
+    db.close();
+  }, 30_000);
 });

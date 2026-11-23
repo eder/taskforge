@@ -599,6 +599,143 @@ describe('SemanticPlanner', () => {
     expect(graph.getTask('TASK-2')?.contract.forbiddenChanges).toEqual([]);
   });
 
+  it('parallelizes linearly chained independent read-only analysis tasks while keeping synthesis downstream', async () => {
+    const planner = new SemanticPlanner({
+      apiKey: 'test-key',
+      customCaller: async () => ({
+        tasks: [
+          {
+            taskId: 'TASK-001',
+            title: 'Architecture Review for Zaira Project',
+            description: 'Inspect backend and architecture',
+            type: 'architecture',
+            completionMode: 'report',
+            dependencies: [],
+            objective: 'Inspect architecture',
+            allowedScope: [],
+            forbiddenChanges: ['*'],
+            acceptanceCriteria: ['Report ready'],
+          },
+          {
+            taskId: 'TASK-002',
+            title: 'Identify Outstanding Features in the Zaira Project',
+            description: 'Inspect roadmap gaps',
+            type: 'investigation',
+            completionMode: 'report',
+            dependencies: ['TASK-001'],
+            objective: 'Identify outstanding features',
+            allowedScope: [],
+            forbiddenChanges: ['*'],
+            acceptanceCriteria: ['Gaps listed'],
+          },
+          {
+            taskId: 'TASK-003',
+            title: 'Consolidate Final Report of Remaining Work',
+            description: 'Merge findings into a single prioritized summary',
+            type: 'investigation',
+            completionMode: 'report',
+            dependencies: ['TASK-002'],
+            objective: 'Consolidate final report from prior findings',
+            allowedScope: [],
+            forbiddenChanges: ['*'],
+            acceptanceCriteria: ['Final report delivered'],
+          },
+        ],
+      }),
+    });
+
+    const graph = await planner.plan({
+      id: 'goal-parallel-ro',
+      description: 'Veja o que ainda falta fazer nesse projeto e me fale',
+      repository: '/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    });
+
+    expect(graph.getTask('TASK-001')?.dependencies).toEqual([]);
+    expect(graph.getTask('TASK-002')?.dependencies).toEqual([]);
+    expect(graph.getTask('TASK-003')?.dependencies.sort()).toEqual(['TASK-001', 'TASK-002']);
+  });
+
+  it('auto-includes companion unit test files from repository indexContext in single-file mutation scopes', async () => {
+    const planner = new SemanticPlanner({
+      apiKey: 'test-key',
+      customCaller: async () => ({
+        tasks: [
+          {
+            taskId: 'TASK-1',
+            title: 'Fix Retrieval Logic',
+            description: 'Use content field in ContextRetrievalEngine',
+            type: 'implementation',
+            completionMode: 'mutation',
+            dependencies: [],
+            objective: 'Fix format_for_llm in context_retrieval.py',
+            allowedScope: ['server/adapters/context_retrieval.py'],
+            forbiddenChanges: [],
+            acceptanceCriteria: ['Tests pass'],
+          },
+          {
+            taskId: 'TASK-2',
+            title: 'Fix Memory Expiration',
+            description: 'Add expiry polling in memory.py',
+            type: 'implementation',
+            completionMode: 'mutation',
+            dependencies: [],
+            objective: 'Add expiration poller',
+            allowedScope: ['server/adapters/memory.py'],
+            forbiddenChanges: [],
+            acceptanceCriteria: ['Tests pass'],
+          },
+        ],
+      }),
+    });
+
+    const graph = await planner.plan(
+      {
+        id: 'goal-companion-tests',
+        description: 'Fix retrieval and memory expiration',
+        repository: '/repo',
+        constraints: [],
+        acceptanceCriteria: [],
+        createdAt: new Date(),
+      },
+      {
+        languages: ['Python'],
+        frameworks: ['pytest'],
+        testCommands: ['pytest -q'],
+        lintCommands: [],
+        typecheckCommands: [],
+        buildCommands: [],
+        hasECC: false,
+        summary: 'Python repo',
+        indexContext: {
+          indexedFiles: 20,
+          matches: [
+            {
+              path: 'server/adapters/context_retrieval.py',
+              score: 10,
+              isTest: false,
+              symbols: ['ContextRetrievalEngine'],
+              imports: [],
+              importedBy: [],
+              relatedTests: ['server/test_context_retrieval.py'],
+            },
+          ],
+          suggestedScopes: ['server/**'],
+          relatedTests: ['server/test_context_retrieval.py'],
+          summaryLines: [],
+        },
+      },
+    );
+
+    expect(graph.getTask('TASK-1')?.contract.allowedScope).toEqual([
+      'server/adapters/context_retrieval.py',
+      'server/test_context_retrieval.py',
+    ]);
+    expect(graph.getTask('TASK-2')?.contract.allowedScope).toEqual(['server/adapters/memory.py']);
+  });
+
   it('Requirement 3: revises existing plan with typed revisions without creating new goal', async () => {
     const planner = new SemanticPlanner();
     const goal: Goal = {
