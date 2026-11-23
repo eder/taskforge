@@ -12,6 +12,7 @@ import {
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { colors } from './theme.js';
 import { assessProblemAndSelectAgent } from './problem-size-router.js';
+import { resolveFileMentionsInPrompt } from './file-mention-completer.js';
 
 export type DirectSessionEntry =
   | { seq?: number; kind: 'user'; text: string; timestamp: string }
@@ -70,6 +71,19 @@ export class DirectConversationMemory {
   public clear(): void {
     this.entries = [];
     this.seq = 0;
+  }
+
+  public exportState(): { entries: DirectSessionEntry[]; seq: number } {
+    return {
+      entries: this.entries.map((e) => ({ ...e })),
+      seq: this.seq,
+    };
+  }
+
+  public restoreState(state: { entries: DirectSessionEntry[]; seq: number }): void {
+    this.entries = Array.isArray(state.entries) ? state.entries.slice(-this.maxEntries) : [];
+    const maxEntrySeq = this.entries.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
+    this.seq = Math.max(typeof state.seq === 'number' ? state.seq : 0, maxEntrySeq);
   }
 
   public formatForPrompt(maxChars = 8000): string {
@@ -179,6 +193,8 @@ export interface DirectRunnerOptions {
   verifyWorktree?: (worktreePath: string) => Promise<{ passed: boolean; summary: string }>;
   /** Project verification commands (used automatically during `@a @b --edit` when `verifyWorktree` is omitted). */
   verificationCommands?: string[];
+  /** Invoked whenever memory or native provider session IDs change (used for SQLite persistence). */
+  onStateChanged?: () => void;
 }
 
 function formatStreamLine(agentName: string, event: AgentStreamEvent): string | undefined {
@@ -236,6 +252,7 @@ export class DirectAgentRunner {
   private readonly openAiModel: string;
   private readonly verifyWorktree?: (worktreePath: string) => Promise<{ passed: boolean; summary: string }>;
   private readonly verificationCommands: string[];
+  private readonly onStateChanged?: () => void;
   /** Tracks each agent's latest native provider session/thread ID + memory watermark for zero-bloat follow-ups. */
   private readonly providerSessions = new Map<string, { sessionId: string; lastSeq: number }>();
 
@@ -253,11 +270,31 @@ export class DirectAgentRunner {
     this.openAiModel = options.openAiModel ?? 'gpt-4o-mini';
     this.verifyWorktree = options.verifyWorktree;
     this.verificationCommands = (options.verificationCommands ?? []).filter((c) => c.trim().length > 0);
+    this.onStateChanged = options.onStateChanged;
   }
 
   /** Clears native provider session handles (called on `/clear`). */
   public clearSessions(): void {
     this.providerSessions.clear();
+    this.onStateChanged?.();
+  }
+
+  /** Exports tracked provider session handles for persistence across restarts. */
+  public exportSessionMap(): Record<string, { sessionId: string; lastSeq: number }> {
+    return Object.fromEntries(this.providerSessions.entries());
+  }
+
+  /** Restores persisted provider session handles on startup. */
+  public restoreSessionMap(map: Record<string, { sessionId: string; lastSeq: number }>): void {
+    this.providerSessions.clear();
+    for (const [agentId, entry] of Object.entries(map ?? {})) {
+      if (entry && typeof entry.sessionId === 'string' && entry.sessionId.trim()) {
+        this.providerSessions.set(agentId, {
+          sessionId: entry.sessionId.trim(),
+          lastSeq: typeof entry.lastSeq === 'number' ? entry.lastSeq : 0,
+        });
+      }
+    }
   }
 
   /** Exposes currently tracked native provider session IDs (useful for diagnostics/tests). */
@@ -291,6 +328,7 @@ export class DirectAgentRunner {
       durationMs,
       timestamp: new Date().toISOString(),
     });
+    this.onStateChanged?.();
 
     const badge =
       result.exitCode === 0
@@ -311,6 +349,7 @@ export class DirectAgentRunner {
   public async resolveTargets(
     targets: 'all' | 'smart' | string[],
     prompt = '',
+    mentionedFiles: string[] = [],
   ): Promise<{
     adapters: AgentAdapter[];
     unavailable: string[];
@@ -328,6 +367,7 @@ export class DirectAgentRunner {
       const intent = detectExecutionIntent(prompt);
       const rec = assessProblemAndSelectAgent({
         text: prompt,
+        mentionedFiles,
         availableAgents: ready.map((a) => a.id),
       });
       // For large read-only questions, fan out to top 2 complementary agents;
@@ -368,10 +408,16 @@ export class DirectAgentRunner {
 
   public async runAgents(
     targets: 'all' | 'smart' | string[],
-    prompt: string,
-    options: { priorContext?: string; abortSignal?: AbortSignal } = {},
+    rawPrompt: string,
+    options: { priorContext?: string; abortSignal?: AbortSignal; autoReason?: string } = {},
   ): Promise<{ formatted: string; outcomes: DirectAgentTurnOutcome[] }> {
-    const { adapters, unavailable, selectionReason } = await this.resolveTargets(targets, prompt);
+    const resolvedMentions = resolveFileMentionsInPrompt(rawPrompt, this.repoRoot);
+    const prompt = resolvedMentions.cleanedPrompt;
+    const { adapters, unavailable, selectionReason } = await this.resolveTargets(
+      targets,
+      prompt,
+      resolvedMentions.files,
+    );
     if (adapters.length === 0) {
       const detail =
         unavailable.length > 0
@@ -405,9 +451,16 @@ export class DirectAgentRunner {
       : mutationAllowed
         ? 'direct workspace'
         : 'read-only';
+    const effectiveReason = options.autoReason ?? selectionReason;
+    const filesHint =
+      resolvedMentions.files.length > 0
+        ? ` · files: ${resolvedMentions.files.slice(0, 3).join(', ')}`
+        : '';
     this.onLiveLine?.(
-      `\n  ${colors.brand}✦${colors.reset} ${headerTargets} ${colors.dim}(${modeLabel}${selectionReason ? ` · auto: ${selectionReason}` : ''})${colors.reset}\n`,
+      `\n  ${colors.brand}✦${colors.reset} ${options.autoReason ? `${colors.dim}Auto →${colors.reset} ` : ''}${headerTargets} ${colors.dim}(${modeLabel}${effectiveReason ? ` · ${effectiveReason}` : ''}${filesHint})${colors.reset}\n`,
     );
+
+    const streamedTextByAgent = new Map<string, string>();
 
     const runOne = async (adapter: AgentAdapter): Promise<DirectAgentTurnOutcome> => {
       const start = Date.now();
@@ -423,7 +476,8 @@ export class DirectAgentRunner {
           objective: prompt,
           status: 'running',
         };
-        const lastSeen = { line: '' };
+        const lastSeen = { line: '', streamed: '' };
+        let startedTextStream = false;
         const resumeId = useNativeResume ? prevSession?.sessionId : undefined;
         // When resuming a native provider session, pass ONLY delta turns from other
         // agents / `!shell` since this agent's last turn (excluding the current prompt).
@@ -450,14 +504,48 @@ export class DirectAgentRunner {
             dependencies: [],
           },
           onStreamEvent: (ev) => {
+            if (!isMultiAgent && ev.type === 'agent_message' && this.onLiveLine && ev.text) {
+              const incoming = ev.text;
+              // Skip duplicate final-message echo if the exact text was already streamed live.
+              if (
+                lastSeen.streamed.trim().length > 0 &&
+                (incoming.trim() === lastSeen.streamed.trim() ||
+                  lastSeen.streamed.endsWith(incoming))
+              ) {
+                return;
+              }
+              if (!startedTextStream) {
+                startedTextStream = true;
+                this.onLiveLine('\n');
+              }
+              // Delta chunks vs complete paragraph blocks
+              const chunkToPrint =
+                incoming.startsWith(lastSeen.streamed) && lastSeen.streamed.length > 0
+                  ? incoming.slice(lastSeen.streamed.length)
+                  : incoming;
+              if (chunkToPrint) {
+                lastSeen.streamed += chunkToPrint;
+                streamedTextByAgent.set(adapter.id, lastSeen.streamed);
+                this.onLiveLine(chunkToPrint);
+              }
+              return;
+            }
             const line = formatStreamLine(adapter.name, ev);
             if (line && line !== lastSeen.line) {
               lastSeen.line = line;
+              if (startedTextStream) {
+                this.onLiveLine?.('\n');
+                startedTextStream = false;
+              }
               this.onLiveLine?.(`${line}\n`);
             }
           },
         };
-        return adapter.execute(assignment, context);
+        const res = await adapter.execute(assignment, context);
+        if (startedTextStream && !lastSeen.streamed.endsWith('\n')) {
+          this.onLiveLine?.('\n');
+        }
+        return res;
       };
 
       try {
@@ -524,6 +612,7 @@ export class DirectAgentRunner {
         });
       }
     }
+    this.onStateChanged?.();
 
     const sections: string[] = [];
     if (unavailable.length > 0) {
@@ -546,14 +635,21 @@ export class DirectAgentRunner {
         ? `${colors.green}✔${colors.reset}`
         : `${colors.red}✖${colors.reset}`;
       const header = `${statusBadge} ${colors.brand}${colors.bold}${outcome.agentName}${colors.reset} ${colors.dim}(${outcome.agentId} · ${secs}${tokensNote}${sessionNote})${colors.reset}`;
+      const alreadyStreamed =
+        !isMultiAgent &&
+        outcome.success &&
+        (streamedTextByAgent.get(outcome.agentId)?.trim() ?? '') === outcome.response.trim() &&
+        outcome.response.trim().length > 0;
       const body = outcome.success
-        ? outcome.response
+        ? alreadyStreamed
+          ? ''
+          : outcome.response
         : `${colors.red}${outcome.error || outcome.response}${colors.reset}`;
       const filesBlock =
         outcome.filesChanged.length > 0
           ? `\n  ${colors.cyan}Modified files:${colors.reset} ${outcome.filesChanged.join(', ')}`
           : '';
-      sections.push(`${header}\n${body}${filesBlock}`);
+      sections.push(body ? `${header}\n${body}${filesBlock}` : `${header}${filesBlock}`);
     }
 
     // Automatic Consensus & Divergences synthesis whenever >= 2 agents succeed in parallel.
@@ -980,6 +1076,7 @@ export class DirectAgentRunner {
       filesChanged: candidate.filesChanged,
       timestamp: new Date().toISOString(),
     });
+    this.onStateChanged?.();
 
     return [
       `${colors.green}✔${colors.reset} Applied candidate ${colors.bold}#${candidate.index} (${candidate.agentName})${colors.reset} to your working tree (staged, not committed).`,
