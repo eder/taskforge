@@ -16,4 +16,5 @@ export * from './smart-auto-dispatcher.js';
 export * from './direct-checkpoint.js';
 export * from './direct-git-actions.js';
 export * from './living-plan.js';
+export * from './debate-council.js';
 export { summarizeGoal } from './shell-helpers.js';
