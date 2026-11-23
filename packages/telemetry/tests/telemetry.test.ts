@@ -180,7 +180,7 @@ describe('Phases 17 & 18: Telemetry, Stats & Performance Engine', () => {
 
       const spendLine = collector.formatSpendLine(runId, 1_000_000);
       expect(spendLine).toContain('Tokens used: 202,000 (7,000 fresh, 195,000 cached');
-      expect(spendLine).toContain('20% of the 1,000,000 budget');
+      expect(spendLine).toContain('3% of the 1,000,000 budget (26,500 effective)');
       expect(spendLine).toContain('the plan estimated ~7,000 fresh');
     });
 
