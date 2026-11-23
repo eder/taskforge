@@ -274,7 +274,16 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/health` | Inspect Router, agents, provider quota, and local database health |
 | `/plan` | Inspect the current proposed or active plan |
 | `/blueprint` | Create, inspect, refine, or advance a domain-agnostic Living Plan (`.taskforge/plan.md`) across execution waves (`/blueprint [goal\|next\|refine <text>\|reset]`) |
-| `/council` | Convene a 3-round Multi-Agent Solution Debate Council (`/council [@a @b] <problem>`): independent proposals, dedicated per-solution cross-critiques, proponent refinements, and 1-Enter handoff to implement or turn into a Living Plan |
+| `/council` | Convene a 3-round Multi-Agent Solution Debate Council (`/council [@a @b] <problem>`): independent proposals, dedicated per-solution cross-critiques, proponent refinements, interactive follow-up rounds, and 1-Enter handoff |
+| `/tdd` | Adversarial Multi-Agent TDD loop (`/tdd [@tester -> @implementer] <spec>`): Agent A writes failing tests (Red), Agent B implements until passing (Green) |
+| `/memory` | View or manage durable cross-agent project memory (`.taskforge/memory.md`) shared by all agents (`/memory [add <text>\|remove <#>\|clear]`) |
+| `/compact` | Compact older Direct Mode conversation turns into a dense rolling summary without losing key decisions |
+| `/skills` | List reusable project skills discovered across `.taskforge/skills/`, `.claude/commands/`, and `.agents/skills/` |
+| `/skill` | Run a reusable project skill with any agent (`/skill <name> [@codex\|@agy\|@claude\|@all] [args]`, or directly `/<name> [args]`) |
+| `/bg` | List or inspect asynchronous background jobs started with `& <command>` |
+| `/fix-ci` | Fetch failing GitHub Actions CI logs via `gh` and dispatch a targeted fix |
+| `/review-pr` | Run an independent multi-agent review on a GitHub Pull Request (`/review-pr [#number]`) with 1-Enter comment posting |
+| `/issue` | Fetch a GitHub Issue (`/issue <#number>`) into Orchestrated Planning, `/blueprint`, or `/council` |
 | `/runs` | List past execution runs and delivery status |
 | `/inspect` | Inspect run → task → assignment history; accepts an optional run id |
 | `/tasks` | Show task and assignment status; accepts an optional task id |

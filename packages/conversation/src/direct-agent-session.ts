@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentRegistry } from '@taskforge/agents';
+import type { AgentAdapter, AgentActivityTracker, AgentRegistry } from '@taskforge/agents';
 import { AgentDetector } from '@taskforge/agents';
 import { ProcessRunner } from '@taskforge/execution';
 import {
@@ -12,8 +12,15 @@ import {
 import { GitService, WorktreeManager } from '@taskforge/workspace';
 import { colors } from './theme.js';
 import { assessProblemAndSelectAgent } from './problem-size-router.js';
-import { resolveFileMentionsInPrompt } from './file-mention-completer.js';
+import {
+  appendImageContextToPrompt,
+  resolveFileMentionsInPrompt,
+} from './file-mention-completer.js';
 import type { DirectCheckpointManager } from './direct-checkpoint.js';
+import type { DirectTelemetryStore } from './direct-telemetry.js';
+import { formatProjectMemoryForPrompt } from './project-memory.js';
+import type { SpecialtyRouter } from './specialty-router.js';
+import type { LifecycleHookRunner } from './lifecycle-hooks.js';
 
 export type DirectSessionEntry =
   | { seq?: number; kind: 'user'; text: string; timestamp: string }
@@ -56,9 +63,52 @@ export class DirectConversationMemory {
     const stamped: DirectSessionEntry = { ...entry, seq: this.seq };
     this.entries.push(stamped);
     if (this.entries.length > this.maxEntries) {
-      this.entries = this.entries.slice(-this.maxEntries);
+      if (this.maxEntries >= 12) {
+        // Auto-compact oldest turns into a rolling summary instead of silently dropping decisions.
+        this.compact(Math.max(6, Math.min(this.maxEntries - 1, Math.floor(this.maxEntries * 0.6))));
+      } else {
+        this.entries = this.entries.slice(-this.maxEntries);
+      }
     }
     return this.seq;
+  }
+
+  /**
+   * Condenses older conversation turns into a dense rolling summary entry while
+   * keeping the most recent `keepRecent` entries verbatim.
+   */
+  public compact(keepRecent = 6): { compactedCount: number; remainingCount: number } {
+    if (this.entries.length <= keepRecent + 1) {
+      return { compactedCount: 0, remainingCount: this.entries.length };
+    }
+    const cutoff = this.entries.length - keepRecent;
+    const older = this.entries.slice(0, cutoff);
+    const recent = this.entries.slice(cutoff);
+
+    const summaryBullets: string[] = [];
+    for (const e of older) {
+      if (e.kind === 'user') {
+        summaryBullets.push(`- User asked: ${e.text.replace(/\s+/g, ' ').slice(0, 120)}`);
+      } else if (e.kind === 'agent') {
+        const files = e.filesChanged?.length ? ` [edited: ${e.filesChanged.slice(0, 4).join(', ')}]` : '';
+        const lead = e.response.replace(/\s+/g, ' ').slice(0, 140);
+        summaryBullets.push(`- ${e.agentName}${files}: ${lead}`);
+      } else {
+        summaryBullets.push(`- Shell \`${e.command.slice(0, 60)}\` (exit ${e.exitCode})`);
+      }
+    }
+
+    const summaryEntry: DirectSessionEntry = {
+      seq: older[older.length - 1]?.seq ?? this.seq,
+      kind: 'agent',
+      agentId: 'summary',
+      agentName: 'Compacted Session Summary',
+      response: summaryBullets.slice(-14).join('\n'),
+      durationMs: 0,
+      timestamp: new Date().toISOString(),
+    };
+    this.entries = [summaryEntry, ...recent];
+    return { compactedCount: older.length, remainingCount: this.entries.length };
   }
 
   public getSequence(): number {
@@ -196,6 +246,14 @@ export interface DirectRunnerOptions {
   worktreeManager?: WorktreeManager;
   /** Optional checkpoint manager for instant `/undo` before direct-mode write turns. */
   checkpointManager?: DirectCheckpointManager;
+  /** Optional live activity tracker so parallel direct turns animate the LiveTicker footer. */
+  activityTracker?: AgentActivityTracker;
+  /** Optional unified telemetry store for Direct Mode `/cost` & `/stats`. */
+  directTelemetry?: DirectTelemetryStore;
+  /** Optional specialty router to boost historically strong agents per domain. */
+  specialtyRouter?: SpecialtyRouter;
+  /** Optional deterministic lifecycle hook runner (`hooks.afterDirectEdit`). */
+  hookRunner?: LifecycleHookRunner;
   /** Optional custom consensus synthesizer (overrides OpenAI lookup; great for deterministic tests). */
   consensusSynthesizer?: DirectConsensusSynthesizer;
   /** Optional OpenAI credentials used to synthesize Consensus & Divergences on `@all` multi-agent turns. */
@@ -260,6 +318,10 @@ export class DirectAgentRunner {
   private readonly gitService?: GitService;
   private readonly worktreeManager?: WorktreeManager;
   private readonly checkpointManager?: DirectCheckpointManager;
+  private readonly activityTracker?: AgentActivityTracker;
+  private readonly directTelemetry?: DirectTelemetryStore;
+  private readonly specialtyRouter?: SpecialtyRouter;
+  private readonly hookRunner?: LifecycleHookRunner;
   private readonly consensusSynthesizer?: DirectConsensusSynthesizer;
   private readonly openAiApiKey?: string;
   private readonly openAiBaseUrl: string;
@@ -279,6 +341,10 @@ export class DirectAgentRunner {
     this.gitService = options.gitService;
     this.worktreeManager = options.worktreeManager;
     this.checkpointManager = options.checkpointManager;
+    this.activityTracker = options.activityTracker;
+    this.directTelemetry = options.directTelemetry;
+    this.specialtyRouter = options.specialtyRouter;
+    this.hookRunner = options.hookRunner;
     this.consensusSynthesizer = options.consensusSynthesizer;
     this.openAiApiKey = options.openAiApiKey;
     this.openAiBaseUrl = (options.openAiBaseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/$/, '');
@@ -380,10 +446,13 @@ export class DirectAgentRunner {
         return { adapters: ready, unavailable: [] };
       }
       const intent = detectExecutionIntent(prompt);
+      const readyIds = ready.map((a) => a.id);
+      const learned = this.specialtyRouter?.recommendForTask(prompt, readyIds, mentionedFiles);
       const rec = assessProblemAndSelectAgent({
         text: prompt,
         mentionedFiles,
-        availableAgents: ready.map((a) => a.id),
+        availableAgents: readyIds,
+        explicitAgentId: learned?.agentId,
       });
       // For large read-only questions, fan out to top 2 complementary agents;
       // for small/medium or write tasks, pick the single best-suited agent.
@@ -399,7 +468,7 @@ export class DirectAgentRunner {
       return {
         adapters: chosen,
         unavailable: [],
-        selectionReason: rec.reason,
+        selectionReason: learned ? learned.reason : rec.reason,
       };
     }
 
@@ -427,10 +496,12 @@ export class DirectAgentRunner {
     options: { priorContext?: string; abortSignal?: AbortSignal; autoReason?: string } = {},
   ): Promise<{ formatted: string; outcomes: DirectAgentTurnOutcome[] }> {
     const resolvedMentions = resolveFileMentionsInPrompt(rawPrompt, this.repoRoot);
-    const prompt = resolvedMentions.cleanedPrompt;
+    const prompt = appendImageContextToPrompt(resolvedMentions.cleanedPrompt, resolvedMentions.images);
+    const durableMemory = formatProjectMemoryForPrompt(this.repoRoot);
+    const combinedPriorContext = [durableMemory, options.priorContext].filter(Boolean).join('\n\n') || undefined;
     const { adapters, unavailable, selectionReason } = await this.resolveTargets(
       targets,
-      prompt,
+      resolvedMentions.cleanedPrompt,
       resolvedMentions.files,
     );
     if (adapters.length === 0) {
@@ -506,7 +577,7 @@ export class DirectAgentRunner {
         const context: AgentContext = {
           worktreePath: this.repoRoot,
           originalUserRequest: prompt,
-          priorContext: options.priorContext,
+          priorContext: combinedPriorContext,
           conversationHistory: effectiveHistory || undefined,
           directMode: true,
           persistProviderSession: true,
@@ -523,6 +594,11 @@ export class DirectAgentRunner {
             dependencies: [],
           },
           onStreamEvent: (ev) => {
+            if (ev.type === 'file_read' || ev.type === 'file_edit' || ev.type === 'file_write') {
+              this.activityTracker?.updateStatus(assignmentId, `${ev.type.replace('_', ' ')} ${ev.path}`);
+            } else if (ev.type === 'command_started') {
+              this.activityTracker?.updateStatus(assignmentId, `$ ${ev.command.slice(0, 40)}`);
+            }
             if (!isMultiAgent && ev.type === 'agent_message' && this.onLiveLine && ev.text) {
               const incoming = ev.text;
               // Skip duplicate final-message echo if the exact text was already streamed live.
@@ -560,11 +636,27 @@ export class DirectAgentRunner {
             }
           },
         };
-        const res = await adapter.execute(assignment, context);
-        if (startedTextStream && !lastSeen.streamed.endsWith('\n')) {
-          this.onLiveLine?.('\n');
+        const startedAt = new Date();
+        this.activityTracker?.register({
+          assignmentId,
+          taskId: 'DIRECT',
+          taskTitle: prompt.slice(0, 60),
+          agentId: adapter.id,
+          agentName: adapter.name,
+          role: assignment.role,
+          status: isMultiAgent ? 'parallel direct analysis' : mutationAllowed ? 'editing workspace' : 'thinking',
+          startedAt,
+          lastActiveAt: startedAt,
+        });
+        try {
+          const res = await adapter.execute(assignment, context);
+          if (startedTextStream && !lastSeen.streamed.endsWith('\n')) {
+            this.onLiveLine?.('\n');
+          }
+          return res;
+        } finally {
+          this.activityTracker?.completeAssignment(assignmentId);
         }
-        return res;
       };
 
       try {
@@ -635,6 +727,16 @@ export class DirectAgentRunner {
     }
 
     for (const outcome of outcomes) {
+      this.directTelemetry?.record({
+        agentId: outcome.agentId,
+        agentName: outcome.agentName,
+        category: 'direct',
+        prompt: resolvedMentions.cleanedPrompt,
+        files: [...resolvedMentions.files, ...outcome.filesChanged],
+        success: outcome.success,
+        durationMs: outcome.durationMs,
+        tokensUsed: outcome.tokensUsed,
+      });
       let recordedSeq = this.memory.getSequence();
       if (outcome.response) {
         recordedSeq = this.memory.record({
@@ -655,6 +757,19 @@ export class DirectAgentRunner {
       }
     }
     this.onStateChanged?.();
+
+    let hookNote = '';
+    if (mutationAllowed && outcomes[0]?.filesChanged.length > 0 && this.hookRunner) {
+      const hookRes = await this.hookRunner.runHook('afterDirectEdit', {
+        TASKFORGE_CHANGED_FILES: outcomes[0].filesChanged.join(' '),
+      });
+      if (hookRes.ran) {
+        hookNote =
+          hookRes.exitCode === 0
+            ? `\n  ${colors.green}✔${colors.reset} ${colors.dim}Hook afterDirectEdit (${hookRes.command}) passed.${colors.reset}`
+            : `\n  ${colors.yellow}⚠${colors.reset} ${colors.dim}Hook afterDirectEdit exited ${hookRes.exitCode}: ${hookRes.output?.slice(0, 140) ?? ''}${colors.reset}`;
+      }
+    }
 
     const sections: string[] = [];
     if (unavailable.length > 0) {
@@ -689,7 +804,7 @@ export class DirectAgentRunner {
         : `${colors.red}${outcome.error || outcome.response}${colors.reset}`;
       const filesBlock =
         outcome.filesChanged.length > 0
-          ? `\n  ${colors.cyan}Modified files:${colors.reset} ${outcome.filesChanged.join(', ')}${savedCheckpointId ? `\n  ${colors.dim}↻ Checkpoint saved (${savedCheckpointId}) — type /undo or "desfaz" to revert.${colors.reset}` : ''}`
+          ? `\n  ${colors.cyan}Modified files:${colors.reset} ${outcome.filesChanged.join(', ')}${savedCheckpointId ? `\n  ${colors.dim}↻ Checkpoint saved (${savedCheckpointId}) — type /undo or "desfaz" to revert.${colors.reset}` : ''}${hookNote}`
           : '';
       sections.push(body ? `${header}\n${body}${filesBlock}` : `${header}${filesBlock}`);
     }
@@ -1659,6 +1774,126 @@ export class DirectAgentRunner {
       formatted: sections.join(`\n\n${colors.darkGray}${'─'.repeat(60)}${colors.reset}\n\n`),
       round1,
       round2,
+    };
+  }
+
+  /**
+   * Adversarial Multi-Agent TDD Loop (`/tdd [@tester -> @implementer] <spec>`):
+   * - Phase 1 (Red): `tester` writes focused failing tests encoding `<spec>`.
+   * - Phase 2 (Green): `implementer` implements production code to make those
+   *   tests pass (with bounded fix iterations), verifying via `testCommand`.
+   */
+  public async runAdversarialTdd(
+    testerTarget: string | 'smart',
+    implementerTarget: string | 'smart',
+    rawSpec: string,
+    options: { testCommand?: string; abortSignal?: AbortSignal; maxGreenAttempts?: number } = {},
+  ): Promise<{ formatted: string; passed: boolean; filesChanged: string[] }> {
+    const resolved = resolveFileMentionsInPrompt(rawSpec, this.repoRoot);
+    const spec = resolved.cleanedPrompt;
+    const reports = await AgentDetector.detect(this.agentRegistry.list());
+    const ready = reports
+      .filter((r) => r.ready)
+      .map((r) => this.agentRegistry.get(r.id))
+      .filter((a): a is AgentAdapter => Boolean(a));
+
+    const tester =
+      testerTarget === 'smart'
+        ? ready[0]
+        : ready.find((a) => a.id === testerTarget);
+    const implementer =
+      implementerTarget === 'smart'
+        ? (ready.find((a) => a.id !== tester?.id) ?? ready[0])
+        : ready.find((a) => a.id === implementerTarget);
+
+    if (!tester || !implementer) {
+      return {
+        formatted: `${colors.red}✖ Cannot run /tdd.${colors.reset} No ready agents detected (check /agents).`,
+        passed: false,
+        filesChanged: [],
+      };
+    }
+
+    const testCmd = options.testCommand ?? this.verificationCommands[0];
+    this.onLiveLine?.(
+      `\n  ${colors.brand}✦ ${colors.bold}Adversarial Multi-Agent TDD${colors.reset} ${colors.dim}(Red: ${tester.name} → Green: ${implementer.name}${testCmd ? ` · check: ${testCmd}` : ''})${colors.reset}\n`,
+    );
+
+    // Phase 1 — Red: Test Author writes failing tests
+    const redPrompt = [
+      `[TDD Phase 1 — RED (Test Author)]`,
+      `Write focused, clean automated tests that specify and assert the behavior below. Do NOT implement the production feature yet — only write tests so they fail until implemented.`,
+      `\nSpecification:\n${spec}`,
+    ].join('\n');
+    const redRes = await this.runAgents([tester.id], redPrompt, {
+      abortSignal: options.abortSignal,
+      autoReason: 'TDD Phase 1 (Red — write failing tests)',
+    });
+    const redFiles = redRes.outcomes[0]?.filesChanged ?? [];
+
+    const runTestCmd = async (): Promise<{ passed: boolean; output: string }> => {
+      if (!testCmd) return { passed: true, output: '(no test command configured)' };
+      const r = await ProcessRunner.run({
+        command: process.env.SHELL || '/bin/sh',
+        args: ['-lc', testCmd],
+        cwd: this.repoRoot,
+        timeoutMs: Math.min(this.timeoutMs, 120_000),
+        abortSignal: options.abortSignal,
+      });
+      const combined = [r.stdout, r.stderr].filter((s) => s.trim()).join('\n').trim();
+      return { passed: r.exitCode === 0, output: combined.slice(-2500) };
+    };
+
+    const redCheck = await runTestCmd();
+
+    // Phase 2 — Green: Implementer makes tests pass (bounded attempts)
+    const maxAttempts = Math.max(1, options.maxGreenAttempts ?? 2);
+    let lastCheck = redCheck;
+    let greenOutcomeSummary = '';
+    const allChanged = new Set<string>(redFiles);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const greenPrompt = [
+        `[TDD Phase 2 — GREEN (Implementer · Attempt ${attempt}/${maxAttempts})]`,
+        `Implement the clean production code required to satisfy the specification and make the test suite pass. Do NOT weaken or delete the test assertions written in Phase 1.`,
+        `\nSpecification:\n${spec}`,
+        redFiles.length > 0 ? `\nTest files written in Phase 1: ${redFiles.join(', ')}` : '',
+        !lastCheck.passed && lastCheck.output
+          ? `\nLatest test output to fix:\n\`\`\`\n${lastCheck.output}\n\`\`\``
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const greenRes = await this.runAgents([implementer.id], greenPrompt, {
+        abortSignal: options.abortSignal,
+        autoReason: `TDD Phase 2 (Green — attempt ${attempt}/${maxAttempts})`,
+      });
+      for (const f of greenRes.outcomes[0]?.filesChanged ?? []) allChanged.add(f);
+      greenOutcomeSummary = greenRes.outcomes[0]?.response ?? '';
+
+      lastCheck = await runTestCmd();
+      if (lastCheck.passed) break;
+    }
+
+    const statusBadge = lastCheck.passed
+      ? `${colors.green}✔ GREEN — tests passing${colors.reset}`
+      : `${colors.red}✖ RED — tests still failing after ${maxAttempts} attempt(s)${colors.reset}`;
+
+    return {
+      passed: lastCheck.passed,
+      filesChanged: [...allChanged],
+      formatted: [
+        `${colors.brand}✦ ${colors.bold}Adversarial TDD Summary${colors.reset}  ${statusBadge}`,
+        `  ${colors.cyan}Red (${tester.name}):${colors.reset} ${redFiles.length > 0 ? redFiles.join(', ') : '(see test output)'} ${testCmd ? `· pre-impl check: ${redCheck.passed ? 'passed' : 'failed (expected Red)'}` : ''}`,
+        `  ${colors.green}Green (${implementer.name}):${colors.reset} ${greenOutcomeSummary.slice(0, 260) || '(completed)'}`,
+        allChanged.size > 0 ? `  ${colors.cyan}Files touched:${colors.reset} ${[...allChanged].join(', ')}` : '',
+        !lastCheck.passed && lastCheck.output
+          ? `\n  ${colors.red}Last test output:${colors.reset}\n${lastCheck.output.slice(-900)}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
     };
   }
 }

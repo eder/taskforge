@@ -172,18 +172,22 @@ function longestCommonPrefix(items: string[]): string {
   return prefix;
 }
 
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|webp|gif|svg|bmp)$/i;
+
 /**
- * Extracts validated repo-relative `#path/to/file` references from a prompt and
- * returns both the resolved file list and a cleaned prompt (removing `#` from
- * valid file tokens so agents see clean repository paths).
+ * Extracts validated repo-relative `#path/to/file` references AND local image
+ * attachments (`#screenshot.png` or dragged absolute image paths like
+ * `/Users/.../error.png`) from a prompt.
  */
 export function resolveFileMentionsInPrompt(
   prompt: string,
   repoRoot: string,
-): { cleanedPrompt: string; files: string[] } {
+): { cleanedPrompt: string; files: string[]; images: string[] } {
   const resolvedRoot = path.resolve(repoRoot);
   const found: string[] = [];
+  const images: string[] = [];
   const seen = new Set<string>();
+  const seenImages = new Set<string>();
 
   const cleanedPrompt = prompt.replace(/(^|\s)#([^\s,;()[\]{}]+)/g, (full, lead: string, candidate: string) => {
     // Strip trailing punctuation like `?`, `.`, `,`, `:`
@@ -195,6 +199,15 @@ export function resolveFileMentionsInPrompt(
       return full;
     }
 
+    // Allow explicit `#/abs/path/to/screenshot.png` for images outside repoRoot
+    if (rawPath.startsWith('/') && IMAGE_EXT_RE.test(rawPath) && fs.existsSync(rawPath)) {
+      if (!seenImages.has(rawPath)) {
+        seenImages.add(rawPath);
+        images.push(rawPath);
+      }
+      return `${lead}${rawPath}${trailing}`;
+    }
+
     const normalized = rawPath.replace(/^\.\//, '').replace(/^\/+/, '');
     const abs = path.resolve(resolvedRoot, normalized);
     if (abs !== resolvedRoot && !abs.startsWith(resolvedRoot + path.sep)) {
@@ -204,6 +217,12 @@ export function resolveFileMentionsInPrompt(
       return full;
     }
     const rel = path.relative(resolvedRoot, abs).split(path.sep).join('/');
+    if (IMAGE_EXT_RE.test(rel)) {
+      if (!seenImages.has(abs)) {
+        seenImages.add(abs);
+        images.push(abs);
+      }
+    }
     if (!seen.has(rel)) {
       seen.add(rel);
       found.push(rel);
@@ -211,5 +230,27 @@ export function resolveFileMentionsInPrompt(
     return `${lead}${rel}${trailing}`;
   });
 
-  return { cleanedPrompt, files: found };
+  // Also detect standalone absolute image paths pasted/dragged into the terminal
+  const absImageRe = /(?:^|\s)(\/[^\s"'<>]+?\.(?:png|jpe?g|webp|gif|svg|bmp))(?=$|\s|[.,;:!?])/gi;
+  let imgMatch: RegExpExecArray | null;
+  while ((imgMatch = absImageRe.exec(cleanedPrompt)) !== null) {
+    const absPath = imgMatch[1];
+    if (fs.existsSync(absPath) && !seenImages.has(absPath)) {
+      seenImages.add(absPath);
+      images.push(absPath);
+    }
+  }
+
+  return { cleanedPrompt, files: found, images };
+}
+
+/** Formats attached image paths into a concise prompt block for multimodal coding agents. */
+export function appendImageContextToPrompt(prompt: string, images: readonly string[]): string {
+  if (images.length === 0) return prompt;
+  const block = [
+    '',
+    'Attached image file(s) to inspect directly:',
+    ...images.map((img) => `- ${img}`),
+  ].join('\n');
+  return `${prompt}${block}`;
 }
