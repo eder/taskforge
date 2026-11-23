@@ -83,9 +83,9 @@ describe('execution.tokenBudget', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  function build() {
+  function build(customAgent?: AgentAdapter) {
     const db = new TaskForgeDatabase(':memory:');
-    const agent = new Reporter();
+    const agent = customAgent ?? new Reporter();
     const registry = new AgentRegistry(false);
     registry.register(agent);
     const router: RoutingProvider = {
@@ -180,6 +180,42 @@ describe('execution.tokenBudget', () => {
   it('says plainly when the agents reported no usage', () => {
     const db = new TaskForgeDatabase(':memory:');
     expect(new TelemetryCollector(db).formatSpendLine('run-none')).toContain('no usage was reported');
+    db.close();
+  });
+
+  it('weights cached input tokens at 10% for budget checks so heavy prompt caching does not prematurely abort a run', async () => {
+    // Simulate a task using 150k fresh + 1,800,000 cached = 1,950,000 total tokens.
+    // Effective budget spend = 150,000 + 180,000 = 330,000 (< 1,000,000 cap).
+    const cachedAgent: AgentAdapter = {
+      id: 'rep',
+      name: 'CachedReporter',
+      detect: async () => true,
+      capabilities: async () => ({ canRead: true, canWrite: false, canExecute: false, languages: [], tools: [] }),
+      execute: async () => ({
+        success: true,
+        message: 'Detailed analysis output.',
+        durationMs: 1,
+        usage: {
+          inputTokens: 1_900_000,
+          cachedInputTokens: 1_800_000,
+          outputTokens: 50_000,
+          totalTokens: 1_950_000,
+          modelName: 'm',
+          source: 'provider_reported',
+        },
+      }),
+    };
+    const { db, orchestrator } = build(cachedAgent);
+    const telemetry = new TelemetryCollector(db);
+
+    const result = await orchestrator.run('Analyse the area', {
+      preplannedGraph: graph(),
+      tokenBudget: 1_000_000,
+    });
+    expect(result.status).toBe('completed');
+    expect(telemetry.getRunTokenTotal(result.runId)).toBe(3_900_000);
+    expect(telemetry.getRunBudgetTokens(result.runId)).toBe(660_000);
+    expect(telemetry.formatSpendLine(result.runId, 1_000_000)).toContain('66% of the 1,000,000 budget');
     db.close();
   });
 });

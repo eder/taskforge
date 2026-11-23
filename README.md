@@ -278,6 +278,7 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/tasks` | Show task and assignment status; accepts an optional task id |
 | `/status` | Open the full TUI dashboard |
 | `/agents` | Show detected agent harnesses and availability; `/agents reset <id>` forgets a recorded failure (also `tf agents reset <id>`) |
+| `/use` | Switch direct chat target (`/use <claude\|codex\|agy\|all\|auto>`); you can also prefix any message with `@claude`, `@codex`, `@agy`, `@all`, or `!cmd` for direct turns with shared cross-agent memory |
 | `/stream` | Enter live output; accepts an optional task id |
 | `/focus` | Focus one active agent by index, for example `/focus 2` |
 | `/back` | Leave agent Focus Mode |

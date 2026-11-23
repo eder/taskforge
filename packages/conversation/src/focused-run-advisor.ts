@@ -62,6 +62,11 @@ export type FocusedAdvisorHandler = (
   messages: Array<{ role: string; content: string }>,
 ) => Promise<FocusedAdvisorDecision>;
 
+export type FocusedAdvisorAgentCaller = (
+  messages: Array<{ role: string; content: string }>,
+  schema: Record<string, unknown>,
+) => Promise<unknown>;
+
 const VALID_ACTIONS = new Set<FocusedAdvisorActionType>([
   'answer',
   'apply_repair',
@@ -171,27 +176,53 @@ export function buildPendingAdvisorAction(
   }
 }
 
+const ADVISOR_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: [...VALID_ACTIONS],
+    },
+    reply: { type: 'string' },
+    command: { type: ['string', 'null'] },
+    paths: {
+      type: ['array', 'null'],
+      items: { type: 'string' },
+    },
+    guidance: { type: ['string', 'null'] },
+    proposedAction: {
+      type: 'string',
+      enum: [...VALID_PROPOSED],
+    },
+  },
+  required: ['action', 'reply', 'command', 'paths', 'guidance', 'proposedAction'],
+  additionalProperties: false,
+};
+
 export class FocusedRunAdvisor {
   private apiKey?: string;
   private baseUrl: string;
   private model: string;
   private timeoutMs: number;
   private handler?: FocusedAdvisorHandler;
+  private agentCaller?: FocusedAdvisorAgentCaller;
 
   constructor(options: {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
     timeoutMs?: number;
+    agentCaller?: FocusedAdvisorAgentCaller;
   }) {
     this.apiKey = options.apiKey;
     this.baseUrl = (options.baseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/$/, '');
     this.model = options.model ?? 'gpt-4o-mini';
     this.timeoutMs = options.timeoutMs ?? 20_000;
+    this.agentCaller = options.agentCaller;
   }
 
   public isAvailable(): boolean {
-    return Boolean(this.handler || this.apiKey);
+    return Boolean(this.handler || this.apiKey || this.agentCaller);
   }
 
   /** Injects a custom handler for deterministic tests without network calls. */
@@ -232,9 +263,19 @@ export class FocusedRunAdvisor {
     try {
       const raw = this.handler
         ? await this.handler(messages)
-        : await this.callOpenAI(messages, this.apiKey!);
+        : this.apiKey
+          ? await this.callOpenAI(messages, this.apiKey)
+          : await this.agentCaller!(messages, ADVISOR_JSON_SCHEMA);
       return this.sanitizeDecision(raw);
     } catch {
+      if (!this.handler && this.apiKey && this.agentCaller) {
+        try {
+          const fallbackRaw = await this.agentCaller(messages, ADVISOR_JSON_SCHEMA);
+          return this.sanitizeDecision(fallbackRaw);
+        } catch {
+          return undefined;
+        }
+      }
       return undefined;
     }
   }
@@ -281,28 +322,7 @@ export class FocusedRunAdvisor {
             json_schema: {
               name: 'focused_run_advisor',
               strict: true,
-              schema: {
-                type: 'object',
-                properties: {
-                  action: {
-                    type: 'string',
-                    enum: [...VALID_ACTIONS],
-                  },
-                  reply: { type: 'string' },
-                  command: { type: ['string', 'null'] },
-                  paths: {
-                    type: ['array', 'null'],
-                    items: { type: 'string' },
-                  },
-                  guidance: { type: ['string', 'null'] },
-                  proposedAction: {
-                    type: 'string',
-                    enum: [...VALID_PROPOSED],
-                  },
-                },
-                required: ['action', 'reply', 'command', 'paths', 'guidance', 'proposedAction'],
-                additionalProperties: false,
-              },
+              schema: ADVISOR_JSON_SCHEMA,
             },
           },
         }),

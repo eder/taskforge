@@ -201,6 +201,7 @@ export function normalizeRawPlanScopes(raw: RawPlanOutput | undefined): void {
     const isReadOnlyKind =
       mode === 'report' ||
       mode === 'review' ||
+      mode === 'verification' ||
       (mode === '' && (type === 'architecture' || type === 'investigation' || type === 'review'));
 
     if (isReadOnlyKind && forbidsAll) {
@@ -208,15 +209,37 @@ export function normalizeRawPlanScopes(raw: RawPlanOutput | undefined): void {
       continue;
     }
 
-    if (!forbidsAll) {
-      const forbiddenSet = new Set(
-        forbidden.filter((f): f is string => typeof f === 'string').map((f) => f.trim()),
-      );
-      const filtered = allowed.filter(
-        (a) => typeof a !== 'string' || !forbiddenSet.has(a.trim()),
-      );
-      if (filtered.length > 0 && filtered.length < allowed.length) {
-        task.allowedScope = filtered;
+    // Mutating tasks sometimes emit `forbiddenChanges: ["*"]` alongside concrete
+    // `allowedScope` files intending "do not touch anything outside allowedScope".
+    // Strip the wildcard so the explicit `allowedScope` acts as the boundary.
+    if (!isReadOnlyKind && forbidsAll) {
+      task.forbiddenChanges = forbidden.filter((f) => typeof f !== 'string' || f.trim() !== '*');
+    }
+
+    const updatedForbidden = Array.isArray(task.forbiddenChanges) ? task.forbiddenChanges : [];
+    if (updatedForbidden.length === 0) continue;
+
+    const forbiddenSet = new Set(
+      updatedForbidden.filter((f): f is string => typeof f === 'string').map((f) => f.trim()),
+    );
+    const filteredAllowed = allowed.filter(
+      (a) => typeof a !== 'string' || !forbiddenSet.has(a.trim()),
+    );
+    if (filteredAllowed.length < allowed.length) {
+      if (isReadOnlyKind) {
+        task.allowedScope = [];
+      } else if (filteredAllowed.length > 0) {
+        task.allowedScope = filteredAllowed;
+      } else {
+        // Model listed the exact same path(s) in both allowedScope and forbiddenChanges.
+        // Drop the mirrored entries from forbiddenChanges so the task remains valid
+        // (user-explicit global/scoped prohibitions are still enforced downstream).
+        const allowedSet = new Set(
+          allowed.filter((a): a is string => typeof a === 'string').map((a) => a.trim()),
+        );
+        task.forbiddenChanges = updatedForbidden.filter(
+          (f) => typeof f !== 'string' || !allowedSet.has(f.trim()),
+        );
       }
     }
   }

@@ -8,4 +8,7 @@ export * from './stream-viewer.js';
 export * from './dash-stream.js';
 export * from './focused-run-resolver.js';
 export * from './focused-run-advisor.js';
+export * from './direct-agent-router.js';
+export * from './direct-agent-session.js';
+export * from './problem-size-router.js';
 export { summarizeGoal } from './shell-helpers.js';

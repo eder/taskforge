@@ -132,12 +132,18 @@ import {
   formatRunSummary,
   formatUsageEstimate,
 } from './shell-formatters.js';
-import { classifyFocusedInstruction } from './focused-run-resolver.js';
+import { classifyFocusedInstruction, parseNaturalRunRequest } from './focused-run-resolver.js';
 import {
   FocusedRunAdvisor,
   buildPendingAdvisorAction,
   validateWorktreeLinkPaths,
 } from './focused-run-advisor.js';
+import {
+  parseDirectRouteCommand,
+  extractOrchestratedAgentPreferences,
+} from './direct-agent-router.js';
+import { DirectConversationMemory, DirectAgentRunner } from './direct-agent-session.js';
+import { assessProblemAndSelectAgent } from './problem-size-router.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -181,6 +187,10 @@ export class InteractiveShell {
   private gitService: GitService;
   private planner: SemanticPlanner | HeuristicPlanner;
   private focusedAdvisor: FocusedRunAdvisor;
+  private directMemory = new DirectConversationMemory();
+  private directRunner: DirectAgentRunner;
+  /** Sticky direct chat target: 'auto' (Hybrid Smart Mode), 'all' (parallel multi-agent), or an agent id. */
+  private stickyAgentMode: 'auto' | 'all' | string = 'auto';
   private negotiator: NegotiationManager;
   private router: RoutingProvider;
   private agentSelector: AgentSelector;
@@ -279,6 +289,12 @@ export class InteractiveShell {
       baseUrl: openaiBaseUrl,
       model: advisorModel,
       timeoutMs: Math.min((this.config.router.timeoutSeconds ?? 30) * 1000, 30_000),
+      agentCaller: process.env.VITEST
+        ? undefined
+        : createAgentModelCaller(this.agentRegistry, {
+            cwd: this.repoRoot,
+            timeoutMs: 60_000,
+          }),
     });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);
@@ -308,6 +324,14 @@ export class InteractiveShell {
       new RunRepository(this.db),
     );
     this.githubWorkflowService = new GitHubWorkflowService(this.db, this.repoRoot);
+    this.directRunner = new DirectAgentRunner({
+      repoRoot: this.repoRoot,
+      agentRegistry: this.agentRegistry,
+      memory: this.directMemory,
+      timeoutMs: (this.config.execution.defaultTimeoutMinutes ?? 10) * 60_000,
+      onLiveLine: (line) => this.viewport.writeUpper(line),
+      gitService: this.gitService,
+    });
     this.setupActivitySubscription();
     this.setupCockpitEventSubscription();
   }
@@ -673,7 +697,7 @@ export class InteractiveShell {
         ? describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, result.runId)
         : [];
     const spend = {
-      spent: this.telemetry.getRunTokenTotal(result.runId),
+      spent: this.telemetry.getRunBudgetTokens(result.runId),
       budget: this.config.execution.tokenBudget,
     };
     // In the REPL the next move is proposed in words and accepted with Enter; the
@@ -741,17 +765,40 @@ export class InteractiveShell {
     });
   }
 
-  /** One line saying what the session continues from, so history is visible without asking. */
+  /** One line saying what the session continues from (and any recent stopped run), so history is visible without asking. */
   private continuationHint(): string {
     if (this.options.freshSession || this.config.context?.carryOver === false) return '';
     const boundary = new SessionRepository(this.db).getContextBoundary();
+    const runRepo = new RunRepository(this.db);
+    const goalRepo = new GoalRepository(this.db);
+    const maxAgeMs = (this.config.context?.maxAgeHours ?? 24) * 3_600_000;
     const [latest] = findPriorRunCandidates(
-      { runRepo: new RunRepository(this.db), goalRepo: new GoalRepository(this.db) },
+      { runRepo, goalRepo },
       { limit: 1, maxAgeHours: this.config.context?.maxAgeHours, notBefore: boundary },
     );
-    if (!latest) return '';
-    const goal = latest.goal.length > 70 ? `${latest.goal.slice(0, 69)}…` : latest.goal;
-    return `\n  ${colors.dim}Continuing from ${colors.reset}${colors.bold}${latest.runId}${colors.reset} ${colors.dim}(${describeAge(latest.createdAt)}${goal ? `: ${goal}` : ''}). Refer to it as "last" or #1; /clear starts fresh.${colors.reset}\n`;
+    const stopped = runRepo.listAll().find((r) => {
+      if (r.status !== 'failed' && r.status !== 'cancelled') return false;
+      const created = new Date(r.createdAt);
+      if (Date.now() - created.getTime() > maxAgeMs) return false;
+      if (boundary && created < boundary) return false;
+      return true;
+    });
+    const lines: string[] = [];
+    if (latest) {
+      const goal = latest.goal.length > 70 ? `${latest.goal.slice(0, 69)}…` : latest.goal;
+      lines.push(
+        `  ${colors.dim}Continuing from ${colors.reset}${colors.bold}${latest.runId}${colors.reset} ${colors.dim}(${describeAge(latest.createdAt)}${goal ? `: ${goal}` : ''}). Refer to it as "last" or #1; /clear starts fresh.${colors.reset}`,
+      );
+    }
+    if (stopped) {
+      const rawGoal = stopped.goalId ? goalRepo.get(stopped.goalId)?.description : undefined;
+      const goalLine = (rawGoal ?? '').split('\n').find((l) => l.trim())?.trim() ?? '';
+      const shortGoal = goalLine.length > 64 ? `${goalLine.slice(0, 63)}…` : goalLine;
+      lines.push(
+        `  ${colors.yellow}●${colors.reset} ${colors.dim}Last stopped run:${colors.reset} ${colors.bold}${stopped.id}${colors.reset} ${colors.dim}(${stopped.status}, ${describeAge(stopped.createdAt)}${shortGoal ? `: ${shortGoal}` : ''}). Just say "continue the last run" or ask why it failed.${colors.reset}`,
+      );
+    }
+    return lines.length > 0 ? `\n${lines.join('\n')}\n` : '';
   }
 
   async renderBanner(): Promise<string> {
@@ -832,6 +879,7 @@ export class InteractiveShell {
       '',
       `  ${colors.bold}Router${colors.reset}      OpenAI       ${routerStatus}`,
       `  ${colors.bold}ECC${colors.reset}         ${profile.hasECC ? `${colors.green}● detected${colors.reset}` : `${colors.gray}○ not detected${colors.reset}`}`,
+      `  ${colors.bold}Direct${colors.reset}      ${colors.dim}@claude · @codex · @agy · @all · !cmd · /use <agent|all|auto>${colors.reset}`,
       ` ${colors.brand}─────────────────────────────────────────────────────────────────${colors.reset}`,
       '',
     ];
@@ -908,6 +956,48 @@ export class InteractiveShell {
     // is focused talks to that agent instead of being parsed as a new goal.
     if (this.focusedAssignmentId && !text.startsWith('/')) {
       return this.sendMessageToFocusedAgent(text);
+    }
+
+    // Direct Agent Interface (`!cmd`, `/use <agent|all|auto>`, `@claude ...`, `@all ...`,
+    // and sticky direct chat mode): gives full native CLI parity inside `tf` with shared
+    // cross-agent memory and zero Plan/Worktree ceremony when desired.
+    const registeredIds = this.agentRegistry.list().map((a) => a.id);
+    const directCmd = parseDirectRouteCommand(text, registeredIds);
+    if (directCmd.kind === 'shell') {
+      return this.directRunner.runShellCommand(directCmd.command, abortSignal);
+    }
+    if (directCmd.kind === 'switch_mode') {
+      if (directCmd.mode === 'auto') {
+        this.stickyAgentMode = 'auto';
+        return `${colors.green}✔${colors.reset} Mode set to ${colors.bold}Hybrid Smart (auto)${colors.reset}. ${colors.dim}Plain messages use smart orchestration; prefix with @claude, @codex, @agy, @all or !cmd for direct turns.${colors.reset}`;
+      }
+      if (directCmd.mode === 'all') {
+        this.stickyAgentMode = 'all';
+        return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}@all (parallel multi-agent)${colors.reset}. ${colors.dim}Every message goes to all ready agents in parallel with shared memory. Type @auto or /use auto to return.${colors.reset}`;
+      }
+      const adapter = this.agentRegistry.get(directCmd.mode);
+      if (!adapter) {
+        return `${colors.red}✖ Unknown agent "${directCmd.mode}".${colors.reset} Available: ${registeredIds.join(', ')}, all, auto.`;
+      }
+      this.stickyAgentMode = adapter.id;
+      return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}${adapter.name} (${adapter.id})${colors.reset}. ${colors.dim}Messages go straight to ${adapter.name} with shared cross-agent memory. Switch anytime with @codex/@claude/@agy/@all or @auto.${colors.reset}`;
+    }
+    if (directCmd.kind === 'direct_agents') {
+      const result = await this.directRunner.runAgents(directCmd.targets, directCmd.prompt, {
+        abortSignal,
+      });
+      return result.formatted;
+    }
+    if (
+      this.stickyAgentMode !== 'auto' &&
+      !text.startsWith('/') &&
+      !this.currentGraph &&
+      !this.focusedRun &&
+      this.interactionGateway.getPendingRequests().length === 0
+    ) {
+      const targets = this.stickyAgentMode === 'all' ? 'all' : [this.stickyAgentMode];
+      const result = await this.directRunner.runAgents(targets, text, { abortSignal });
+      return result.formatted;
     }
 
     const intent = this.operator.parseIntent(text, {
@@ -1357,7 +1447,7 @@ export class InteractiveShell {
           runs.listAll().find((r) => ['failed', 'cancelled', 'running'].includes(r.status))?.id;
         if (!runId) return 'Nothing to retry: no failed, cancelled or interrupted runs. See /runs.';
         // Past its token cap the run would stop again at once: offer the higher cap first.
-        const spent = this.telemetry.getRunTokenTotal(runId);
+        const spent = this.telemetry.getRunBudgetTokens(runId);
         const budget = this.config.execution.tokenBudget;
         if (budget > 0 && spent >= budget) {
           const proposal = buildRunFocus({
@@ -1376,6 +1466,7 @@ export class InteractiveShell {
         new SessionRepository(this.db).clearContext();
         this.pendingPriorContext = undefined;
         this.focusedRun = undefined;
+        this.directMemory.clear();
         // A plan that has not been approved is part of the conversation being
         // cleared; a run that is executing is not, and is left alone.
         let discarded = '';
@@ -1409,6 +1500,122 @@ export class InteractiveShell {
       }
 
       case 'submit_goal': {
+        // Natural-language run continuation / failure inspection (PT & EN) so the user
+        // does not need to memorize `/retry`, `/fix`, or `/inspect`.
+        const naturalRunReq = parseNaturalRunRequest(intent.goal);
+        const explicitRunIdEarly = naturalRunReq.explicitRunId ?? extractRunId(intent.goal);
+        const runRepoEarly = new RunRepository(this.db);
+        const goalRepoEarly = new GoalRepository(this.db);
+
+        if (explicitRunIdEarly) {
+          const explicitRun = runRepoEarly.get(explicitRunIdEarly);
+          if (
+            explicitRun &&
+            ['failed', 'cancelled', 'running'].includes(explicitRun.status) &&
+            !(await this.buildOrchestrator().checkResumable(explicitRun.id))
+          ) {
+            this.conversationState = 'IDLE';
+            this.activeGoal = undefined;
+            this.lastGoalDescription = undefined;
+            if (naturalRunReq.kind === 'inspect') {
+              this.focusStoppedRun(explicitRun.id);
+              const reply = await this.handleFocusedMessage(intent.goal);
+              if (reply !== undefined) return reply;
+            }
+            if (naturalRunReq.kind === 'continue') {
+              if (naturalRunReq.bare) {
+                return this.enterStoppedRun(explicitRun.id);
+              }
+              this.focusStoppedRun(explicitRun.id);
+              const reply = await this.handleFocusedMessage(naturalRunReq.guidance ?? intent.goal);
+              if (reply !== undefined) return reply;
+            }
+            return this.respondToUnfinishedRun(explicitRun.id, intent.goal, true);
+          }
+
+          if (explicitRun && explicitRun.status === 'completed') {
+            if (naturalRunReq.kind === 'inspect') {
+              return this.formatRunInspection(explicitRun.id);
+            }
+            if (naturalRunReq.kind === 'continue' && naturalRunReq.bare) {
+              this.conversationState = 'IDLE';
+              this.activeGoal = undefined;
+              this.lastGoalDescription = undefined;
+              const completedGoal = explicitRun.goalId
+                ? summarizeGoal(goalRepoEarly.get(explicitRun.goalId)?.description ?? '')
+                : '';
+              const latestStopped = await this.findLatestResumableRun();
+              if (latestStopped) {
+                const intro =
+                  naturalRunReq.language === 'pt'
+                    ? [
+                        `${colors.brand}✦ ${colors.bold}${explicitRun.id} já foi concluída${colors.reset}${completedGoal ? ` ${colors.dim}(${completedGoal})${colors.reset}` : ''}.`,
+                        `  A última run que parou foi ${colors.bold}${latestStopped.runId}${colors.reset}${latestStopped.goal ? ` ${colors.dim}(${latestStopped.goal})${colors.reset}` : ''}:`,
+                      ]
+                    : [
+                        `${colors.brand}✦ ${colors.bold}${explicitRun.id} already completed${colors.reset}${completedGoal ? ` ${colors.dim}(${completedGoal})${colors.reset}` : ''}.`,
+                        `  The most recent stopped run is ${colors.bold}${latestStopped.runId}${colors.reset}${latestStopped.goal ? ` ${colors.dim}(${latestStopped.goal})${colors.reset}` : ''}:`,
+                      ];
+                const extra =
+                  naturalRunReq.language === 'pt'
+                    ? `  ${colors.dim}Ou, se quiser começar algo novo a partir do relatório de ${explicitRun.id}, diga qual item quer implementar.${colors.reset}`
+                    : `  ${colors.dim}Or, if you want to start new work from ${explicitRun.id}'s report, tell me which item to implement.${colors.reset}`;
+                return `${this.enterStoppedRun(latestStopped.runId, intro)}\n${extra}`;
+              }
+              return naturalRunReq.language === 'pt'
+                ? [
+                    `${colors.brand}✦ ${colors.bold}${explicitRun.id} já foi concluída${colors.reset}${completedGoal ? ` ${colors.dim}(${completedGoal})${colors.reset}` : ''}, e não há nenhuma run parada para retomar.`,
+                    `  ${colors.dim}Para seguir a partir do relatório dela, me diga o próximo passo em linguagem natural (ex: "faça o item 1 da ${explicitRun.id}").${colors.reset}`,
+                  ].join('\n')
+                : [
+                    `${colors.brand}✦ ${colors.bold}${explicitRun.id} already completed${colors.reset}${completedGoal ? ` ${colors.dim}(${completedGoal})${colors.reset}` : ''}, and there is no stopped run to resume.`,
+                    `  ${colors.dim}To build on its report, tell me the next step in plain words (e.g. "implement item 1 from ${explicitRun.id}").${colors.reset}`,
+                  ].join('\n');
+            }
+          }
+        } else if (naturalRunReq.kind === 'continue' || naturalRunReq.kind === 'inspect') {
+          const latestStopped = await this.findLatestResumableRun();
+          if (latestStopped) {
+            this.conversationState = 'IDLE';
+            this.activeGoal = undefined;
+            this.lastGoalDescription = undefined;
+            if (naturalRunReq.kind === 'inspect') {
+              this.focusStoppedRun(latestStopped.runId);
+              const reply = await this.handleFocusedMessage(intent.goal);
+              if (reply !== undefined) return reply;
+            }
+            if (naturalRunReq.bare) {
+              return this.enterStoppedRun(latestStopped.runId);
+            }
+            this.focusStoppedRun(latestStopped.runId);
+            const reply = await this.handleFocusedMessage(naturalRunReq.guidance ?? intent.goal);
+            if (reply !== undefined) return reply;
+          } else if (naturalRunReq.kind === 'inspect') {
+            return this.formatRunInspection();
+          } else if (naturalRunReq.bare) {
+            this.conversationState = 'IDLE';
+            this.activeGoal = undefined;
+            this.lastGoalDescription = undefined;
+            const [latestCompleted] = findPriorRunCandidates(
+              { runRepo: runRepoEarly, goalRepo: goalRepoEarly },
+              { limit: 1, maxAgeHours: 24 * 365 },
+            );
+            return naturalRunReq.language === 'pt'
+              ? [
+                  `${colors.brand}✦ ${colors.bold}Nenhuma run parada ou falha para retomar.${colors.reset}`,
+                  latestCompleted
+                    ? `  ${colors.dim}A última run concluída foi ${latestCompleted.runId} (${latestCompleted.goal}). Me diga qual próximo passo você quer fazer a partir dela.${colors.reset}`
+                    : `  ${colors.dim}Me diga o que você quer implementar ou investigar.${colors.reset}`,
+                ].join('\n')
+              : [
+                  `${colors.brand}✦ ${colors.bold}No stopped or failed run to resume.${colors.reset}`,
+                  latestCompleted
+                    ? `  ${colors.dim}The latest completed run is ${latestCompleted.runId} (${latestCompleted.goal}). Tell me what next step you want to run from it.${colors.reset}`
+                    : `  ${colors.dim}Tell me what you want to build or investigate.${colors.reset}`,
+                ].join('\n');
+          }
+        }
+
         this.activeRunId = generateRunId();
         this.conversationState = 'PLANNING';
         this.lastGoalDescription = intent.goal;
@@ -1522,6 +1729,23 @@ export class InteractiveShell {
         );
         this.currentGraph = invariant.graph;
 
+        // Honor natural-language agent preferences (e.g. "usa o claude para implementar e o codex para revisar").
+        const agentPrefs = extractOrchestratedAgentPreferences(intent.goal);
+        if (agentPrefs.implementer || agentPrefs.reviewer || agentPrefs.defaultAgent) {
+          for (const task of this.currentGraph.getAllTasks()) {
+            const chosen =
+              task.type === 'review'
+                ? (agentPrefs.reviewer ?? agentPrefs.defaultAgent)
+                : (agentPrefs.implementer ?? agentPrefs.defaultAgent);
+            if (chosen && this.agentRegistry.get(chosen)) {
+              task.contract.metadata = {
+                ...(task.contract.metadata ?? {}),
+                preferredAgent: chosen,
+              };
+            }
+          }
+        }
+
         const tasks = this.currentGraph.getAllTasks();
         const primaryTask = tasks[0];
         const plannerMetaBeforeRouting = this.currentGraph.metadata?.planner as
@@ -1553,10 +1777,24 @@ export class InteractiveShell {
           routing.teamSize = routing.roles.length;
           if (routing.roles.length === 1) routing.strategy = 'single';
         }
+        const explicitPrimaryAgent =
+          typeof primaryTask.contract.metadata?.preferredAgent === 'string'
+            ? primaryTask.contract.metadata.preferredAgent
+            : undefined;
+        if (explicitPrimaryAgent && routing.roles.length > 0) {
+          routing.roles = routing.roles.map((r, idx) =>
+            idx === 0 ? { ...r, preferredAgent: explicitPrimaryAgent } : r,
+          );
+        }
 
+        const baseAllowedAgents = allowedWritersForTask(primaryTask, this.config);
+        const preferredAllowedAgents =
+          explicitPrimaryAgent && availableAgentIds.includes(explicitPrimaryAgent)
+            ? new Set([explicitPrimaryAgent])
+            : baseAllowedAgents;
         const selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${primaryTask.id}`,
-          allowedAgentIds: allowedWritersForTask(primaryTask, this.config),
+          allowedAgentIds: preferredAllowedAgents,
         });
 
         const strategyUpper = routing.strategy.toUpperCase();
@@ -1680,9 +1918,18 @@ export class InteractiveShell {
           if (routing.roles.length === 1) routing.strategy = 'single';
         }
 
+        const explicitPrimaryAgent =
+          typeof primaryTask.contract.metadata?.preferredAgent === 'string'
+            ? primaryTask.contract.metadata.preferredAgent
+            : undefined;
+        const baseAllowedAgents = allowedWritersForTask(primaryTask, this.config);
+        const preferredAllowedAgents =
+          explicitPrimaryAgent && availableAgentIds.includes(explicitPrimaryAgent)
+            ? new Set([explicitPrimaryAgent])
+            : baseAllowedAgents;
         const selected = await this.agentSelector.selectAgents(routing.roles, {
           selectionKey: `${this.repoRoot}:${primaryTask.id}`,
-          allowedAgentIds: allowedWritersForTask(primaryTask, this.config),
+          allowedAgentIds: preferredAllowedAgents,
         });
 
         const strategyUpper = routing.strategy.toUpperCase();
@@ -1990,7 +2237,58 @@ export class InteractiveShell {
         if (failedLines.length > 0) {
           return `${colors.yellow}Not continuing: fix the ✖ above, then press Enter or /fix to try again.${colors.reset}`;
         }
-        return this.continueRun(runId, guidance, { tokenBudget });
+        return this.continueRun(runId, guidance, { tokenBudget, autoChainRecovery: true });
+  }
+
+  /** Finds the newest resumable unfinished run (no age cutoff; used when the user explicitly asks to continue/inspect a run). */
+  private async findLatestResumableRun(): Promise<{ runId: string; goal: string; createdAt: string; summary: string } | undefined> {
+    const candidates = new RunRepository(this.db)
+      .listAll()
+      .filter((r) => r.status === 'failed' || r.status === 'cancelled' || r.status === 'running')
+      .slice(0, 10);
+    for (const run of candidates) {
+      if (!(await this.buildOrchestrator().checkResumable(run.id))) {
+        return this.describeUnfinished(run.id);
+      }
+    }
+    return undefined;
+  }
+
+  /** Computes focus state for a stopped run and sets `this.focusedRun`. */
+  private focusStoppedRun(runId: string) {
+    const failures = describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, runId);
+    const spend = {
+      spent: this.telemetry.getRunBudgetTokens(runId),
+      budget: this.config.execution.tokenBudget,
+    };
+    const proposal = buildRunFocus({ runId, failures, repoRoot: this.repoRoot, spend });
+    this.focusedRun = proposal.focus;
+    return { failures, spend, proposal };
+  }
+
+  /** Enters focus mode on a stopped run and renders why it stopped + next-step proposal. */
+  private enterStoppedRun(runId: string, introLines: string[] = []): string {
+    const { failures, spend, proposal } = this.focusStoppedRun(runId);
+    const info = this.describeUnfinished(runId);
+    const failureLines = formatRunFailureLines(failures, runId, {
+      spend,
+      repoRoot: this.repoRoot,
+      omitNext: true,
+    });
+    const header =
+      introLines.length > 0
+        ? introLines
+        : [
+            `${colors.brand}✦ ${colors.bold}Focused on ${runId}${colors.reset}${info?.goal ? ` ${colors.dim}(${info.goal})${colors.reset}` : ''}`,
+          ];
+    return [
+      ...header,
+      ...(failureLines.length > 0 ? ['', ...failureLines] : []),
+      '',
+      ...proposal.lines,
+      '',
+      `↵ ${proposal.hint}   ·   or just tell me what you want   ·   /back to leave this run`,
+    ].join('\n');
   }
 
   /** The newest failed or cancelled run that can still be continued, within the context window. */
@@ -2428,6 +2726,8 @@ export class InteractiveShell {
     effectiveBudget?: number,
     rawUserMessage?: string,
   ): Promise<string> {
+    const failures = describeRunFailures({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, focus.runId);
+    const activeFailures = failures.filter((f) => f.kind !== 'not_started');
     const failureSummary = this.describeUnfinished(focus.runId)?.summary;
     const priorNotes = (focus.history ?? [])
       .filter((m) => m.role === 'assistant')
@@ -2439,7 +2739,25 @@ export class InteractiveShell {
     ].filter(Boolean);
     const fullDescription = sections.join('\n\n');
     const shortTitle = `Repair: ${guidance.replace(/\s+/g, ' ').trim().slice(0, 72)}`;
-    const preferredAgent = this.detectRequestedAgentId(`${rawUserMessage ?? ''} ${guidance}`);
+    const explicitAgent = this.detectRequestedAgentId(`${rawUserMessage ?? ''} ${guidance}`);
+    const availableAgents = await this.agentSelector.listAvailableAgentIds().catch(() => []);
+    const recommendation = assessProblemAndSelectAgent({
+      text: [
+        guidance,
+        ...activeFailures.map((f) => f.evidence ?? f.reason ?? ''),
+      ].join('\n'),
+      failedTaskCount: Math.max(1, activeFailures.length),
+      availableAgents,
+      explicitAgentId: explicitAgent,
+    });
+    const preferredAgent = explicitAgent ?? recommendation.primaryAgent;
+    if (preferredAgent) {
+      const adapter = this.agentRegistry.get(preferredAgent);
+      const label = adapter ? `${adapter.name} (${preferredAgent})` : preferredAgent;
+      this.viewport.writeUpper(
+        `\n  ${colors.brand}✦${colors.reset} ${colors.bold}Problem size:${colors.reset} ${recommendation.size} → ${colors.cyan}${label}${colors.reset} ${colors.dim}(${recommendation.reason})${colors.reset}\n`,
+      );
+    }
     return this.continueRun(focus.runId, fullDescription, {
       tokenBudget: effectiveBudget,
       skipPreflight: true,
@@ -2693,6 +3011,8 @@ export class InteractiveShell {
       tokenBudget?: number;
       skipPreflight?: boolean;
       repairTask?: RepairPreTaskOptions;
+      /** Bounded to 1 automatic escalation: if deterministic env repair clears one blocker but a residual code/test failure remains, auto-select an agent by problem size and inject a REPAIR step. */
+      autoChainRecovery?: boolean;
     } = {},
   ): Promise<string> {
         const orchestrator = this.buildOrchestrator();
@@ -2718,6 +3038,30 @@ export class InteractiveShell {
             this.deliveryService.getDelivery(result.runId)?.status === 'ready_to_apply'
               ? 'DELIVERY_READY'
               : 'IDLE';
+          if (options.autoChainRecovery && !options.repairTask && result.status === 'failed') {
+            const failures = describeRunFailures(
+              { taskRepo: this.taskRepo, eventRepo: this.eventRepo },
+              result.runId,
+            );
+            const activeFailures = failures.filter((f) => f.kind !== 'not_started');
+            const isBudgetStop = activeFailures.some((f) => f.kind === 'budget');
+            const remainingPlan = planRunRepair(
+              { taskRepo: this.taskRepo, eventRepo: this.eventRepo },
+              this.repoRoot,
+              result.runId,
+            );
+            if (activeFailures.length > 0 && !isBudgetStop && remainingPlan.fixes.length === 0) {
+              const focus: RunFocus = { runId: result.runId, action: { kind: 'continue' } };
+              this.viewport.writeUpper(
+                `\n  ${colors.yellow}↻${colors.reset} ${colors.dim}Residual failure remains after environment repair — escalating automatically to a coding agent to fix it and finish the run...${colors.reset}\n`,
+              );
+              return this.fixWithAgent(
+                focus,
+                'Fix the residual verification/test failure blocking this run so the remaining tasks can proceed cleanly.',
+                options.tokenBudget,
+              );
+            }
+          }
           return this.formatRunSummary(result);
         };
         const execution = orchestrator.resume(runId, {

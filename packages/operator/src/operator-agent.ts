@@ -104,7 +104,20 @@ export class OperatorIntentParser {
       const parts = text.split(/\s+/);
       return { type: 'stream_logs', taskId: parts[1] };
     }
-    if (text.startsWith('/runs') || text === 'runs' || lower.includes('show runs') || lower.includes('list runs')) {
+    if (
+      text.startsWith('/runs') ||
+      text === 'runs' ||
+      lower.includes('show runs') ||
+      lower.includes('list runs') ||
+      (text.length <= 100 &&
+        !(context?.conversationState === 'AWAITING_PLAN_APPROVAL' || context?.hasActivePlan) &&
+        (/^(?:mostr[ae](?:r)?|list[ae](?:r)?|ver|veja|exib[ae](?:r)?|quais(?:\s+(?:foram|s[aã]o))?)\s+(?:as\s+|os\s+)?(?:[uú]ltimas?\s+|recentes?\s+)?(?:runs|execu[cç][oõ]es)\b/i.test(
+          lower,
+        ) ||
+          /^(?:hist[oó]rico\s+de\s+(?:runs|execu[cç][oõ]es)|[uú]ltimas\s+runs|recent\s+runs|run\s+history|what\s+runs\b|which\s+runs\b)/i.test(
+            lower,
+          )))
+    ) {
       return { type: 'inspect_runs' };
     }
     if (text.startsWith('/tasks')) {

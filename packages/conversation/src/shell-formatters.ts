@@ -238,13 +238,27 @@ export async function formatRunSummary(ctx: RunSummaryContext, result: Orchestra
         ? colors.yellow
         : colors.red;
 
-  const outputs = Object.entries(result.taskOutputs ?? {})
-    .filter(([, text]) => text && text.trim().length > 0)
+  const taskStatusById = new Map<string, string>(
+    (result.graph?.getAllTasks?.() ?? []).map((t) => [t.id, t.status]),
+  );
+  const outputEntries = Object.entries(result.taskOutputs ?? {}).filter(
+    ([, text]) => text && text.trim().length > 0,
+  );
+  const isTaskVerified = (taskId: string) => {
+    const status = taskStatusById.get(taskId);
+    return status === 'integrated' || status === 'verified';
+  };
+  const hasUnverifiedOutput =
+    result.status !== 'completed' && outputEntries.some(([taskId]) => !isTaskVerified(taskId));
+
+  const outputs = outputEntries
     .map(([taskId, text]) => {
       const header =
         result.status === 'completed'
           ? `Explanation & Analysis [${taskId}]`
-          : `Last Attempt Output — NOT VERIFIED / NOT DELIVERED [${taskId}]`;
+          : isTaskVerified(taskId)
+            ? `Completed Task Output — Verified & Integrated [${taskId}]`
+            : `Last Attempt Output — NOT VERIFIED / NOT DELIVERED [${taskId}]`;
       const sanitized = sanitizeDisplayedRepositoryPaths(
         sanitizeTaskOutput(text.trim()),
         ctx.repoRoot,
@@ -256,9 +270,9 @@ export async function formatRunSummary(ctx: RunSummaryContext, result: Orchestra
     .join('\n\n');
 
   const outputPrefix = outputs
-    ? result.status === 'completed'
-      ? `${outputs}\n`
-      : `  ${colors.yellow}▲ Agent output below is evidence from a failed run. TaskForge did not verify or deliver it.${colors.reset}\n\n${outputs}\n`
+    ? hasUnverifiedOutput
+      ? `  ${colors.yellow}▲ Agent output below is evidence from a failed run. TaskForge did not verify or deliver it.${colors.reset}\n\n${outputs}\n`
+      : `${outputs}\n`
     : '';
 
   const isSuccess = result.status === 'completed';

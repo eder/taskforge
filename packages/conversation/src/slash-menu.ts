@@ -15,6 +15,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   { cmd: '/tasks', desc: 'List task and assignment status for the current run' },
   { cmd: '/status', desc: 'Open the full TUI dashboard' },
   { cmd: '/agents', desc: 'Inspect detected AI agent harnesses and availability; /agents reset <id> forgets a recorded failure' },
+  { cmd: '/use', desc: 'Switch direct chat target: /use <claude|codex|agy|all|auto> (or type @claude, @all, !cmd)' },
   { cmd: '/stream', desc: 'Enter live output for the active task or assignment' },
   { cmd: '/focus', desc: 'Focus one active agent by index, e.g. /focus 2' },
   { cmd: '/back', desc: 'Leave agent Focus Mode and return to the overview' },

@@ -71,4 +71,40 @@ describe('creating worktrees at the same time', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it('links parent directories before redundant child paths so adding "testdata" after "testdata/a.pcm" exposes all files', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-wt-links-'));
+    try {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+      git('init', '-q', '-b', 'main');
+      fs.writeFileSync(path.join(root, '.gitignore'), 'testdata/\n');
+      fs.mkdirSync(path.join(root, 'testdata'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'testdata', 'multiplex_seg1.pcm'), 'a');
+      fs.writeFileSync(path.join(root, 'testdata', 'capital_irlanda.pcm'), 'b');
+      git('add', '.gitignore');
+      git('-c', 'user.email=t@t.dev', '-c', 'user.name=T', 'commit', '-q', '-m', 'init');
+      const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+
+      // Child listed BEFORE parent directory — previously created a real `testdata/` dir
+      // and silently skipped linking `testdata`, leaving `capital_irlanda.pcm` missing.
+      const manager = new WorktreeManager(root, '.taskforge/worktrees', [
+        'testdata/multiplex_seg1.pcm',
+        'testdata',
+      ]);
+      const wt = await manager.createWorktree('TASK-1', 'preflight', head, { detached: true });
+      try {
+        expect(fs.lstatSync(path.join(wt.path, 'testdata')).isSymbolicLink()).toBe(true);
+        expect(fs.readFileSync(path.join(wt.path, 'testdata', 'capital_irlanda.pcm'), 'utf8')).toBe('b');
+        expect(fs.readFileSync(path.join(wt.path, 'testdata', 'multiplex_seg1.pcm'), 'utf8')).toBe('a');
+      } finally {
+        await manager.removeWorktree('TASK-1', 'preflight', true, true);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

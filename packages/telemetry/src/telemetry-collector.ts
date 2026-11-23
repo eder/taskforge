@@ -101,6 +101,19 @@ export class TelemetryCollector {
   }
 
   /**
+   * Budget-weighted token spend for a run: fresh tokens count at 100%, while
+   * provider-cached input tokens count at 10% (reflecting real prompt-caching
+   * cost so large cached prompts do not prematurely trip `execution.tokenBudget`).
+   * Equals `getRunTokenTotal(runId)` whenever no cached tokens are reported.
+   */
+  getRunBudgetTokens(runId: string): number {
+    const totals = this.costRepo.getTotalCostByRun(runId);
+    if (totals.totalCachedInputTokens <= 0) return this.getRunTokenTotal(runId);
+    const fresh = Math.max(0, totals.totalTokens - totals.totalCachedInputTokens);
+    return fresh + Math.round(totals.totalCachedInputTokens * 0.1);
+  }
+
+  /**
    * One line for the end of a run: what it actually used, against the plan's
    * estimate and the budget, and where most of it went. Only usage the agents
    * reported is counted, and the line says so when there was none.
@@ -115,12 +128,22 @@ export class TelemetryCollector {
     const freshTokens =
       Math.max(0, report.totalInputTokens - report.totalCachedInputTokens) +
       report.totalOutputTokens;
+    const budgetTokens = hasCache
+      ? Math.max(0, report.totalTokens - report.totalCachedInputTokens) +
+        Math.round(report.totalCachedInputTokens * 0.1)
+      : report.totalTokens;
     const parts = [
       hasCache
         ? `Tokens used: ${fmt(report.totalTokens)} (${fmt(freshTokens)} fresh, ${fmt(report.totalCachedInputTokens)} cached, ~$${report.totalCostUsd.toFixed(2)})`
         : `Tokens used: ${fmt(report.totalTokens)} (~$${report.totalCostUsd.toFixed(2)})`,
     ];
-    if (budget) parts.push(`${Math.round((report.totalTokens / budget) * 100)}% of the ${fmt(budget)} budget`);
+    if (budget) {
+      parts.push(
+        hasCache
+          ? `${Math.round((budgetTokens / budget) * 100)}% of the ${fmt(budget)} budget (${fmt(budgetTokens)} effective)`
+          : `${Math.round((report.totalTokens / budget) * 100)}% of the ${fmt(budget)} budget`,
+      );
+    }
     if (report.totalPlannedEstimatedTokens > 0) {
       parts.push(
         hasCache
