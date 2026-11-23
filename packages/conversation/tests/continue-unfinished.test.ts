@@ -178,4 +178,102 @@ describe('"just ask it to fix it": a message about a run that stopped continues 
     expect(prompt).toContain('fix the reviewer points first');
     expect(buildPrompt(assignment, { ...context, userGuidance: undefined })).not.toContain('when continuing the run');
   });
+
+  it('lets the user continue a failed run in natural language with an explicit run id (no /retry needed)', async () => {
+    seedFailedRun('run-1795195273323106', {
+      failureClass: 'code_or_test',
+      evidence: 'AssertionError: expected 1 to be 2',
+    });
+    shell = new InteractiveShell({ repoRoot: dir, database: db });
+    stubOrchestrator(shell);
+
+    const reply = plain(
+      await shell.handleInput('Eu quero que vc continue essa ultima run run-1795195273323106'),
+    );
+
+    expect(reply).toContain('run-1795195273323106');
+    expect(reply).not.toContain('Plan Proposal');
+    expect(internals(shell).focusedRun).toMatchObject({ runId: 'run-1795195273323106' });
+
+    await shell.handleInput('');
+    expect(resumed).toEqual([{ runId: 'run-1795195273323106', guidance: undefined }]);
+  });
+
+  it('when asked to continue a completed run id while a newer run failed (the zaira case), explains and focuses the stopped run instead of planning a vague goal', async () => {
+    // Older completed diagnostic run
+    new GoalRepository(db).create({
+      id: 'g-run-1795194797564537',
+      description: 'Eu preciso entender onde paramos no projeto para continuar',
+      repository: dir,
+    });
+    const runs = new RunRepository(db);
+    runs.create('run-1795194797564537', 'g-run-1795194797564537', { taskOutputs: { T1: 'Report...' } });
+    runs.updateStatus('run-1795194797564537', 'completed');
+    db.prepare('UPDATE runs SET created_at = ? WHERE id = ?').run(
+      new Date(Date.now() - 3_600_000).toISOString(),
+      'run-1795194797564537',
+    );
+
+    // Newer failed implementation run
+    seedFailedRun('run-1795195273323106', {
+      failureClass: 'code_or_test',
+      evidence: 'AssertionError: broken test',
+    });
+
+    shell = new InteractiveShell({ repoRoot: dir, database: db });
+    stubOrchestrator(shell);
+
+    const reply = plain(
+      await shell.handleInput('Eu quero que vc continue essa ultima run run-1795194797564537'),
+    );
+
+    expect(reply).toContain('run-1795194797564537 já foi concluída');
+    expect(reply).toContain('run-1795195273323106');
+    expect(reply).not.toContain('Plan Proposal');
+    expect(internals(shell).focusedRun).toMatchObject({ runId: 'run-1795195273323106' });
+  });
+
+  it('lets the user continue or inspect the last failed run without naming an id or typing /retry or /runs', async () => {
+    seedFailedRun('run-1795195273323200', {
+      failureClass: 'code_or_test',
+      evidence: 'AssertionError: expected true to be false',
+    });
+    shell = new InteractiveShell({ repoRoot: dir, database: db });
+    stubOrchestrator(shell);
+
+    // Natural-language run list (no /runs)
+    const runsOut = plain(await shell.handleInput('mostra as últimas runs'));
+    expect(runsOut).toContain('run-1795195273323200');
+
+    // Natural-language failure explanation (no /inspect)
+    const whyOut = plain(await shell.handleInput('por que a última run falhou?'));
+    expect(whyOut).toContain('run-1795195273323200');
+    expect(whyOut).toContain('AssertionError');
+    expect(resumed).toEqual([]);
+
+    // Leave and test bare "continua a última run"
+    await shell.handleInput('/back');
+    const contOut = plain(await shell.handleInput('continua a última run'));
+    expect(contOut).toContain('run-1795195273323200');
+    expect(internals(shell).focusedRun).toMatchObject({ runId: 'run-1795195273323200' });
+
+    await shell.handleInput('');
+    expect(resumed).toEqual([{ runId: 'run-1795195273323200', guidance: undefined }]);
+  });
+
+  it('surfaces the last stopped run in the startup continuationHint alongside any completed run', () => {
+    new GoalRepository(db).create({ id: 'g-done', description: 'Analyse project', repository: dir });
+    const runs = new RunRepository(db);
+    runs.create('run-1790000000000301', 'g-done', { taskOutputs: { T1: 'report' } });
+    runs.updateStatus('run-1790000000000301', 'completed');
+    seedFailedRun('run-1790000000000302', {
+      failureClass: 'environment',
+      evidence: 'missing file',
+    });
+
+    shell = new InteractiveShell({ repoRoot: dir, database: db });
+    const hint = plain((shell as unknown as { continuationHint: () => string }).continuationHint());
+    expect(hint).toContain('Continuing from run-1790000000000301');
+    expect(hint).toContain('Last stopped run: run-1790000000000302');
+  });
 });

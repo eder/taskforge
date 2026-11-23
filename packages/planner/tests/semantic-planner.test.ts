@@ -549,6 +549,56 @@ describe('SemanticPlanner', () => {
     ]);
   });
 
+  it('reconciles contradictory mutating scopes (wildcard "*" or mirrored paths) instead of falling back to heuristic', async () => {
+    const planner = new SemanticPlanner({
+      apiKey: 'test-key',
+      customCaller: async () => ({
+        tasks: [
+          {
+            taskId: 'TASK-1',
+            title: 'Update iOS capabilities contract',
+            description: 'Document POST /memory/control in ios/CAPABILITIES.md',
+            type: 'implementation',
+            completionMode: 'mutation',
+            dependencies: [],
+            objective: 'Update ios/CAPABILITIES.md',
+            allowedScope: ['ios/CAPABILITIES.md'],
+            forbiddenChanges: ['ios/CAPABILITIES.md'],
+            acceptanceCriteria: ['Contract documented'],
+          },
+          {
+            taskId: 'TASK-2',
+            title: 'Fix memory schema',
+            description: 'Fix PENDING_CONFIRMATION in server/adapters/memory.py',
+            type: 'implementation',
+            completionMode: 'mutation',
+            dependencies: [],
+            objective: 'Fix memory schema',
+            allowedScope: ['server/adapters/memory.py'],
+            forbiddenChanges: ['*'],
+            acceptanceCriteria: ['Tests pass'],
+          },
+        ],
+      }),
+    });
+
+    const graph = await planner.plan({
+      id: 'goal-zaira-contradiction',
+      description: 'Fix memory bugs and align contracts',
+      repository: '/repo',
+      constraints: [],
+      acceptanceCriteria: [],
+      createdAt: new Date(),
+    });
+
+    const provenance = graph.metadata?.planner as { source?: string } | undefined;
+    expect(provenance?.source).toBe('semantic_model');
+    expect(graph.getTask('TASK-1')?.contract.allowedScope).toEqual(['ios/CAPABILITIES.md']);
+    expect(graph.getTask('TASK-1')?.contract.forbiddenChanges).toEqual([]);
+    expect(graph.getTask('TASK-2')?.contract.allowedScope).toEqual(['server/adapters/memory.py']);
+    expect(graph.getTask('TASK-2')?.contract.forbiddenChanges).toEqual([]);
+  });
+
   it('Requirement 3: revises existing plan with typed revisions without creating new goal', async () => {
     const planner = new SemanticPlanner();
     const goal: Goal = {

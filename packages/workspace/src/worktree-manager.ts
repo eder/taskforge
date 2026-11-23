@@ -112,7 +112,23 @@ export class WorktreeManager {
         if (rel && fs.existsSync(path.join(this.repoRoot, rel))) found.add(rel);
       }
     }
-    return [...found];
+    // Sort shallowest paths first and prune descendants whose ancestor directory
+    // is already linked. Otherwise linking a child like "testdata/a.pcm" creates
+    // a real "testdata/" directory first, causing a later "testdata" link to be
+    // skipped because the directory already exists.
+    const sorted = [...found].sort(
+      (a, b) => a.split(path.sep).length - b.split(path.sep).length || a.length - b.length,
+    );
+    const pruned: string[] = [];
+    for (const rel of sorted) {
+      const posix = rel.replace(/\\/g, '/');
+      const coveredByAncestor = pruned.some((parent) => {
+        const parentPosix = parent.replace(/\\/g, '/');
+        return posix === parentPosix || posix.startsWith(`${parentPosix}/`);
+      });
+      if (!coveredByAncestor) pruned.push(rel);
+    }
+    return pruned;
   }
 
   /**
@@ -128,8 +144,10 @@ export class WorktreeManager {
       const target = path.join(worktreePath, rel);
       if (fs.existsSync(target) || isTrackedPathPlaceholder(target)) continue;
       try {
+        const src = path.join(this.repoRoot, rel);
         fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.symlinkSync(path.join(this.repoRoot, rel), target, 'dir');
+        const symlinkType = fs.statSync(src).isDirectory() ? 'dir' : 'file';
+        fs.symlinkSync(src, target, symlinkType);
         await git.ensureLocalExclude(`/${rel.replace(/\\/g, '/')}`);
       } catch {
         // best effort: a missing link only means verification may need its own setup

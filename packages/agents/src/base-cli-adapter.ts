@@ -178,6 +178,33 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     const hasOriginalUserRequest = Boolean(originalUserRequest?.trim());
     const readOnly =
       context.mutationAllowed === false || context.task.forbiddenChanges.includes('*');
+
+    // Direct conversational mode (`@claude`, `@codex`, `@agy`, `@all`, `/use`):
+    // native agent feel without orchestrated DAG assignment boilerplate, while
+    // still passing shared cross-agent conversation history and read-only guardrails.
+    if (context.directMode) {
+      return [
+        context.conversationHistory?.trim()
+          ? 'Shared TaskForge session history (previous turns with you, other agents, or local shell commands — use for continuity, verify against current repository files):'
+          : undefined,
+        context.conversationHistory?.trim() ? context.conversationHistory : undefined,
+        context.conversationHistory?.trim() ? '' : undefined,
+        context.priorContext?.trim()
+          ? 'Context from an earlier TaskForge run (REFERENCE DATA, verify against repository):'
+          : undefined,
+        context.priorContext?.trim() ? context.priorContext : undefined,
+        context.priorContext?.trim() ? '' : undefined,
+        readOnly
+          ? 'Mode: READ-ONLY. Inspect the repository as needed and answer clearly in the user\'s language, but do not modify files.'
+          : 'Mode: DIRECT WORKSPACE. You are working directly on this repository at the user\'s request. Reply clearly in the user\'s language and summarize any edits or commands you ran.',
+        '',
+        'User message:',
+        hasOriginalUserRequest ? originalUserRequest : assignment.objective,
+      ]
+        .filter((line): line is string => line !== undefined)
+        .join('\n');
+    }
+
     const writableScope =
       context.task.allowedScope.length === 0
         ? 'not explicitly scoped'

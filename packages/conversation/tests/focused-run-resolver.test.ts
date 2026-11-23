@@ -10,7 +10,7 @@ import {
   TaskRepository,
   EventRepository,
 } from '@taskforge/persistence';
-import { classifyFocusedInstruction } from '../src/focused-run-resolver.js';
+import { classifyFocusedInstruction, parseNaturalRunRequest } from '../src/focused-run-resolver.js';
 import { InteractiveShell } from '../src/interactive-shell.js';
 import type { RunFocus } from '../src/run-focus.js';
 
@@ -313,5 +313,78 @@ describe('InteractiveShell open-text resolution of stopped runs', () => {
     expect(resumes).toHaveLength(1);
     expect(resumes[0].runId).toBe('run-1790000000000104');
     expect(resumes[0].guidance).toBeUndefined();
+  });
+});
+
+describe('parseNaturalRunRequest (natural-language run resume & inspect without slash commands)', () => {
+  it('recognizes PT and EN continue/resume requests with or without an explicit run id', () => {
+    expect(parseNaturalRunRequest('Eu quero que vc continue essa ultima run run-1795194797564537')).toEqual({
+      kind: 'continue',
+      bare: true,
+      explicitRunId: 'run-1795194797564537',
+      guidance: undefined,
+      language: 'pt',
+    });
+    expect(parseNaturalRunRequest('continua a última run')).toEqual({
+      kind: 'continue',
+      bare: true,
+      explicitRunId: undefined,
+      guidance: undefined,
+      language: 'pt',
+    });
+    expect(parseNaturalRunRequest('retoma de onde parou')).toEqual({
+      kind: 'continue',
+      bare: true,
+      explicitRunId: undefined,
+      guidance: undefined,
+      language: 'pt',
+    });
+    expect(parseNaturalRunRequest('continue the last run')).toEqual({
+      kind: 'continue',
+      bare: true,
+      explicitRunId: undefined,
+      guidance: undefined,
+      language: 'en',
+    });
+    expect(parseNaturalRunRequest('resume run-1795195273323106')).toEqual({
+      kind: 'continue',
+      bare: true,
+      explicitRunId: 'run-1795195273323106',
+      guidance: undefined,
+      language: 'en',
+    });
+  });
+
+  it('extracts extra guidance when the user adds instructions alongside continuing a run', () => {
+    const req = parseNaturalRunRequest('continua a última run pulando o preflight');
+    expect(req.kind).toBe('continue');
+    expect(req.bare).toBe(false);
+    expect(req.guidance).toBe('pulando o preflight');
+  });
+
+  it('recognizes natural-language inspection questions about the last or named run', () => {
+    expect(parseNaturalRunRequest('por que a última run falhou?').kind).toBe('inspect');
+    expect(parseNaturalRunRequest('o que aconteceu na run-1795195273323106?')).toMatchObject({
+      kind: 'inspect',
+      explicitRunId: 'run-1795195273323106',
+      language: 'pt',
+    });
+    expect(parseNaturalRunRequest('why did the last run fail?')).toMatchObject({
+      kind: 'inspect',
+      language: 'en',
+    });
+  });
+
+  it('does NOT hijack normal goals that merely mention continuing or reference a completed run report', () => {
+    expect(
+      parseNaturalRunRequest('Eu preciso entender onde paramos no projeto para continuar').kind,
+    ).toBe('none');
+    expect(
+      parseNaturalRunRequest('implement item 1 from run-1790000000000006 with tests').kind,
+    ).toBe('none');
+    expect(
+      parseNaturalRunRequest('usando a run-1795194797564537, faça os problemas concretos encontrados').kind,
+    ).toBe('none');
+    expect(parseNaturalRunRequest('continue implementing the payment module').kind).toBe('none');
   });
 });

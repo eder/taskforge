@@ -345,6 +345,17 @@ export interface AgentContext {
    * cockpit UI can render per tool call without parsing provider JSON itself.
    */
   onStreamEvent?: (event: AgentStreamEvent) => void;
+  /**
+   * Direct conversational mode (`@claude`, `@codex`, `@agy`, `@all`, `/use`):
+   * sends a clean conversational prompt without heavy DAG assignment boilerplate
+   * while preserving provider sandboxing, streaming, and env isolation.
+   */
+  directMode?: boolean;
+  /**
+   * Rolling cross-agent conversation history (previous turns and `!shell` outputs)
+   * injected in direct mode so switching agents preserves shared context.
+   */
+  conversationHistory?: string;
 }
 
 export interface VerificationCheck {

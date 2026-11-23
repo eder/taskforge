@@ -143,4 +143,34 @@ describe('AgentQuotaTracker authentication failures', () => {
     });
     expect(store.rows.has('claude')).toBe(false);
   });
+
+  it('a sign-in check saying "signed in" does NOT clear a subscription/org denial like oauth_org_not_allowed', async () => {
+    const tracker = AgentQuotaTracker.getInstance();
+    tracker.configureStore(store);
+    tracker.recordFailure('claude', 'Claude Code authentication failed: oauth_org_not_allowed');
+    const signedInClaude: AgentAdapter = {
+      id: 'claude',
+      name: 'Claude Code',
+      detect: async () => true,
+      authStatus: async () => ({ state: 'signed_in' }),
+      capabilities: async () => ({
+        canRead: true,
+        canWrite: true,
+        canExecute: true,
+        languages: [],
+        tools: [],
+      }),
+      execute: async () => ({ success: true, message: '', durationMs: 0 }),
+    };
+
+    const reports = await AgentDetector.detect([signedInClaude]);
+    expect(reports[0]).toMatchObject({
+      id: 'claude',
+      ready: false,
+      quotaStatus: 'auth_failed',
+    });
+    expect(reports[0].quotaReason).toContain('oauth_org_not_allowed');
+    expect(tracker.isAvailable('claude')).toBe(false);
+    expect(store.rows.has('claude')).toBe(true);
+  });
 });

@@ -1112,7 +1112,7 @@ export class RunOrchestrator {
       onProgress: options.onProgress,
       abortSignal: options.abortSignal,
       tokenBudget: options.tokenBudget ?? this.config.execution.tokenBudget,
-      tokensSpent: () => this.telemetry.getRunTokenTotal(runId),
+      tokensSpent: () => this.telemetry.getRunBudgetTokens(runId),
       resumeState,
       skipPreflight: options.skipPreflight,
     });

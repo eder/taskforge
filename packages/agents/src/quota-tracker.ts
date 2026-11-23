@@ -47,6 +47,23 @@ export interface AgentQuotaStore {
  */
 const AUTH_RETRY_MS = 30 * 60 * 1000;
 
+/**
+ * Subscription/org denials (`oauth_org_not_allowed`, disabled subscription) persist even though
+ * `claude auth status` still reports `loggedIn: true`. Keep the circuit open longer and never
+ * let a `signed_in` status probe wipe it; the user can clear it immediately with `/agents reset`.
+ */
+const SUBSCRIPTION_RETRY_MS = 4 * 60 * 60 * 1000;
+
+const SUBSCRIPTION_DENIAL_PATTERNS = [
+  /oauth[_ ]org[_ ]not[_ ]allowed/i,
+  /disabled [^\n]{0,40}subscription access/i,
+];
+
+function isSubscriptionDenial(text?: string): boolean {
+  if (!text) return false;
+  return SUBSCRIPTION_DENIAL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 /** Provider errors are at the end of a failed run; the start is the prompt and whatever the agent echoed. */
 const AUTH_FAILURE_WINDOW_CHARS = 4000;
 
@@ -150,11 +167,15 @@ export class AgentQuotaTracker {
     const isAuthFailure = looksLikeAuthFailure(output);
 
     if (isAuthFailure) {
+      const subscriptionDenied = isSubscriptionDenial(output.slice(-AUTH_FAILURE_WINDOW_CHARS));
       this.setRecord({
         agentId,
         status: 'auth_failed',
-        reason: 'authentication failed or session expired',
+        reason: subscriptionDenied
+          ? 'subscription/org access denied (oauth_org_not_allowed)'
+          : 'authentication failed or session expired',
         recordedAt: observedAt,
+        resetAt: subscriptionDenied ? observedAt + SUBSCRIPTION_RETRY_MS : undefined,
         source: 'runtime',
       });
       return true;
@@ -274,11 +295,16 @@ export class AgentQuotaTracker {
 
   /**
    * The agent's own sign-in check says it is signed in, so a recorded authentication failure is stale.
-   * A failure the user set by hand is left alone.
+   * A failure the user set by hand — or a subscription/org denial (`oauth_org_not_allowed`), where
+   * `auth status` still reports `signed_in` despite an inactive subscription — is left alone.
    */
   clearAuthFailure(agentId: string): void {
     const record = this.records.get(agentId);
-    if (record?.status === 'auth_failed' && record.source !== 'manual') {
+    if (
+      record?.status === 'auth_failed' &&
+      record.source !== 'manual' &&
+      !isSubscriptionDenial(record.reason)
+    ) {
       this.records.delete(agentId);
       this.safeDelete(agentId);
     }
