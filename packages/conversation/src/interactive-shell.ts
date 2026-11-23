@@ -174,6 +174,20 @@ import {
   type DirectGitIntent,
   type PendingDirectGitAction,
 } from './direct-git-actions.js';
+import {
+  loadLivingPlan,
+  saveLivingPlan,
+  deleteLivingPlan,
+  getNextPendingWave,
+  markWaveStatus,
+  shouldOfferLivingPlan,
+  generateLivingPlanBlueprint,
+  refineLivingPlan,
+  buildWaveExecutionGoal,
+  formatLivingPlanDisplay,
+  type LivingPlan,
+  type LivingPlanGeneratorFn,
+} from './living-plan.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -206,6 +220,13 @@ export interface ShellOptions {
    * opt-in during Vitest so existing orchestrated-plan tests remain deterministic).
    */
   smartDirectDispatch?: boolean;
+  /**
+   * Automatically offer a domain-agnostic Living Plan (`.taskforge/plan.md`) on
+   * greenfield repositories (defaults to true in live CLI, opt-in during Vitest).
+   */
+  enableLivingPlanAutoDetect?: boolean;
+  /** Optional custom generator for Living Plan blueprints (used in tests or custom providers). */
+  livingPlanGenerator?: LivingPlanGeneratorFn;
 }
 
 /** An agent reading the repository to plan can take a minute or more (measured: 25-60 s with Codex). */
@@ -234,8 +255,15 @@ export class InteractiveShell {
   private pendingPipelineFollowUp?: PendingPipelineFollowUp;
   /** Pending conversational direct git commit or PR confirmation. */
   private pendingDirectGitAction?: PendingDirectGitAction;
+  /** Active interactive Living Plan blueprint awaiting refinement or wave launch. */
+  private pendingLivingPlan?: LivingPlan;
+  /** Tracks the wave number currently being planned/executed from `.taskforge/plan.md`. */
+  private activeLivingPlanWave?: { waveNumber: number; waveName: string };
   /** Whether plain small requests in `auto` mode fast-path straight to Direct Mode. */
   private smartDirectDispatch: boolean;
+  /** Whether greenfield repositories automatically enter the Living Plan blueprint flow. */
+  private enableLivingPlanAutoDetect: boolean;
+  private livingPlanGenerator?: LivingPlanGeneratorFn;
   private negotiator: NegotiationManager;
   private router: RoutingProvider;
   private agentSelector: AgentSelector;
@@ -370,6 +398,8 @@ export class InteractiveShell {
     );
     this.githubWorkflowService = new GitHubWorkflowService(this.db, this.repoRoot);
     this.smartDirectDispatch = options.smartDirectDispatch ?? !process.env.VITEST;
+    this.enableLivingPlanAutoDetect = options.enableLivingPlanAutoDetect ?? !process.env.VITEST;
+    this.livingPlanGenerator = options.livingPlanGenerator;
     this.checkpointManager = new DirectCheckpointManager(this.repoRoot, this.gitService);
     this.directRunner = new DirectAgentRunner({
       repoRoot: this.repoRoot,
@@ -962,6 +992,9 @@ export class InteractiveShell {
         this.pendingDirectGitAction = undefined;
         return this.executePendingDirectGitAction(action);
       }
+      if (this.pendingLivingPlan) {
+        return this.launchNextLivingPlanWave(abortSignal);
+      }
       if (this.pendingPipelineFollowUp) {
         const pending = this.pendingPipelineFollowUp;
         this.pendingPipelineFollowUp = undefined;
@@ -982,6 +1015,12 @@ export class InteractiveShell {
     // Pending direct git commit/PR confirmation
     if (this.pendingDirectGitAction) {
       const handled = await this.handleDirectGitActionReply(text);
+      if (handled !== undefined) return handled;
+    }
+
+    // Pending Living Plan blueprint refinement / launch
+    if (this.pendingLivingPlan && !text.startsWith('/') && !text.startsWith('@') && !text.startsWith('!')) {
+      const handled = await this.handleLivingPlanReply(text, abortSignal);
       if (handled !== undefined) return handled;
     }
 
@@ -1014,12 +1053,35 @@ export class InteractiveShell {
       return this.formatCheckpointsList();
     }
 
+    const blueprintMatch = text.match(/^\/(?:blueprint|waves)(?:\s+(.*))?$/i);
+    if (blueprintMatch) {
+      return this.handleBlueprintCommand((blueprintMatch[1] ?? '').trim(), abortSignal);
+    }
+
+    // Natural-language wave advancement when a `.taskforge/plan.md` exists
+    if (
+      this.inRepo &&
+      !this.currentGraph &&
+      !this.focusedRun &&
+      /^(?:(?:executa(?:r)?|roda(?:r)?|inicia(?:r)?|continua(?:r)?|run|start|launch|execute)\s+(?:a\s+|the\s+)?)?(?:pr[óo]xima\s+(?:wave|onda)|next\s+wave)[!.?]*$/i.test(
+        text,
+      )
+    ) {
+      if (loadLivingPlan(this.repoRoot)) {
+        return this.launchNextLivingPlanWave(abortSignal);
+      }
+    }
+
     // Focus Mode navigation. Recognized as literal commands (not routed
     // through the operator's NLU intent parser) precisely so they work the
     // same way whether or not the cockpit is currently focused.
     if (text === '/back' || text === '/overview' || text === 'q') {
       if (this.focusedAssignmentId) {
         return this.exitFocusMode();
+      }
+      if (this.pendingLivingPlan && text !== 'q') {
+        this.pendingLivingPlan = undefined;
+        return `${colors.dim}Paused interactive blueprint alignment. Your plan stays saved in .taskforge/plan.md — run /blueprint anytime.${colors.reset}`;
       }
       if (this.focusedRun && text !== 'q') {
         const left = this.focusedRun.runId;
@@ -1649,6 +1711,8 @@ export class InteractiveShell {
         this.focusedRun = undefined;
         this.pendingPipelineFollowUp = undefined;
         this.pendingDirectGitAction = undefined;
+        this.pendingLivingPlan = undefined;
+        this.activeLivingPlanWave = undefined;
         this.directMemory.clear();
         this.directRunner.clearSessions();
         await this.checkpointManager.clear();
@@ -1951,6 +2015,37 @@ export class InteractiveShell {
               .analyze({ goalDescription: intent.goal })
               .catch(() => undefined)
           : undefined;
+
+        // Wave C: Greenfield / large phased project detection -> Living Plan (.taskforge/plan.md).
+        if (
+          this.inRepo &&
+          !this.activeLivingPlanWave &&
+          !explicitRunIdEarly &&
+          executionIntent.mutationAllowed
+        ) {
+          const lpCheck = shouldOfferLivingPlan(intent.goal, repoProfile, {
+            allowAutoGreenfield: this.enableLivingPlanAutoDetect,
+          });
+          if (lpCheck.shouldOffer) {
+            const plan = await generateLivingPlanBlueprint(intent.goal, {
+              repoProfile,
+              openAiApiKey: resolveOpenAIApiKey(this.config),
+              openAiBaseUrl: resolveOpenAIBaseUrl(this.config),
+              openAiModel: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini',
+              generator: this.livingPlanGenerator,
+            });
+            const savedPath = saveLivingPlan(this.repoRoot, plan);
+            this.pendingLivingPlan = plan;
+            this.conversationState = 'IDLE';
+            this.activeGoal = undefined;
+            this.currentGraph = undefined;
+            return formatLivingPlanDisplay(plan, {
+              savedPath: path.relative(this.repoRoot, savedPath) || savedPath,
+              interactivePrompt: true,
+            });
+          }
+        }
+
         const proposedGraph = await this.planner.plan(goal, repoProfile);
         const negotiatedGraph = await this.negotiator.negotiateGraph(
           proposedGraph,
@@ -1962,6 +2057,20 @@ export class InteractiveShell {
           executionIntent,
         );
         this.currentGraph = invariant.graph;
+
+        // Wave C: On a greenfield Wave 1 (Foundation & Contracts), the repo has no
+        // source directories yet, so mutating foundation tasks must be allowed to
+        // create new root/source files without tripping a stale README-only scope.
+        if (this.activeLivingPlanWave?.waveNumber === 1) {
+          const activePlan = loadLivingPlan(this.repoRoot);
+          if (activePlan?.isGreenfield) {
+            for (const task of this.currentGraph.getAllTasks()) {
+              if (taskProducesChanges(task)) {
+                task.contract.allowedScope = ['**'];
+              }
+            }
+          }
+        }
 
         // Honor natural-language agent preferences (e.g. "usa o claude para implementar e o codex para revisar").
         const agentPrefs = extractOrchestratedAgentPreferences(intent.goal);
@@ -2344,7 +2453,8 @@ export class InteractiveShell {
                   : 'IDLE';
 
               const summary = await this.formatRunSummary(result);
-              this.viewport.writeUpper(`\n${summary}\n`);
+              const waveBanner = this.recordLivingPlanWaveOutcome(result);
+              this.viewport.writeUpper(`\n${summary}${waveBanner ? `\n\n${waveBanner}` : ''}\n`);
               this.viewport.drawFooter('');
             })
             .catch((err) => {
@@ -2394,7 +2504,9 @@ export class InteractiveShell {
               ? 'DELIVERY_READY'
               : 'IDLE';
 
-          return await this.formatRunSummary(result);
+          const summary = await this.formatRunSummary(result);
+          const waveBanner = this.recordLivingPlanWaveOutcome(result);
+          return waveBanner ? `${summary}\n\n${waveBanner}` : summary;
         } catch (err) {
           this.conversationState = 'IDLE';
           return `${this.describeUnexpectedStop(runId, err)}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
@@ -3378,6 +3490,187 @@ export class InteractiveShell {
     } catch {
       // Best-effort persistence: ignore if database is already closed during shutdown.
     }
+  }
+
+  /** Handles `/blueprint` (`/waves`) commands for creating, viewing, refining, resetting, or advancing `.taskforge/plan.md`. */
+  private async handleBlueprintCommand(argText: string, abortSignal?: AbortSignal): Promise<string> {
+    if (!this.inRepo) {
+      return `${colors.red}✖ /blueprint requires a Git repository.${colors.reset}`;
+    }
+    const lower = argText.toLowerCase();
+
+    if (!argText || lower === 'show' || lower === 'status') {
+      const existing = loadLivingPlan(this.repoRoot);
+      if (!existing) {
+        return `${colors.dim}No Living Plan found at .taskforge/plan.md. Create one with: /blueprint <your project goal>${colors.reset}`;
+      }
+      const next = getNextPendingWave(existing);
+      if (next) this.pendingLivingPlan = existing;
+      return formatLivingPlanDisplay(existing, {
+        savedPath: '.taskforge/plan.md',
+        interactivePrompt: Boolean(next),
+      });
+    }
+
+    if (lower === 'reset' || lower === 'clear' || lower === 'delete') {
+      this.pendingLivingPlan = undefined;
+      this.activeLivingPlanWave = undefined;
+      const deleted = deleteLivingPlan(this.repoRoot);
+      return deleted
+        ? `${colors.green}✔${colors.reset} Removed .taskforge/plan.md and cleared active Living Plan state.`
+        : `${colors.dim}No .taskforge/plan.md to remove.${colors.reset}`;
+    }
+
+    if (lower === 'next' || lower === 'run' || lower === 'start') {
+      return this.launchNextLivingPlanWave(abortSignal);
+    }
+
+    const refineMatch = /^refine\s+(.+)$/i.exec(argText);
+    if (refineMatch) {
+      const existing = loadLivingPlan(this.repoRoot);
+      if (!existing) {
+        return `${colors.red}✖ No active .taskforge/plan.md to refine.${colors.reset} Create one with /blueprint <goal>.`;
+      }
+      const repoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+        .analyze({ goalDescription: existing.goal })
+        .catch(() => undefined);
+      const refined = await refineLivingPlan(existing, refineMatch[1].trim(), {
+        repoProfile,
+        openAiApiKey: resolveOpenAIApiKey(this.config),
+        openAiBaseUrl: resolveOpenAIBaseUrl(this.config),
+        openAiModel: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini',
+        generator: this.livingPlanGenerator,
+      });
+      const savedPath = saveLivingPlan(this.repoRoot, refined);
+      this.pendingLivingPlan = refined;
+      return formatLivingPlanDisplay(refined, {
+        savedPath: path.relative(this.repoRoot, savedPath) || savedPath,
+        interactivePrompt: true,
+      });
+    }
+
+    // Generate a brand-new domain-agnostic blueprint for the given goal
+    const repoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+      .analyze({ goalDescription: argText })
+      .catch(() => undefined);
+    const plan = await generateLivingPlanBlueprint(argText, {
+      repoProfile,
+      openAiApiKey: resolveOpenAIApiKey(this.config),
+      openAiBaseUrl: resolveOpenAIBaseUrl(this.config),
+      openAiModel: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini',
+      generator: this.livingPlanGenerator,
+    });
+    const savedPath = saveLivingPlan(this.repoRoot, plan);
+    this.pendingLivingPlan = plan;
+    return formatLivingPlanDisplay(plan, {
+      savedPath: path.relative(this.repoRoot, savedPath) || savedPath,
+      interactivePrompt: true,
+    });
+  }
+
+  /** Handles conversational replies while aligning an interactive Living Plan blueprint. */
+  private async handleLivingPlanReply(
+    text: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const plan = this.pendingLivingPlan;
+    if (!plan) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:y|yes|s|sim|ok|go|start|inicia(?:r)?|executa(?:r)?|pode\s+ir|pr[óo]xima\s+wave|next\s+wave)$/.test(lower)) {
+      return this.launchNextLivingPlanWave(abortSignal);
+    }
+
+    if (/^(?:cancel(?:ar)?|descartar|discard|n[aã]o|no|q)$/.test(lower)) {
+      this.pendingLivingPlan = undefined;
+      return `${colors.dim}Paused Living Plan alignment (.taskforge/plan.md kept). Run /blueprint anytime.${colors.reset}`;
+    }
+
+    // Refine the Living Plan conversationally with the user's feedback!
+    const repoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+      .analyze({ goalDescription: plan.goal })
+      .catch(() => undefined);
+    const refined = await refineLivingPlan(plan, text, {
+      repoProfile,
+      openAiApiKey: resolveOpenAIApiKey(this.config),
+      openAiBaseUrl: resolveOpenAIBaseUrl(this.config),
+      openAiModel: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini',
+      generator: this.livingPlanGenerator,
+    });
+    const savedPath = saveLivingPlan(this.repoRoot, refined);
+    this.pendingLivingPlan = refined;
+    return formatLivingPlanDisplay(refined, {
+      savedPath: path.relative(this.repoRoot, savedPath) || savedPath,
+      interactivePrompt: true,
+    });
+  }
+
+  /** Re-scans the live repository and launches the next pending wave from `.taskforge/plan.md`. */
+  private async launchNextLivingPlanWave(abortSignal?: AbortSignal): Promise<string> {
+    const plan = loadLivingPlan(this.repoRoot) ?? this.pendingLivingPlan;
+    if (!plan) {
+      this.pendingLivingPlan = undefined;
+      return `${colors.dim}No Living Plan found at .taskforge/plan.md. Create one with /blueprint <goal>.${colors.reset}`;
+    }
+    const wave = getNextPendingWave(plan);
+    if (!wave) {
+      this.pendingLivingPlan = undefined;
+      return `${colors.green}✔${colors.reset} All ${plan.waves.length} waves in .taskforge/plan.md are already completed!`;
+    }
+
+    // Re-analyze the live repository right before planning this wave so Wave 2+
+    // plans strictly against the real files and directory topology created earlier!
+    const liveRepoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
+      .analyze({ goalDescription: `${plan.goal} ${wave.objective}` })
+      .catch(() => undefined);
+
+    const updated = markWaveStatus(plan, wave.number, 'in_progress');
+    saveLivingPlan(this.repoRoot, updated);
+    this.pendingLivingPlan = undefined;
+    this.activeLivingPlanWave = { waveNumber: wave.number, waveName: wave.name };
+
+    const waveGoal = buildWaveExecutionGoal(updated, wave, liveRepoProfile);
+    const prevSmart = this.smartDirectDispatch;
+    this.smartDirectDispatch = false;
+    try {
+      return await this.handleInput(waveGoal, abortSignal);
+    } finally {
+      this.smartDirectDispatch = prevSmart;
+    }
+  }
+
+  /** Updates `.taskforge/plan.md` when a wave run completes or fails and surfaces next-wave prompt. */
+  private recordLivingPlanWaveOutcome(result: OrchestrationResult): string | undefined {
+    const active = this.activeLivingPlanWave;
+    if (!active) return undefined;
+    this.activeLivingPlanWave = undefined;
+
+    const plan = loadLivingPlan(this.repoRoot);
+    if (!plan) return undefined;
+
+    const status = result.status === 'completed' ? 'completed' : 'failed';
+    const updated = markWaveStatus(plan, active.waveNumber, status, {
+      runId: result.runId,
+      summary:
+        status === 'completed'
+          ? `Completed via ${result.runId} (${result.tasksCompleted} task(s))`
+          : `Stopped (${result.status}) via ${result.runId}`,
+    });
+    saveLivingPlan(this.repoRoot, updated);
+
+    if (status === 'completed') {
+      const next = getNextPendingWave(updated);
+      if (next) {
+        this.pendingLivingPlan = updated;
+        return [
+          `${colors.brand}✦ ${colors.bold}Living Plan Progress:${colors.reset} Wave ${active.waveNumber}/${updated.waves.length} (${active.waveName}) ${colors.green}✔ completed${colors.reset} and saved to .taskforge/plan.md.`,
+          `  ${colors.dim}↵ Enter (or /blueprint next): re-scan the repo and launch Wave ${next.number} — ${next.name} (${next.mode})   ·   /back to pause${colors.reset}`,
+        ].join('\n');
+      }
+      return `${colors.brand}✦ ${colors.bold}Living Plan Complete!${colors.reset} All ${updated.waves.length} waves in .taskforge/plan.md finished cleanly.`;
+    }
+
+    return `${colors.yellow}⚠${colors.reset} Living Plan Wave ${active.waveNumber} marked as failed in .taskforge/plan.md. Use /retry to finish it or /blueprint next to re-run.`;
   }
 
   /** Lists saved Direct Mode working-tree checkpoints available for `/undo`. */

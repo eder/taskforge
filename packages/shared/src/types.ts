@@ -435,6 +435,10 @@ export interface RepositoryProfile {
   summary: string;
   /** Where the code lives (directories with file counts), so plans can use real, non-overlapping scopes. */
   repositoryMap?: string[];
+  /** Number of tracked non-boilerplate source files in the repository. */
+  sourceFileCount?: number;
+  /** True when the repository is empty or near-empty (greenfield project). */
+  isGreenfield?: boolean;
   /** Offline BM25 + import-graph architectural context relevant to the current goal. */
   indexContext?: RepositoryIndexContext;
   /**
