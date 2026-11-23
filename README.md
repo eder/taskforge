@@ -274,6 +274,7 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/health` | Inspect Router, agents, provider quota, and local database health |
 | `/plan` | Inspect the current proposed or active plan |
 | `/blueprint` | Create, inspect, refine, or advance a domain-agnostic Living Plan (`.taskforge/plan.md`) across execution waves (`/blueprint [goal\|next\|refine <text>\|reset]`) |
+| `/council` | Convene a 3-round Multi-Agent Solution Debate Council (`/council [@a @b] <problem>`): independent proposals, dedicated per-solution cross-critiques, proponent refinements, and 1-Enter handoff to implement or turn into a Living Plan |
 | `/runs` | List past execution runs and delivery status |
 | `/inspect` | Inspect run → task → assignment history; accepts an optional run id |
 | `/tasks` | Show task and assignment status; accepts an optional task id |

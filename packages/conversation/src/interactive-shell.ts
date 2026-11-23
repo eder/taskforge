@@ -188,6 +188,14 @@ import {
   type LivingPlan,
   type LivingPlanGeneratorFn,
 } from './living-plan.js';
+import {
+  DebateCouncilRunner,
+  parseCouncilCommand,
+  formatCouncilProposalThread,
+  buildCouncilHandoffGoal,
+  type PendingCouncilDecision,
+  type CouncilSynthesizerFn,
+} from './debate-council.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -227,6 +235,8 @@ export interface ShellOptions {
   enableLivingPlanAutoDetect?: boolean;
   /** Optional custom generator for Living Plan blueprints (used in tests or custom providers). */
   livingPlanGenerator?: LivingPlanGeneratorFn;
+  /** Optional custom synthesizer for Wave D Solution Debate Council verdicts. */
+  councilSynthesizer?: CouncilSynthesizerFn;
 }
 
 /** An agent reading the repository to plan can take a minute or more (measured: 25-60 s with Codex). */
@@ -247,6 +257,7 @@ export class InteractiveShell {
   private directMemory = new DirectConversationMemory();
   private checkpointManager: DirectCheckpointManager;
   private directRunner: DirectAgentRunner;
+  private debateCouncil: DebateCouncilRunner;
   /** Sticky direct chat target: 'auto' (Hybrid Smart Mode), 'all' (parallel multi-agent), or an agent id. */
   private stickyAgentMode: 'auto' | 'all' | string = 'auto';
   /** Pending competitive multi-agent direct edit (`@codex @agy --edit`) awaiting winner pick. */
@@ -255,6 +266,8 @@ export class InteractiveShell {
   private pendingPipelineFollowUp?: PendingPipelineFollowUp;
   /** Pending conversational direct git commit or PR confirmation. */
   private pendingDirectGitAction?: PendingDirectGitAction;
+  /** Pending Wave D Multi-Agent Solution Debate Council verdict awaiting handoff choice. */
+  private pendingCouncilDecision?: PendingCouncilDecision;
   /** Active interactive Living Plan blueprint awaiting refinement or wave launch. */
   private pendingLivingPlan?: LivingPlan;
   /** Tracks the wave number currently being planned/executed from `.taskforge/plan.md`. */
@@ -418,6 +431,18 @@ export class InteractiveShell {
       openAiBaseUrl: openaiBaseUrl,
       openAiModel: advisorModel,
       verificationCommands: this.config.verification.commands,
+      onStateChanged: () => this.persistDirectSessionState(),
+    });
+    this.debateCouncil = new DebateCouncilRunner({
+      repoRoot: this.repoRoot,
+      agentRegistry: this.agentRegistry,
+      memory: this.directMemory,
+      timeoutMs: (this.config.execution.defaultTimeoutMinutes ?? 10) * 60_000,
+      onLiveLine: (line) => this.viewport.writeUpper(line),
+      openAiApiKey: openaiApiKey,
+      openAiBaseUrl: openaiBaseUrl,
+      openAiModel: advisorModel,
+      synthesizer: options.councilSynthesizer,
       onStateChanged: () => this.persistDirectSessionState(),
     });
     if (!options.freshSession) {
@@ -992,6 +1017,11 @@ export class InteractiveShell {
         this.pendingDirectGitAction = undefined;
         return this.executePendingDirectGitAction(action);
       }
+      if (this.pendingCouncilDecision) {
+        const decision = this.pendingCouncilDecision;
+        this.pendingCouncilDecision = undefined;
+        return this.launchCouncilHandoff(decision, 'verdict', abortSignal);
+      }
       if (this.pendingLivingPlan) {
         return this.launchNextLivingPlanWave(abortSignal);
       }
@@ -1015,6 +1045,12 @@ export class InteractiveShell {
     // Pending direct git commit/PR confirmation
     if (this.pendingDirectGitAction) {
       const handled = await this.handleDirectGitActionReply(text);
+      if (handled !== undefined) return handled;
+    }
+
+    // Pending Wave D Solution Debate Council handoff
+    if (this.pendingCouncilDecision) {
+      const handled = await this.handleCouncilDecisionReply(text, abortSignal);
       if (handled !== undefined) return handled;
     }
 
@@ -1056,6 +1092,25 @@ export class InteractiveShell {
     const blueprintMatch = text.match(/^\/(?:blueprint|waves)(?:\s+(.*))?$/i);
     if (blueprintMatch) {
       return this.handleBlueprintCommand((blueprintMatch[1] ?? '').trim(), abortSignal);
+    }
+
+    // Wave D: Multi-Agent Solution Debate Council (`/council`, `/debate`, or PT/EN natural language)
+    if (!this.currentGraph && !this.focusedRun && this.interactionGateway.getPendingRequests().length === 0) {
+      const registeredForCouncil = this.agentRegistry.list().map((a) => a.id);
+      const councilCmd = parseCouncilCommand(text, registeredForCouncil);
+      if (councilCmd) {
+        if (!councilCmd.problem) {
+          return `${colors.dim}Usage: /council [@agent1 @agent2] <problem to debate>${colors.reset}\n  ${colors.dim}Example: /council Como desenhar fila distribuída com idempotência e retry exponencial?${colors.reset}`;
+        }
+        this.pendingCouncilDecision = undefined;
+        const { result, pending } = await this.debateCouncil.runCouncil(
+          councilCmd.targets,
+          councilCmd.problem,
+          { abortSignal, saveReport: this.inRepo },
+        );
+        this.pendingCouncilDecision = pending;
+        return result.formatted;
+      }
     }
 
     // Natural-language wave advancement when a `.taskforge/plan.md` exists
@@ -1711,6 +1766,7 @@ export class InteractiveShell {
         this.focusedRun = undefined;
         this.pendingPipelineFollowUp = undefined;
         this.pendingDirectGitAction = undefined;
+        this.pendingCouncilDecision = undefined;
         this.pendingLivingPlan = undefined;
         this.activeLivingPlanWave = undefined;
         this.directMemory.clear();
@@ -3489,6 +3545,70 @@ export class InteractiveShell {
       });
     } catch {
       // Best-effort persistence: ignore if database is already closed during shutdown.
+    }
+  }
+
+  /** Handles replies after a Wave D Multi-Agent Solution Debate Council verdict. */
+  private async handleCouncilDecisionReply(
+    text: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const decision = this.pendingCouncilDecision;
+    if (!decision) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:\/back|\/cancel|cancel(?:ar)?|n[aã]o|no|keep|manter|refer[eê]ncia|q)$/.test(lower)) {
+      this.pendingCouncilDecision = undefined;
+      return `${colors.dim}Kept Council verdict in session memory${decision.verdict.savedReportPath ? ` (${decision.verdict.savedReportPath})` : ''}.${colors.reset}`;
+    }
+
+    const inspectMatch = /^(?:inspect|ver|mostrar|detalhes?|thread)\s+#?(\d+)$/i.exec(lower);
+    if (inspectMatch) {
+      return formatCouncilProposalThread(decision, parseInt(inspectMatch[1], 10));
+    }
+
+    if (/^(?:blueprint|living\s+plan|waves?|plano|plan)$/i.test(lower)) {
+      this.pendingCouncilDecision = undefined;
+      const handoff = buildCouncilHandoffGoal(decision, 'verdict');
+      return this.handleBlueprintCommand(handoff, abortSignal);
+    }
+
+    if (/^(?:y|yes|s|sim|implement(?:ar|e)?|aplica(?:r)?|apply|verdict|veredito|go)$/.test(lower)) {
+      this.pendingCouncilDecision = undefined;
+      return this.launchCouncilHandoff(decision, 'verdict', abortSignal);
+    }
+
+    const pickMatch =
+      /^(?:#?(\d+)|(?:implement(?:ar|e)?|aplica(?:r)?|apply|usa(?:r)?|use|escolho|pick|solu[çc][aã]o|solution)\s+#?(\d+))$/i.exec(
+        lower,
+      );
+    if (pickMatch) {
+      const idx = parseInt(pickMatch[1] ?? pickMatch[2], 10);
+      if (idx >= 1 && idx <= decision.proposals.length) {
+        this.pendingCouncilDecision = undefined;
+        return this.launchCouncilHandoff(decision, idx, abortSignal);
+      }
+      return `${colors.red}✖ Invalid solution #${idx}.${colors.reset} Choose 1..${decision.proposals.length}, inspect <n>, blueprint, Enter, or /back.`;
+    }
+
+    // Any other message dismisses the pending council menu and proceeds normally.
+    this.pendingCouncilDecision = undefined;
+    return undefined;
+  }
+
+  /** Hands off a Council Verdict or chosen proposal directly into orchestrated planning. */
+  private async launchCouncilHandoff(
+    decision: PendingCouncilDecision,
+    choice: 'verdict' | number,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    const goal = buildCouncilHandoffGoal(decision, choice);
+    const prevSmart = this.smartDirectDispatch;
+    this.smartDirectDispatch = false;
+    try {
+      return await this.handleInput(goal, abortSignal);
+    } finally {
+      this.smartDirectDispatch = prevSmart;
     }
   }
 
