@@ -203,6 +203,8 @@ export interface ProviderExecutionOutcome {
   artifacts: Array<{ path: string; description?: string; type?: string }>;
   runtimeLogRef?: string;
   usage?: AgentUsage;
+  /** Provider-native session/thread/conversation ID emitted in stream output (for direct-mode native resume). */
+  providerSessionId?: string;
 }
 
 export type CompletionFailureReason =
@@ -257,6 +259,8 @@ export interface AgentResult {
   completionReason?: CompletionFailureReason;
   completionEvidence?: CompletionEvidence;
   usage?: AgentUsage;
+  /** Provider-native session/thread/conversation ID emitted by the CLI, if any. */
+  providerSessionId?: string;
 }
 
 export function generateRunId(): string {
@@ -356,6 +360,16 @@ export interface AgentContext {
    * injected in direct mode so switching agents preserves shared context.
    */
   conversationHistory?: string;
+  /**
+   * Direct-mode native provider session/thread/conversation ID to resume instead
+   * of starting a cold process and re-sending the entire prompt history.
+   */
+  providerSessionId?: string;
+  /**
+   * When true (used in Direct Mode), allow the provider CLI to persist its native
+   * session/thread on disk so subsequent turns to the same agent can resume it.
+   */
+  persistProviderSession?: boolean;
 }
 
 export interface VerificationCheck {

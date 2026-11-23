@@ -18,6 +18,8 @@ export interface RunFailureLine {
   evidence?: string;
   /** For 'budget': what was spent against the cap. */
   budget?: { spent: number; budget: number };
+  /** Files modified outside allowedScope when the task stopped due to a SCOPE_VIOLATION. */
+  scopeViolations?: string[];
 }
 
 interface ReasonEvent {
@@ -176,6 +178,23 @@ export function describeRunFailures(
 
       const reason = mine.map(reasonFromEvent).find((r) => r);
       const kept = allMine.find((e) => e.type === 'TASK_CANDIDATE_PRESERVED');
+      const scopeEvt = mine.find(
+        (e) =>
+          e.type === 'SCOPE_VIOLATION' &&
+          Array.isArray(e.payload.violations) &&
+          (e.payload.violations as unknown[]).length > 0,
+      );
+      const hasSemanticBoundaryViolation = mine.some((e) => e.type === 'SEMANTIC_SCOPE_VIOLATION');
+      const scopeViolations =
+        scopeEvt && !hasSemanticBoundaryViolation
+          ? [
+              ...new Set(
+                (scopeEvt.payload.violations as unknown[]).filter(
+                  (v): v is string => typeof v === 'string' && v.trim().length > 0,
+                ),
+              ),
+            ]
+          : undefined;
       lines.push({
         taskId: task.id,
         title: task.title,
@@ -189,6 +208,7 @@ export function describeRunFailures(
         evidence:
           [...new Set(mine.flatMap((e) => [e.payload.reason, e.payload.evidence]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0))]
             .join('\n') || undefined,
+        ...(scopeViolations && scopeViolations.length > 0 ? { scopeViolations } : {}),
       });
     }
   }

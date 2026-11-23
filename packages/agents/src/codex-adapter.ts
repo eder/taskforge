@@ -25,16 +25,21 @@ export class CodexAdapter extends BaseCliAdapter {
     return ['OPENAI_API_KEY', 'CODEX_API_KEY'];
   }
 
+  private readonly hasCustomDefaultArgs: boolean;
+
   constructor(options: CliAdapterOptions = {}) {
+    const hasCustom = Boolean(options.defaultArgs && options.defaultArgs.length > 0);
     const defaultArgs =
-      options.defaultArgs && options.defaultArgs.length > 0
+      hasCustom && options.defaultArgs
         ? options.defaultArgs
-        // See the Claude adapter: TaskForge never resumes provider sessions.
+        // Orchestrated runs stay ephemeral; Direct Mode opts into native thread persistence
+        // via `context.persistProviderSession` / `context.providerSessionId`.
         : ['exec', '--json', '--ephemeral'];
     super({
       ...options,
       defaultArgs,
     });
+    this.hasCustomDefaultArgs = hasCustom;
   }
 
   /**
@@ -47,12 +52,27 @@ export class CodexAdapter extends BaseCliAdapter {
    * agent configuration is left alone.
    */
   protected formatArgs(prompt: string, context?: AgentContext): string[] {
-    const args = super.formatArgs(prompt, context);
     const chosenByUser = (this.options.defaultArgs ?? []).some(
       (a) => a === '-s' || a.startsWith('--sandbox') || a.startsWith('--dangerously-bypass') || a === '--full-auto',
     );
+    const readOnly = context
+      ? context.mutationAllowed === false || context.task.forbiddenChanges.includes('*')
+      : false;
+
+    if (!this.hasCustomDefaultArgs && context?.providerSessionId) {
+      const resumeArgs = ['exec', 'resume', '--json'];
+      if (!chosenByUser) {
+        resumeArgs.push('-c', `sandbox_mode="${readOnly ? 'read-only' : 'workspace-write'}"`);
+      }
+      resumeArgs.push(context.providerSessionId, prompt);
+      return resumeArgs;
+    }
+
+    let args = super.formatArgs(prompt, context);
+    if (!this.hasCustomDefaultArgs && context?.persistProviderSession) {
+      args = args.filter((a) => a !== '--ephemeral');
+    }
     if (chosenByUser || !context) return args;
-    const readOnly = context.mutationAllowed === false || context.task.forbiddenChanges.includes('*');
     return [...args.slice(0, -1), '--sandbox', readOnly ? 'read-only' : 'workspace-write', args[args.length - 1]];
   }
 

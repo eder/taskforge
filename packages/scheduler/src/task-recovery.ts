@@ -37,11 +37,14 @@ export interface PreservedCandidate {
   reason: string;
   evidence?: string;
   agentId?: string;
+  /** Explicitly approved by the operator (e.g. after expanding allowedScope) to re-verify without calling an agent. */
+  reuseWithoutAgent?: boolean;
 }
 
 /** Blockers that say nothing about the work itself. */
 export function candidateNeedsNoAgent(candidate: PreservedCandidate): boolean {
   return (
+    Boolean(candidate.reuseWithoutAgent) ||
     candidate.failureClass === 'verification_configuration' ||
     candidate.failureClass === 'environment' ||
     candidate.failureClass === 'policy'
