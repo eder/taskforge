@@ -13,4 +13,6 @@ export * from './direct-agent-session.js';
 export * from './problem-size-router.js';
 export * from './file-mention-completer.js';
 export * from './smart-auto-dispatcher.js';
+export * from './direct-checkpoint.js';
+export * from './direct-git-actions.js';
 export { summarizeGoal } from './shell-helpers.js';

@@ -1,7 +1,19 @@
+import { AGENT_EFFORT_LEVELS, type AgentEffortLevel } from '@taskforge/shared';
+
 export type DirectRouteCommand =
   | { kind: 'shell'; command: string }
   | { kind: 'switch_mode'; mode: 'auto' | 'all' | string }
   | { kind: 'direct_agents'; targets: 'all' | 'smart' | string[]; prompt: string; editMode?: boolean }
+  | { kind: 'direct_pipeline'; stages: string[]; prompt: string }
+  | { kind: 'direct_debate'; targets: 'all' | string[]; prompt: string }
+  | {
+      kind: 'model_config';
+      action: 'show' | 'set' | 'reset';
+      agentId?: string;
+      model?: string;
+      effort?: AgentEffortLevel;
+      error?: string;
+    }
   | { kind: 'none' };
 
 export interface OrchestratedAgentPreferences {
@@ -12,8 +24,9 @@ export interface OrchestratedAgentPreferences {
 
 export interface NaturalConfigUpdate {
   keyPath: string[];
-  value: number;
+  value: number | string | null;
   label: string;
+  action?: 'set' | 'delete';
 }
 
 export interface NaturalConfigChange {
@@ -90,8 +103,146 @@ export function parseDirectRouteCommand(
     return { kind: 'switch_mode', mode: rawTarget };
   }
 
-  // 3. Leading `@agent` mentions (`@claude ...`, `@claude @codex ...`, `@all ...`, or bare `@claude`).
+  // 2b. Per-agent model & effort selector: `/model`, `/model codex o3`, `/model codex o3 high`, `/model codex effort high`, `/model codex reset`
+  const modelMatch = /^\/model(?:\s+(.*))?$/i.exec(text);
+  if (modelMatch) {
+    const rest = (modelMatch[1] ?? '').trim();
+    if (!rest) {
+      return { kind: 'model_config', action: 'show' };
+    }
+    const tokens = rest.split(/\s+/).filter(Boolean);
+    const rawAgent = tokens[0].replace(/^@/, '').toLowerCase();
+    const agentId = resolveKnownAgent(rawAgent);
+    if (!agentId) {
+      return {
+        kind: 'model_config',
+        action: 'show',
+        error: `Unknown agent "${tokens[0]}". Try: /model codex o3, /model claude sonnet, /model agy gemini-2.5-pro.`,
+      };
+    }
+    if (tokens.length === 1) {
+      return { kind: 'model_config', action: 'show', agentId };
+    }
+    const second = tokens[1].toLowerCase();
+    if (second === 'reset' || second === 'default' || second === 'clear' || second === 'none') {
+      return { kind: 'model_config', action: 'reset', agentId };
+    }
+    if (second === 'effort') {
+      const eff = (tokens[2] ?? '').toLowerCase();
+      if (!eff || eff === 'reset' || eff === 'default') {
+        return { kind: 'model_config', action: 'reset', agentId, model: '__effort_only__' };
+      }
+      if (!(AGENT_EFFORT_LEVELS as readonly string[]).includes(eff)) {
+        return {
+          kind: 'model_config',
+          action: 'show',
+          error: `Unknown effort "${tokens[2]}". Valid levels: ${AGENT_EFFORT_LEVELS.join(', ')}.`,
+        };
+      }
+      return {
+        kind: 'model_config',
+        action: 'set',
+        agentId,
+        effort: eff as AgentEffortLevel,
+      };
+    }
+    const modelName = tokens[1];
+    const third = tokens[2]?.toLowerCase();
+    if (third) {
+      const normalizedEff = third.replace(/^--?effort=/, '');
+      if (!(AGENT_EFFORT_LEVELS as readonly string[]).includes(normalizedEff)) {
+        return {
+          kind: 'model_config',
+          action: 'show',
+          error: `Unknown effort "${tokens[2]}". Valid levels: ${AGENT_EFFORT_LEVELS.join(', ')}.`,
+        };
+      }
+      return {
+        kind: 'model_config',
+        action: 'set',
+        agentId,
+        model: modelName,
+        effort: normalizedEff as AgentEffortLevel,
+      };
+    }
+    return {
+      kind: 'model_config',
+      action: 'set',
+      agentId,
+      model: modelName,
+    };
+  }
+
+  // 3. Leading `@agent` mentions:
+  //    - `@codex -> @agy <task>` / `@codex -> @agy -> @claude <task>` (Direct Handoff Pipeline)
+  //    - `@codex <-> @agy <question>` / `@all <-> <question>` (2-Round Structured Direct Debate)
+  //    - `@claude ...`, `@claude @codex ...`, `@all ...`, or bare `@claude`
   if (text.startsWith('@')) {
+    // 3a. Structured Direct Debate (`<->` or `↔`): `@codex <-> @agy <question>` or `@all <-> <question>`
+    const allDebateMatch = /^@(all|todos|every|everyone)\s*(?:<->|↔)\s+(.+)$/i.exec(text);
+    if (allDebateMatch) {
+      return {
+        kind: 'direct_debate',
+        targets: 'all',
+        prompt: allDebateMatch[2].trim(),
+      };
+    }
+    const debateChainMatch =
+      /^(@[a-zA-Z0-9_-]+(?:\s*(?:<->|↔)\s*@[a-zA-Z0-9_-]+)+)(?:[:,])?\s+(.+)$/.exec(text);
+    if (debateChainMatch) {
+      const rawAgents = debateChainMatch[1]
+        .split(/\s*(?:<->|↔)\s*/)
+        .map((t) => t.replace(/^@/, '').trim());
+      const resolved: string[] = [];
+      let valid = true;
+      for (const tok of rawAgents) {
+        const agent = resolveKnownAgent(tok);
+        if (!agent) {
+          valid = false;
+          break;
+        }
+        if (!resolved.includes(agent)) resolved.push(agent);
+      }
+      if (valid && resolved.length >= 2) {
+        return {
+          kind: 'direct_debate',
+          targets: resolved,
+          prompt: debateChainMatch[2].trim(),
+        };
+      }
+    }
+
+    // 3b. Direct Handoff Pipeline (`->`, `=>`, or `→`): `@codex -> @agy <task>`
+    const pipelineChainMatch =
+      /^(@[a-zA-Z0-9_-]+(?:\s*(?:->|=>|→)\s*@[a-zA-Z0-9_-]+)+)(?:[:,])?\s+(.+)$/.exec(text);
+    if (pipelineChainMatch) {
+      const rawStages = pipelineChainMatch[1]
+        .split(/\s*(?:->|=>|→)\s*/)
+        .map((t) => t.replace(/^@/, '').trim());
+      const stages: string[] = [];
+      let valid = true;
+      for (const tok of rawStages) {
+        const lower = tok.toLowerCase();
+        if (SMART_ALIASES.has(lower) || AUTO_ALIASES.has(lower)) {
+          stages.push('smart');
+          continue;
+        }
+        const agent = resolveKnownAgent(tok);
+        if (!agent) {
+          valid = false;
+          break;
+        }
+        stages.push(agent);
+      }
+      if (valid && stages.length >= 2) {
+        return {
+          kind: 'direct_pipeline',
+          stages,
+          prompt: pipelineChainMatch[2].trim(),
+        };
+      }
+    }
+
     let rest = text;
     const targets: string[] = [];
     let isAll = false;
@@ -257,11 +408,16 @@ export function parseNaturalConfigChange(rawText: string): NaturalConfigChange |
   const language: 'pt' | 'en' = PT_CONFIG_CUE.test(lower) ? 'pt' : 'en';
   const updates: NaturalConfigUpdate[] = [];
   const seenKeys = new Set<string>();
-  const pushUpdate = (keyPath: string[], value: number, label: string) => {
+  const pushUpdate = (
+    keyPath: string[],
+    value: number | string | null,
+    label: string,
+    action: 'set' | 'delete' = 'set',
+  ) => {
     const key = keyPath.join('.');
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
-    updates.push({ keyPath, value, label });
+    updates.push({ keyPath, value, label, action });
   };
 
   const hasParallelDirective =
@@ -346,6 +502,76 @@ export function parseNaturalConfigChange(rawText: string): NaturalConfigChange |
         const display = amount === 0 ? '0 (unlimited)' : amount.toLocaleString('en-US');
         pushUpdate(['execution', 'tokenBudget'], amount, `execution.tokenBudget = ${display}`);
       }
+    }
+  }
+
+  // 4. Per-agent model & reasoning effort overrides (PT & EN):
+  //    - "usa o modelo o3 no codex", "troca o modelo do claude para sonnet", "use model gemini-2.5-pro on agy"
+  //    - "coloca effort high no codex", "set codex effort to high"
+  //    - "reseta o modelo do codex", "reset codex model"
+  const resetModelMatch =
+    /\b(?:reseta(?:r)?|limpa(?:r)?|volta(?:r)?\s+ao\s+padr[aã]o|reset|clear)\s+(?:o\s+|the\s+)?(?:modelo|model)\s+(?:do\s+|da\s+|no\s+|on\s+|for\s+|of\s+)?(claude|codex|antigravity|agy)\b/i.exec(
+      text,
+    ) ??
+    /\b(?:reseta(?:r)?|reset|clear)\s+(claude|codex|antigravity|agy)\s+(?:modelo|model)\b/i.exec(text);
+  if (resetModelMatch) {
+    const agentId = normalizeAgentAlias(resetModelMatch[1]);
+    if (agentId) {
+      pushUpdate(['agents', agentId, 'model'], null, `agents.${agentId}.model = (CLI default)`, 'delete');
+      pushUpdate(['agents', agentId, 'effort'], null, `agents.${agentId}.effort = (CLI default)`, 'delete');
+    }
+  } else {
+    const modelPatterns: Array<{ re: RegExp; modelIdx: number; agentIdx: number }> = [
+      // "usa o modelo o3 no codex" / "use model o3 on codex" / "define modelo sonnet para claude"
+      {
+        re: /\b(?:usa(?:r)?|use|coloca(?:r)?|define|definir|muda(?:r)?|altera(?:r)?|troca(?:r)?|set|switch)\s+(?:o\s+|the\s+)?(?:modelo|model)\s+([a-zA-Z0-9._:/-]+)\s+(?:no|na|pro|para\s+o|para|do|em|on|for|in)\s+(claude|codex|antigravity|agy)\b/i,
+        modelIdx: 1,
+        agentIdx: 2,
+      },
+      // "troca o modelo do codex para o3" / "set codex model to o3" / "muda modelo do agy pra gemini-2.5-pro"
+      {
+        re: /\b(?:usa(?:r)?|use|coloca(?:r)?|define|definir|muda(?:r)?|altera(?:r)?|troca(?:r)?|set|switch)\s+(?:o\s+|the\s+)?(?:modelo|model)\s+(?:do|da|no|for|of|on)\s+(claude|codex|antigravity|agy)\s+(?:para|pra|to|as|=)\s+([a-zA-Z0-9._:/-]+)\b/i,
+        modelIdx: 2,
+        agentIdx: 1,
+      },
+      // "set codex model to o3" / "switch claude model to sonnet"
+      {
+        re: /\b(?:set|use|switch|change)\s+(claude|codex|antigravity|agy)\s+model\s+(?:to|as|=)\s+([a-zA-Z0-9._:/-]+)\b/i,
+        modelIdx: 2,
+        agentIdx: 1,
+      },
+    ];
+    for (const pat of modelPatterns) {
+      const m = pat.re.exec(text);
+      if (m) {
+        const agentId = normalizeAgentAlias(m[pat.agentIdx]);
+        const modelName = m[pat.modelIdx].replace(/[,.;!?]+$/, '');
+        if (agentId && modelName) {
+          pushUpdate(['agents', agentId, 'model'], modelName, `agents.${agentId}.model = ${modelName}`);
+          break;
+        }
+      }
+    }
+
+    const effortLevelPattern = AGENT_EFFORT_LEVELS.join('|');
+    const effortReA = new RegExp(
+      `\\b(?:usa(?:r)?|use|coloca(?:r)?|define|definir|muda(?:r)?|altera(?:r)?|set)\\s+(?:o\\s+)?(?:effort|esfor[çc]o|reasoning(?:\\s+effort)?)\\s+(?:para\\s+|to\\s+)?(${effortLevelPattern})\\s+(?:no|na|pro|para\\s+o|do|on|for)\\s+(claude|codex|antigravity|agy)\\b`,
+      'i',
+    );
+    const effortReB = new RegExp(
+      `\\b(?:set|usa(?:r)?|use|coloca(?:r)?|muda(?:r)?|altera(?:r)?)\\s+(?:o\\s+)?(claude|codex|antigravity|agy)\\s+(?:em\\s+|com\\s+)?(?:effort|esfor[çc]o|reasoning(?:\\s+effort)?)\\s*(?:para|to|=|:)?\\s*(${effortLevelPattern})\\b`,
+      'i',
+    );
+    const effA = effortReA.exec(text);
+    const effB = !effA ? effortReB.exec(text) : null;
+    if (effA) {
+      const agentId = normalizeAgentAlias(effA[2]);
+      const eff = effA[1].toLowerCase();
+      if (agentId) pushUpdate(['agents', agentId, 'effort'], eff, `agents.${agentId}.effort = ${eff}`);
+    } else if (effB) {
+      const agentId = normalizeAgentAlias(effB[1]);
+      const eff = effB[2].toLowerCase();
+      if (agentId) pushUpdate(['agents', agentId, 'effort'], eff, `agents.${agentId}.effort = ${eff}`);
     }
   }
 
