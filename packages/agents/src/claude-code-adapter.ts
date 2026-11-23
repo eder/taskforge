@@ -22,17 +22,22 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
     return ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
   }
 
+  private readonly hasCustomDefaultArgs: boolean;
+
   constructor(options: CliAdapterOptions = {}) {
+    const hasCustom = Boolean(options.defaultArgs && options.defaultArgs.length > 0);
     const defaultArgs =
-      options.defaultArgs && options.defaultArgs.length > 0
+      hasCustom && options.defaultArgs
         ? options.defaultArgs
-        // TaskForge never resumes a provider session, so do not leave one on disk per
-        // assignment (hundreds of stray sessions pile up in ~/.claude/projects otherwise).
+        // Orchestrated assignments are ephemeral so hundreds of stray sessions do not pile
+        // up in ~/.claude/projects. Direct Mode opts into native session persistence via
+        // `context.persistProviderSession` / `context.providerSessionId`.
         : ['--output-format=stream-json', '--verbose', '--no-session-persistence', '-p'];
     super({
       ...options,
       defaultArgs,
     });
+    this.hasCustomDefaultArgs = hasCustom;
   }
 
   /**
@@ -45,7 +50,15 @@ export class ClaudeCodeAdapter extends BaseCliAdapter {
    * are, and any permission flag the user put in the agent's `defaultArgs` is respected.
    */
   protected formatArgs(prompt: string, context?: AgentContext): string[] {
-    const args = super.formatArgs(prompt, context);
+    let args = super.formatArgs(prompt, context);
+    if (!this.hasCustomDefaultArgs && (context?.persistProviderSession || context?.providerSessionId)) {
+      args = args.filter((a) => a !== '--no-session-persistence');
+    }
+    if (!this.hasCustomDefaultArgs && context?.providerSessionId) {
+      const at = args.indexOf('-p');
+      const insertAt = at >= 0 ? at : args.length - 1;
+      args = [...args.slice(0, insertAt), '--resume', context.providerSessionId, ...args.slice(insertAt)];
+    }
     const chosenByUser = (this.options.defaultArgs ?? []).some(
       (a) =>
         a.startsWith('--permission-mode') ||

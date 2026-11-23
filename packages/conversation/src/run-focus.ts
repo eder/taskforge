@@ -24,6 +24,8 @@ export type FocusAction =
   | { kind: 'save_check_command'; command: string }
   /** The run stopped at its token cap: raise it and continue. */
   | { kind: 'raise_budget'; budget: number }
+  /** A task stopped only because it touched file(s) outside allowedScope and has a kept candidate commit: expand scope and re-verify directly (0 tokens). */
+  | { kind: 'expand_scope'; expansions: Array<{ taskId: string; paths: string[] }> }
   /** Nothing TaskForge can do on its own; only a way to get out of the run. */
   | { kind: 'none' };
 
@@ -40,6 +42,7 @@ export type PendingAdvisorAction =
   | { kind: 'fix_with_agent'; guidance: string }
   | { kind: 'investigate_with_agent'; question: string }
   | { kind: 'skip_preflight'; guidance?: string }
+  | { kind: 'expand_scope'; expansions: Array<{ taskId: string; paths: string[] }> }
   | { kind: 'retry_now' };
 
 export interface RunFocus {
@@ -187,6 +190,34 @@ function proposeFocus(options: {
         'I could not tell from its files which command to use. Type the command that verifies this project (for example `npm test` or `pytest -q server`) and I will save it and re-check. Or fix it yourself and press Enter.',
       ],
       hint: 'Enter: fixed it, re-check · or type the command that verifies this project',
+    };
+  }
+
+  // 5b. Scope-only block with kept candidate work: allow the extra file(s) and
+  // re-verify the kept commit directly with 0 agent tokens.
+  const activeFailures = failures.filter((l) => l.kind === 'failed' || l.kind === 'blocked');
+  const scopeOnly =
+    activeFailures.length > 0 &&
+    activeFailures.every(
+      (l) => Boolean(l.keptBranch) && Array.isArray(l.scopeViolations) && l.scopeViolations.length > 0,
+    );
+  if (scopeOnly) {
+    const expansions = activeFailures.map((l) => ({
+      taskId: l.taskId,
+      paths: l.scopeViolations!,
+    }));
+    const allPaths = [...new Set(expansions.flatMap((e) => e.paths))];
+    const preview =
+      allPaths.slice(0, 4).join(', ') +
+      (allPaths.length > 4 ? ` (+${allPaths.length - 4} more)` : '');
+    const taskList = expansions.map((e) => e.taskId).join(', ');
+    return {
+      focus: { runId, action: { kind: 'expand_scope', expansions } },
+      lines: [
+        `${taskList} kept its work on a candidate branch and only stopped because it touched file(s) outside its planned scope: ${preview}.`,
+        `What I'd do: add ${preview} to the allowed scope and re-verify the kept commit directly (no agent call, 0 tokens).`,
+      ],
+      hint: `Enter: allow ${allPaths.length === 1 ? allPaths[0] : `${allPaths.length} file(s)`} and re-verify (0 tokens)`,
     };
   }
 

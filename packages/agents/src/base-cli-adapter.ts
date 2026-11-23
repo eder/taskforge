@@ -183,10 +183,11 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     // native agent feel without orchestrated DAG assignment boilerplate, while
     // still passing shared cross-agent conversation history and read-only guardrails.
     if (context.directMode) {
+      const historyHeader = context.providerSessionId
+        ? 'Updates since your previous turn (other agents or local shell commands in the same TaskForge session):'
+        : 'Shared TaskForge session history (previous turns with you, other agents, or local shell commands — use for continuity, verify against current repository files):';
       return [
-        context.conversationHistory?.trim()
-          ? 'Shared TaskForge session history (previous turns with you, other agents, or local shell commands — use for continuity, verify against current repository files):'
-          : undefined,
+        context.conversationHistory?.trim() ? historyHeader : undefined,
         context.conversationHistory?.trim() ? context.conversationHistory : undefined,
         context.conversationHistory?.trim() ? '' : undefined,
         context.priorContext?.trim()
@@ -478,6 +479,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
     const lines = combined.split('\n');
 
     let providerStatus: string | undefined;
+    let providerSessionId: string | undefined;
     let candidateResponse = '';
     const assistantTexts: string[] = [];
     const deniedActions: import('@taskforge/shared').DeniedAction[] = [];
@@ -493,6 +495,18 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
         try {
           const obj = JSON.parse(trimmed);
+
+          // 0. Provider-native session/thread/conversation id (Claude session_id, Codex thread_id, AGY conversation_id)
+          const rawSessionId =
+            (typeof obj.session_id === 'string' && obj.session_id.trim()) ||
+            (typeof obj.thread_id === 'string' && obj.thread_id.trim()) ||
+            (typeof obj.conversation_id === 'string' && obj.conversation_id.trim()) ||
+            (typeof obj.result?.conversation_id === 'string' && obj.result.conversation_id.trim()) ||
+            (typeof obj.result?.session_id === 'string' && obj.result.session_id.trim()) ||
+            undefined;
+          if (rawSessionId) {
+            providerSessionId = rawSessionId;
+          }
 
           // 1. Antigravity & structured provider status
           if (typeof obj.status === 'string') {
@@ -696,6 +710,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       artifacts,
       runtimeLogRef: logPath,
       usage,
+      ...(providerSessionId ? { providerSessionId } : {}),
     };
   }
 
@@ -926,6 +941,7 @@ export abstract class BaseCliAdapter implements AgentAdapter {
       normalizedOutcome: outcome,
       completionReason,
       usage: outcome.usage,
+      ...(outcome.providerSessionId ? { providerSessionId: outcome.providerSessionId } : {}),
     };
   }
 

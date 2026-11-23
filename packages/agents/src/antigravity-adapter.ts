@@ -22,16 +22,30 @@ export class AntigravityAdapter extends BaseCliAdapter {
     return ['GEMINI_API_KEY', 'GOOGLE_API_KEY'];
   }
 
+  private readonly hasCustomDefaultArgs: boolean;
+
   constructor(options: CliAdapterOptions = {}) {
     AntigravityAdapter.ensurePrerequisites();
+    const hasCustom = Boolean(options.defaultArgs && options.defaultArgs.length > 0);
     const defaultArgs =
-      options.defaultArgs && options.defaultArgs.length > 0
+      hasCustom && options.defaultArgs
         ? options.defaultArgs
         : ['--output-format', 'stream-json', '-p'];
     super({
       ...options,
       defaultArgs,
     });
+    this.hasCustomDefaultArgs = hasCustom;
+  }
+
+  protected formatArgs(prompt: string, context?: AgentContext): string[] {
+    const args = super.formatArgs(prompt, context);
+    if (!this.hasCustomDefaultArgs && context?.providerSessionId) {
+      const at = args.indexOf('-p');
+      const insertAt = at >= 0 ? at : args.length - 1;
+      return [...args.slice(0, insertAt), '--conversation', context.providerSessionId, ...args.slice(insertAt)];
+    }
+    return args;
   }
 
   public static recoverQuotaFromRecentLogs(customHome?: string): boolean {

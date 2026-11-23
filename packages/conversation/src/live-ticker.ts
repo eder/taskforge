@@ -9,6 +9,18 @@ export interface LiveTickerRenderOptions {
   registeredAgents?: Array<{ id: string; name: string }>;
   frameIndex?: number;
   terminalCols?: number;
+  /** Configured maximum parallel slots (shown in summary bar when provided). */
+  maxParallelTasks?: number;
+  /** Live effective token spend for the current run (shown in summary bar when > 0). */
+  effectiveTokensSpent?: number;
+  /** Max concurrent agent rows to render before collapsing overflow (default: 3). */
+  maxVisibleRows?: number;
+}
+
+function formatCompactTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return String(tokens);
 }
 
 export class LiveTicker {
@@ -32,7 +44,14 @@ export class LiveTicker {
   }
 
   public static render(options: LiveTickerRenderOptions): string[] {
-    const { activeAgents, registeredAgents = [], frameIndex = 0 } = options;
+    const {
+      activeAgents,
+      registeredAgents = [],
+      frameIndex = 0,
+      maxParallelTasks,
+      effectiveTokensSpent,
+      maxVisibleRows = 3,
+    } = options;
 
     if (activeAgents.length === 0) {
       return [];
@@ -70,8 +89,36 @@ export class LiveTicker {
       }
     }
 
-    // Active agent status lines (limit to 3 if many)
-    const displayedAgents = activeAgents.slice(0, 3);
+    // Compact live parallelism summary bar when multiple agents are running or slot/token telemetry is supplied
+    const countsByAgent = new Map<string, number>();
+    for (const a of activeAgents) {
+      countsByAgent.set(a.agentId, (countsByAgent.get(a.agentId) ?? 0) + 1);
+    }
+    if (
+      activeAgents.length > 1 ||
+      (maxParallelTasks !== undefined && maxParallelTasks > 1) ||
+      (effectiveTokensSpent !== undefined && effectiveTokensSpent > 0)
+    ) {
+      const slotPart =
+        maxParallelTasks && maxParallelTasks > 0
+          ? `${activeAgents.length}/${maxParallelTasks} active`
+          : `${activeAgents.length} active`;
+      const breakdown = [...countsByAgent.entries()]
+        .map(([id, count]) => `${id} ×${count}`)
+        .join(', ');
+      const tokenPart =
+        effectiveTokensSpent && effectiveTokensSpent > 0
+          ? `  ·  ${formatCompactTokens(effectiveTokensSpent)} eff tokens`
+          : '';
+      lines.push(
+        `  ${colors.brand}⚡${colors.reset} ${colors.bold}${slotPart}${colors.reset} ${colors.dim}· ${breakdown}${tokenPart}${colors.reset}`,
+      );
+    }
+
+    // Per-agent slot numbering only when the same agent runs > 1 concurrent task
+    const slotCounters = new Map<string, number>();
+    const maxRows = Math.max(1, maxVisibleRows);
+    const displayedAgents = activeAgents.slice(0, maxRows);
     for (const a of displayedAgents) {
       const agentColor = this.getAgentColor(a.agentId);
       const duration = this.formatDuration(a.startedAt);
@@ -81,14 +128,18 @@ export class LiveTicker {
       const recoveryTag = recovered
         ? ` ${colors.green}${colors.bold}↻ recovered${colors.reset}`
         : '';
+      const totalForAgent = countsByAgent.get(a.agentId) ?? 1;
+      const slotNum = (slotCounters.get(a.agentId) ?? 0) + 1;
+      slotCounters.set(a.agentId, slotNum);
+      const agentLabel = totalForAgent > 1 ? `${a.agentName} #${slotNum}` : a.agentName;
       lines.push(
-        `  ${colors.cyan}${spinner}${colors.reset} ${colors.bold}${a.taskId}${colors.reset} ${agentColor}[${a.agentName}]${colors.reset}${recoveryTag}: ${statusText} ${colors.dim}(${duration})${colors.reset}`,
+        `  ${colors.cyan}${spinner}${colors.reset} ${colors.bold}${a.taskId}${colors.reset} ${agentColor}[${agentLabel}]${colors.reset}${recoveryTag}: ${statusText} ${colors.dim}(${duration})${colors.reset}`,
       );
     }
 
-    if (activeAgents.length > 3) {
+    if (activeAgents.length > maxRows) {
       lines.push(
-        `  ${colors.dim}... and ${activeAgents.length - 3} more agent(s) working concurrently${colors.reset}`,
+        `  ${colors.dim}... and ${activeAgents.length - maxRows} more agent(s) working concurrently${colors.reset}`,
       );
     }
 

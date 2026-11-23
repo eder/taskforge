@@ -141,8 +141,14 @@ import {
 import {
   parseDirectRouteCommand,
   extractOrchestratedAgentPreferences,
+  parseNaturalConfigChange,
+  type NaturalConfigChange,
 } from './direct-agent-router.js';
-import { DirectConversationMemory, DirectAgentRunner } from './direct-agent-session.js';
+import {
+  DirectConversationMemory,
+  DirectAgentRunner,
+  type PendingCompetitiveEdit,
+} from './direct-agent-session.js';
 import { assessProblemAndSelectAgent } from './problem-size-router.js';
 
 // Public API preserved for existing importers.
@@ -191,6 +197,8 @@ export class InteractiveShell {
   private directRunner: DirectAgentRunner;
   /** Sticky direct chat target: 'auto' (Hybrid Smart Mode), 'all' (parallel multi-agent), or an agent id. */
   private stickyAgentMode: 'auto' | 'all' | string = 'auto';
+  /** Pending competitive multi-agent direct edit (`@codex @agy --edit`) awaiting winner pick. */
+  private pendingCompetitiveEdit?: PendingCompetitiveEdit;
   private negotiator: NegotiationManager;
   private router: RoutingProvider;
   private agentSelector: AgentSelector;
@@ -331,6 +339,15 @@ export class InteractiveShell {
       timeoutMs: (this.config.execution.defaultTimeoutMinutes ?? 10) * 60_000,
       onLiveLine: (line) => this.viewport.writeUpper(line),
       gitService: this.gitService,
+      worktreeManager: new WorktreeManager(
+        this.repoRoot,
+        this.config.execution.worktreesDir,
+        this.config.execution.worktreeLinks,
+      ),
+      openAiApiKey: openaiApiKey,
+      openAiBaseUrl: openaiBaseUrl,
+      openAiModel: advisorModel,
+      verificationCommands: this.config.verification.commands,
     });
     this.setupActivitySubscription();
     this.setupCockpitEventSubscription();
@@ -400,11 +417,17 @@ export class InteractiveShell {
       this.viewport.drawFooter('', []);
       return;
     }
+    const effectiveTokensSpent = this.activeRunId
+      ? this.telemetry.getRunBudgetTokens(this.activeRunId)
+      : undefined;
     const lines = LiveTicker.render({
       activeAgents: active,
       registeredAgents: this.agentRegistry.list(),
       frameIndex: this.tickerFrameIndex,
       terminalCols: this.viewport.cols,
+      maxParallelTasks: this.config.execution.maxParallelTasks,
+      effectiveTokensSpent,
+      maxVisibleRows: 6,
     });
     this.viewport.drawFooter('', lines);
   }
@@ -890,8 +913,22 @@ export class InteractiveShell {
   async handleInput(input: string, abortSignal?: AbortSignal): Promise<string> {
     const text = input.trim();
     if (!text) {
+      if (this.pendingCompetitiveEdit) {
+        const pending = this.pendingCompetitiveEdit;
+        if (pending.recommendedIndex) {
+          this.pendingCompetitiveEdit = undefined;
+          return this.directRunner.applyCompetitiveCandidate(pending, pending.recommendedIndex);
+        }
+        return `${colors.dim}Type a candidate number (1..${pending.candidates.length}) to apply, diff <n> to inspect, or /back to discard.${colors.reset}`;
+      }
       // Enter alone accepts what the stopped run proposed, if the REPL is in one.
       return this.focusedRun ? this.acceptFocus() : '';
+    }
+
+    // Competitive direct edit selection (`@codex @agy --edit <task>`)
+    if (this.pendingCompetitiveEdit) {
+      const handled = await this.handleCompetitiveEditReply(text);
+      if (handled !== undefined) return handled;
     }
 
     if (text === '/exit' || text === '/quit' || text === 'exit' || text === 'quit') {
@@ -983,6 +1020,23 @@ export class InteractiveShell {
       return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}${adapter.name} (${adapter.id})${colors.reset}. ${colors.dim}Messages go straight to ${adapter.name} with shared cross-agent memory. Switch anytime with @codex/@claude/@agy/@all or @auto.${colors.reset}`;
     }
     if (directCmd.kind === 'direct_agents') {
+      const wantsMultiCompete =
+        Boolean(directCmd.editMode) &&
+        (directCmd.targets === 'all' ||
+          (Array.isArray(directCmd.targets) && directCmd.targets.length > 1));
+      if (wantsMultiCompete) {
+        if (this.pendingCompetitiveEdit) {
+          await this.directRunner.discardCompetitiveEdit(this.pendingCompetitiveEdit);
+          this.pendingCompetitiveEdit = undefined;
+        }
+        const comp = await this.directRunner.runCompetitiveEdit(
+          directCmd.targets,
+          directCmd.prompt,
+          { abortSignal },
+        );
+        this.pendingCompetitiveEdit = comp.pending;
+        return comp.formatted;
+      }
       const result = await this.directRunner.runAgents(directCmd.targets, directCmd.prompt, {
         abortSignal,
       });
@@ -998,6 +1052,20 @@ export class InteractiveShell {
       const targets = this.stickyAgentMode === 'all' ? 'all' : [this.stickyAgentMode];
       const result = await this.directRunner.runAgents(targets, text, { abortSignal });
       return result.formatted;
+    }
+
+    // Natural-language configuration updates (PT & EN): e.g. "usa até 5 codex e 5 agy em paralelo",
+    // "aumenta o limite de tokens para 4M", "sem limite de tokens" — persists immediately without YAML editing.
+    if (
+      !text.startsWith('/') &&
+      !this.currentGraph &&
+      !this.focusedRun &&
+      this.interactionGateway.getPendingRequests().length === 0
+    ) {
+      const naturalConfig = parseNaturalConfigChange(text);
+      if (naturalConfig) {
+        return this.applyNaturalConfigChange(naturalConfig);
+      }
     }
 
     const intent = this.operator.parseIntent(text, {
@@ -1467,6 +1535,11 @@ export class InteractiveShell {
         this.pendingPriorContext = undefined;
         this.focusedRun = undefined;
         this.directMemory.clear();
+        this.directRunner.clearSessions();
+        if (this.pendingCompetitiveEdit) {
+          await this.directRunner.discardCompetitiveEdit(this.pendingCompetitiveEdit);
+          this.pendingCompetitiveEdit = undefined;
+        }
         // A plan that has not been approved is part of the conversation being
         // cleared; a run that is executing is not, and is left alone.
         let discarded = '';
@@ -2402,6 +2475,8 @@ export class InteractiveShell {
         return this.saveCheckCommand(focus, focus.action.command);
       case 'raise_budget':
         return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.action.budget });
+      case 'expand_scope':
+        return this.expandTaskScopeAndContinue(focus, focus.action.expansions, effectiveBudget);
       case 'none':
         return `${colors.dim}There is nothing for me to do on my own here. Tell me what you want, or /back to leave ${focus.runId}.${colors.reset}`;
     }
@@ -2521,6 +2596,8 @@ export class InteractiveShell {
         return 'launch a read-only agent investigation';
       case 'skip_preflight':
         return 'skip preflight and continue';
+      case 'expand_scope':
+        return `expand allowed scope for ${action.expansions.map((e) => e.taskId).join(', ')} and re-verify (0 tokens)`;
       case 'retry_now':
         return 'retry the run now';
     }
@@ -2549,6 +2626,8 @@ export class InteractiveShell {
           tokenBudget: effectiveBudget,
           skipPreflight: true,
         });
+      case 'expand_scope':
+        return this.expandTaskScopeAndContinue(focus, action.expansions, effectiveBudget);
       case 'retry_now':
         return this.continueRun(focus.runId, focus.guidance, { tokenBudget: effectiveBudget });
     }
@@ -3003,6 +3082,136 @@ export class InteractiveShell {
     return this.continueRun(focus.runId, focus.guidance, { tokenBudget: focus.raiseBudgetTo });
   }
 
+  /**
+   * Expands the persisted `allowedScope` of scope-blocked task(s) with the
+   * files their preserved candidate commits touched, then resumes the run
+   * reusing those commits directly without calling any coding agent (0 tokens).
+   */
+  private async expandTaskScopeAndContinue(
+    focus: RunFocus,
+    expansions: Array<{ taskId: string; paths: string[] }>,
+    effectiveBudget?: number,
+  ): Promise<string> {
+    const taskRepo = new TaskRepository(this.db);
+    const eventRepo = new EventRepository(this.db);
+    const expandedIds: string[] = [];
+    const summaryParts: string[] = [];
+
+    for (const item of expansions) {
+      const updated = taskRepo.expandAllowedScope(item.taskId, item.paths);
+      if (updated) {
+        expandedIds.push(item.taskId);
+        summaryParts.push(`${item.taskId} (+${item.paths.join(', ')})`);
+        eventRepo.append({
+          id: `evt-${randomUUID()}`,
+          runId: focus.runId,
+          taskId: item.taskId,
+          type: 'TASK_SCOPE_EXPANDED',
+          payload: {
+            taskId: item.taskId,
+            addedPaths: item.paths,
+            allowedScope: updated,
+          },
+          timestamp: new Date(),
+        });
+      }
+    }
+
+    if (expandedIds.length === 0) {
+      return `${colors.red}✖ Could not locate the task(s) to expand scope for ${focus.runId}.${colors.reset}`;
+    }
+
+    this.viewport.writeUpper(
+      `\n  ${colors.green}✔${colors.reset} Expanded allowed scope: ${summaryParts.join('; ')}. Re-verifying kept candidate(s) with 0 agent tokens...\n`,
+    );
+    return this.continueRun(focus.runId, focus.guidance, {
+      tokenBudget: effectiveBudget,
+      reuseCandidateTaskIds: expandedIds,
+    });
+  }
+
+  /** Handles user replies while a `@codex @agy --edit` competitive comparison is open. */
+  private async handleCompetitiveEditReply(text: string): Promise<string | undefined> {
+    const pending = this.pendingCompetitiveEdit;
+    if (!pending) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:\/back|\/cancel|cancel(?:ar)?|descartar|discard|nenhum|none|n[aã]o|no|q)$/.test(lower)) {
+      this.pendingCompetitiveEdit = undefined;
+      await this.directRunner.discardCompetitiveEdit(pending);
+      return `${colors.dim}Discarded competitive edit candidates and cleaned up temporary worktrees.${colors.reset}`;
+    }
+
+    const diffMatch = /^(?:diff|ver|inspect|mostrar)\s+#?(\d+)$/i.exec(lower);
+    if (diffMatch) {
+      return this.directRunner.getCompetitiveCandidateDiff(pending, parseInt(diffMatch[1], 10));
+    }
+
+    const pickNumMatch =
+      /^(?:#?(\d+)|(?:aplica(?:r)?|apply|usa(?:r)?|use|escolho|pick|choose)\s+(?:o\s+|a\s+|#)?(\d+))$/i.exec(
+        lower,
+      );
+    if (pickNumMatch) {
+      const chosen = parseInt(pickNumMatch[1] ?? pickNumMatch[2], 10);
+      if (chosen >= 1 && chosen <= pending.candidates.length) {
+        this.pendingCompetitiveEdit = undefined;
+        return this.directRunner.applyCompetitiveCandidate(pending, chosen);
+      }
+      return `${colors.red}✖ Invalid candidate #${chosen}.${colors.reset} Choose 1..${pending.candidates.length}, diff <n>, or /back to discard.`;
+    }
+
+    // Allow picking by agent name (e.g. "codex", "aplica o agy", "use claude")
+    const agentPickMatch =
+      /^(?:(?:aplica(?:r)?|apply|usa(?:r)?|use|escolho|pick|choose)\s+(?:o\s+|a\s+)?)?(claude|codex|agy|antigravity)$/i.exec(
+        lower,
+      );
+    if (agentPickMatch) {
+      const targetId = agentPickMatch[1] === 'antigravity' ? 'agy' : agentPickMatch[1];
+      const match = pending.candidates.find((c) => c.agentId === targetId);
+      if (match) {
+        this.pendingCompetitiveEdit = undefined;
+        return this.directRunner.applyCompetitiveCandidate(pending, match.index);
+      }
+    }
+
+    return undefined;
+  }
+
+  /** Applies and persists a natural-language parallelism/budget update immediately. */
+  private applyNaturalConfigChange(change: NaturalConfigChange): string {
+    let configFile = '.taskforge/config.yaml';
+    for (const update of change.updates) {
+      const saved = setProjectConfigValue(this.repoRoot, update.keyPath, update.value);
+      configFile = saved.file;
+      const [section, key, subKey] = update.keyPath;
+      if (section === 'execution' && key === 'maxParallelTasks') {
+        this.config.execution.maxParallelTasks = update.value;
+      } else if (section === 'execution' && key === 'tokenBudget') {
+        this.config.execution.tokenBudget = update.value;
+      } else if (section === 'planner' && key === 'maxTasks') {
+        this.config.planner = { ...(this.config.planner ?? {}), maxTasks: update.value };
+      } else if (section === 'agents' && key && subKey === 'maxParallel') {
+        const current = this.config.agents[key] ?? { enabled: true };
+        this.config.agents[key] = { ...current, enabled: true, maxParallel: update.value };
+      }
+    }
+
+    const relFile = path.relative(this.repoRoot, configFile) || configFile;
+    const list = change.updates.map((u) => `  • ${colors.cyan}${u.label}${colors.reset}`).join('\n');
+    if (change.language === 'pt') {
+      return [
+        `${colors.green}✔${colors.reset} ${colors.bold}Configuração atualizada e salva em ${relFile}:${colors.reset}`,
+        list,
+        `  ${colors.dim}Já está valendo imediatamente para as próximas execuções (sem precisar reiniciar o tf).${colors.reset}`,
+      ].join('\n');
+    }
+    return [
+      `${colors.green}✔${colors.reset} ${colors.bold}Configuration updated and saved to ${relFile}:${colors.reset}`,
+      list,
+      `  ${colors.dim}Active immediately for upcoming runs (no restart needed).${colors.reset}`,
+    ].join('\n');
+  }
+
   /** Continues an unfinished run (the REPL's `tf resume`), optionally with what the user just asked for. */
   private async continueRun(
     runId: string,
@@ -3013,6 +3222,8 @@ export class InteractiveShell {
       repairTask?: RepairPreTaskOptions;
       /** Bounded to 1 automatic escalation: if deterministic env repair clears one blocker but a residual code/test failure remains, auto-select an agent by problem size and inject a REPAIR step. */
       autoChainRecovery?: boolean;
+      /** Task ids whose preserved candidates should be re-verified directly with 0 agent tokens. */
+      reuseCandidateTaskIds?: string[];
     } = {},
   ): Promise<string> {
         const orchestrator = this.buildOrchestrator();
@@ -3071,6 +3282,7 @@ export class InteractiveShell {
           tokenBudget: options.tokenBudget,
           skipPreflight: options.skipPreflight,
           repairTask: options.repairTask,
+          reuseCandidateTaskIds: options.reuseCandidateTaskIds,
           onProgress: (msg) => this.viewport.writeUpper(theme.formatProgressMessage(msg)),
         });
         if (this.options.asyncExecution ?? this.viewport.isInteractive) {

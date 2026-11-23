@@ -122,6 +122,62 @@ export class TaskRepository {
       .run(status, now, taskId);
   }
 
+  /** Persists an updated TaskContract on both `tasks` and `task_contracts`. */
+  updateContract(taskId: string, contract: TaskContract): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare('UPDATE tasks SET contract_json = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(contract), now, taskId);
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO task_contracts (
+          task_id, objective, allowed_scope_json, forbidden_changes_json,
+          acceptance_criteria_json, dependencies_json
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        taskId,
+        contract.objective,
+        JSON.stringify(contract.allowedScope ?? []),
+        JSON.stringify(contract.forbiddenChanges ?? []),
+        JSON.stringify(contract.acceptanceCriteria ?? []),
+        JSON.stringify(contract.dependencies ?? []),
+      );
+  }
+
+  /**
+   * Appends normalized repository-relative paths to a task's `allowedScope`
+   * (deduplicated) and persists the updated contract. Returns the updated
+   * allowedScope or undefined if the task does not exist.
+   */
+  expandAllowedScope(taskId: string, extraPaths: string[]): string[] | undefined {
+    const record = this.get(taskId);
+    if (!record) return undefined;
+    const contract: TaskContract = record.contractJson
+      ? (JSON.parse(record.contractJson) as TaskContract)
+      : {
+          objective: record.description,
+          allowedScope: [],
+          forbiddenChanges: [],
+          acceptanceCriteria: [],
+          dependencies: record.dependencies ?? [],
+        };
+    const existing = Array.isArray(contract.allowedScope) ? [...contract.allowedScope] : [];
+    const seen = new Set(existing);
+    for (const raw of extraPaths) {
+      const normalized = raw.trim().replace(/^\.\//, '').replace(/^\/+/, '');
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      existing.push(normalized);
+    }
+    const updated: TaskContract = {
+      ...contract,
+      allowedScope: existing,
+    };
+    this.updateContract(taskId, updated);
+    return existing;
+  }
+
   addDependency(taskId: string, dependsOnTaskId: string): void {
     this.db
       .prepare(

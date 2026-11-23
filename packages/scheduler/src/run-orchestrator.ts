@@ -152,6 +152,12 @@ export interface RunOptions {
    * automatically on top of that integrated fix.
    */
   repairTask?: RepairPreTaskOptions;
+  /**
+   * Task ids whose preserved candidate commit should be re-verified directly
+   * without calling any coding agent (0 tokens) — used e.g. after the operator
+   * approves expanding a task's allowedScope for a SCOPE_VIOLATION.
+   */
+  reuseCandidateTaskIds?: string[];
 }
 
 export interface OrchestrationResult {
@@ -663,7 +669,11 @@ export class RunOrchestrator {
             () => true,
             () => false,
           );
-        if (exists) candidates[task.id] = candidate;
+        if (exists) {
+          candidates[task.id] = options.reuseCandidateTaskIds?.includes(task.id)
+            ? { ...candidate, reuseWithoutAgent: true }
+            : candidate;
+        }
       }
     }
     for (const task of pending) this.taskRepo.updateStatus(task.id, 'accepted');
