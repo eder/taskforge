@@ -11,10 +11,13 @@ coverage/
 .taskforge/worktrees/
 .taskforge/test-worktrees/
 .taskforge/runs/
+.taskforge/mailbox/
+.taskforge/daemon.json
 .taskforge/*.db
 .taskforge/*.db-journal
 .taskforge/*.db-wal
 .taskforge/*.db-shm
+.taskforge.env
 
 # Local roadmap & planning
 ROADMAP.md
