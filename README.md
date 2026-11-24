@@ -36,7 +36,7 @@ You describe the outcome. TaskForge plans the work, selects agents, creates isol
   - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) — `claude`
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `codex`
   - [Google Antigravity](https://antigravity.google/) — `agy`
-  - *(Optional, local/air-gapped)* [Ollama](https://ollama.com/) — `@ollama` (read-only analysis, pipelines & Debate Councils at zero API cost)
+  - *(Optional, local/air-gapped)* [Ollama](https://ollama.com/) — `@ollama` (full local coding agent, zero-cost solution arbiter & local `router.provider: ollama` planner/coordinator)
 
 > [!TIP]
 > **No OpenAI API key required.** TaskForge works out of the box with whichever agent CLI(s) you already have signed in. Setting `TASKFORGE_OPENAI_API_KEY` (or a local OpenAI-compatible gateway) is optional and speeds up complex multi-task planning.

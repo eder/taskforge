@@ -20,6 +20,7 @@ import {
   PlannerProvenance,
   resolveOpenAIApiKey,
   resolveOpenAIBaseUrl,
+  resolveRouterModel,
   DEFAULT_OPENAI_BASE_URL,
   getGlobalStateDatabasePath,
   AgentStreamBus,
@@ -381,7 +382,7 @@ export class InteractiveShell {
     this.activityTracker = options.activityTracker ?? new AgentActivityTracker();
     this.streamBus = options.streamBus ?? new AgentStreamBus();
     this.sessionRegistry = new SessionRegistry();
-    this.config = options.config ?? loadConfig();
+    this.config = options.config ?? loadConfig(undefined, this.repoRoot);
     // Outside a git repository nothing can run, so do not leave a `.taskforge/` state
     // directory behind in whatever folder TaskForge happened to be opened in.
     this.inRepo = insideGitRepo(this.repoRoot);
@@ -411,7 +412,7 @@ export class InteractiveShell {
       // PLANNER_MODEL remains an explicit override, but TaskForge should not
       // silently route with one model while planning with a different hidden
       // default -- that causes avoidable API failures and fallback latency.
-      model: process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o',
+      model: process.env.PLANNER_MODEL || resolveRouterModel(this.config),
       timeoutMs: (this.config.router.timeoutSeconds ?? 60) * 1000,
       maxTasks: this.config.planner?.maxTasks,
       agentPlanning: this.config.planner?.agentPlanning,
@@ -421,7 +422,7 @@ export class InteractiveShell {
         timeoutMs: AGENT_PLANNING_TIMEOUT_MS,
       }),
     });
-    const advisorModel = process.env.PLANNER_MODEL || this.config.router.model || 'gpt-4o-mini';
+    const advisorModel = process.env.PLANNER_MODEL || resolveRouterModel(this.config);
     this.focusedAdvisor = new FocusedRunAdvisor({
       apiKey: openaiApiKey,
       baseUrl: openaiBaseUrl,
@@ -436,12 +437,16 @@ export class InteractiveShell {
     });
     this.negotiator = new NegotiationManager();
     const performanceEngine = new PerformanceEngine(this.db);
+    const effectiveRouterModel = resolveRouterModel(this.config);
     if (this.config.router.adaptive) {
       this.router = new AdaptiveRoutingProvider(performanceEngine);
-    } else if (this.config.router.provider === 'openai' && openaiApiKey) {
+    } else if (
+      (this.config.router.provider === 'openai' || this.config.router.provider === 'ollama') &&
+      openaiApiKey
+    ) {
       this.router = new OpenAIRoutingProvider(
         openaiApiKey,
-        this.config.router.model,
+        effectiveRouterModel,
         15000,
         { performanceEngine, baseUrl: openaiBaseUrl },
       );
@@ -1034,11 +1039,15 @@ export class InteractiveShell {
         }`
       : `${colors.gray}unavailable${colors.reset}`;
     const apiKey = resolveOpenAIApiKey(this.config);
-    const gatewayLabel = resolveOpenAIBaseUrl(this.config) === DEFAULT_OPENAI_BASE_URL
-      ? 'OpenAI'
-      : 'OpenAI-compatible gateway';
+    const effectiveRouterModel = resolveRouterModel(this.config);
+    const gatewayLabel =
+      this.config.router.provider === 'ollama'
+        ? 'Ollama Local'
+        : resolveOpenAIBaseUrl(this.config) === DEFAULT_OPENAI_BASE_URL
+          ? 'OpenAI'
+          : 'OpenAI-compatible gateway';
     let routerStatus: string;
-    if (this.config.router.provider === 'openai') {
+    if (this.config.router.provider === 'openai' || this.config.router.provider === 'ollama') {
       if (!apiKey) {
         routerStatus = `${colors.gray}○ missing key${colors.reset} ${colors.dim}(static fallback)${colors.reset}`;
       } else {
@@ -1049,7 +1058,7 @@ export class InteractiveShell {
             ? await this.router.healthCheck({ validateKey: true })
             : { status: 'healthy' as const };
         if (report.status === 'healthy') {
-          routerStatus = `${colors.green}● ready${colors.reset} ${colors.dim}(${gatewayLabel} ${this.config.router.model})${colors.reset}`;
+          routerStatus = `${colors.green}● ready${colors.reset} ${colors.dim}(${gatewayLabel} ${effectiveRouterModel})${colors.reset}`;
         } else if (report.details?.includes('invalid') || report.details?.includes('401')) {
           routerStatus = `${colors.red}○ invalid key${colors.reset} ${colors.dim}(static fallback)${colors.reset}`;
         } else {
@@ -1084,7 +1093,7 @@ export class InteractiveShell {
           )}`,
       ),
       '',
-      `  ${colors.bold}Router${colors.reset}      OpenAI       ${routerStatus}`,
+      `  ${colors.bold}Router${colors.reset}      ${this.config.router.provider === 'ollama' ? 'Ollama      ' : 'OpenAI      '} ${routerStatus}`,
       `  ${colors.bold}ECC${colors.reset}         ${profile.hasECC ? `${colors.green}● detected${colors.reset}` : `${colors.gray}○ not detected${colors.reset}`}`,
       `  ${colors.bold}Direct${colors.reset}      ${colors.dim}@claude · @codex · @agy · @all · !cmd · /use <agent|all|auto>${colors.reset}`,
       ` ${colors.brand}─────────────────────────────────────────────────────────────────${colors.reset}`,

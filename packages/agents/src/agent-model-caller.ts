@@ -1,8 +1,8 @@
 import type { AgentRegistry } from './agent-registry.js';
 import { AgentQuotaTracker } from './quota-tracker.js';
 
-/** Agents that can answer a structured question, best-verified first. */
-const PREFERENCE = ['codex', 'claude'];
+/** Agents that can answer a structured question; opt-in local Ollama saves cloud quota when enabled. */
+const PREFERENCE = ['ollama', 'codex', 'claude'];
 
 export interface AgentModelCallerOptions {
   /** Repository the agent reads to ground its answer. */

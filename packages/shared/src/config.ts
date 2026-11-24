@@ -95,7 +95,7 @@ export const TaskForgeConfigSchema = z.object({
     .default({ agent: 'claude', maxTasks: 6, agentPlanning: 'auto' }),
   router: z
     .object({
-      provider: z.enum(['openai', 'static', 'adaptive']).default('openai'),
+      provider: z.enum(['openai', 'ollama', 'static', 'adaptive']).default('openai'),
       model: z.string().default('gpt-4o-mini'),
       escalationModel: z.string().default('gpt-4o'),
       fallback: z.enum(['static']).default('static'),
@@ -420,6 +420,7 @@ export function getGlobalStateDatabasePath(): string {
 }
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 
 /** Validate an explicitly trusted API endpoint before forwarding bearer credentials. */
 export function normalizeOpenAIBaseUrl(raw: string): string {
@@ -443,11 +444,33 @@ export function normalizeOpenAIBaseUrl(raw: string): string {
 
 /** Explicit override first; do not inherit an unrelated SDK's OPENAI_BASE_URL. */
 export function resolveOpenAIBaseUrl(config?: TaskForgeConfig): string {
-  return normalizeOpenAIBaseUrl(
-    process.env.TASKFORGE_OPENAI_BASE_URL?.trim() ||
-      config?.router.baseUrl?.trim() ||
-      DEFAULT_OPENAI_BASE_URL,
-  );
+  if (process.env.TASKFORGE_OPENAI_BASE_URL?.trim()) {
+    return normalizeOpenAIBaseUrl(process.env.TASKFORGE_OPENAI_BASE_URL.trim());
+  }
+  if (config?.router.baseUrl?.trim()) {
+    return normalizeOpenAIBaseUrl(config.router.baseUrl.trim());
+  }
+  if (config?.router.provider === 'ollama') {
+    const host = (process.env.OLLAMA_HOST?.trim() || DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
+    return normalizeOpenAIBaseUrl(host.endsWith('/v1') ? host : `${host}/v1`);
+  }
+  return DEFAULT_OPENAI_BASE_URL;
+}
+
+/** Resolves the effective router/planner model, substituting a local Ollama default when `router.provider: ollama`. */
+export function resolveRouterModel(config?: TaskForgeConfig): string {
+  if (config?.router.provider === 'ollama') {
+    const configured = config.router.model?.trim();
+    if (configured && configured !== 'gpt-4o-mini') {
+      return configured;
+    }
+    return (
+      process.env.TASKFORGE_OLLAMA_MODEL?.trim() ||
+      config.agents?.ollama?.model?.trim() ||
+      'qwen2.5-coder:latest'
+    );
+  }
+  return config?.router.model?.trim() || 'gpt-4o-mini';
 }
 
 export function resolveOpenAIApiKey(config?: TaskForgeConfig): string | undefined {
@@ -456,6 +479,11 @@ export function resolveOpenAIApiKey(config?: TaskForgeConfig): string | undefine
   }
   if (config?.router?.apiKey && config.router.apiKey.trim().length > 0) {
     return config.router.apiKey.trim();
+  }
+  // Local Ollama OpenAI-compatible endpoints accept any non-empty bearer token;
+  // never forward the user's cloud OPENAI_API_KEY to localhost.
+  if (config?.router?.provider === 'ollama') {
+    return 'ollama';
   }
   // Never forward a global OpenAI key to a custom gateway just because a base URL
   // changed. A gateway must have its own explicitly configured credential.
@@ -520,7 +548,7 @@ function applyProfile(merged: Record<string, unknown>): Record<string, unknown> 
   return { ...merged, execution: { ...execution, profile }, collaboration };
 }
 
-export function loadConfig(configPath?: string): TaskForgeConfig {
+export function loadConfig(configPath?: string, repoRoot?: string): TaskForgeConfig {
   let merged: Record<string, unknown> = {};
 
   // Load global ~/.taskforge/config.yaml if using default resolution
@@ -539,7 +567,7 @@ export function loadConfig(configPath?: string): TaskForgeConfig {
     }
   }
 
-  const resolvedPath = configPath ?? path.resolve(process.cwd(), '.taskforge/config.yaml');
+  const resolvedPath = configPath ?? path.resolve(repoRoot ?? process.cwd(), '.taskforge/config.yaml');
   if (fs.existsSync(resolvedPath)) {
     try {
       const rawContent = fs.readFileSync(resolvedPath, 'utf8');
