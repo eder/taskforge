@@ -29,15 +29,24 @@ Supported agent harnesses currently include:
 | Claude Code | `claude` |
 | OpenAI Codex CLI | `codex` |
 | Google Antigravity | `agy` |
+| Ollama *(optional, local/read-only)* | `ollama` |
 
-Install TaskForge from source:
+Install TaskForge from source (do **not** use `npm link apps/cli`, as npm cannot resolve pnpm `workspace:*` dependencies):
 
 ```bash
 git clone https://github.com/eder/taskforge.git
 cd taskforge
+corepack enable
 pnpm install
 pnpm build
-npm link apps/cli
+pnpm --dir apps/cli link --global
+```
+
+If `tf` is not on your `PATH`, link the built binary directly:
+
+```bash
+chmod +x apps/cli/dist/bin.js
+sudo ln -sf "$(pwd)/apps/cli/dist/bin.js" /usr/local/bin/tf
 ```
 
 The fastest way to get going in a project is one guided command:
@@ -897,6 +906,30 @@ Create a draft PR:
 tf pr create run-<id> --base main --draft
 ```
 
+### Local Web Cockpit, MCP Server, Daemon, Scheduler & Index
+
+```bash
+# Strictly-local Web Cockpit (127.0.0.1)
+tf ui --port 4310
+
+# Stdio JSON-RPC 2.0 MCP server for Cursor / VS Code / Claude Desktop
+tf mcp serve
+
+# Recurring scheduled automations & persistent local daemon
+tf schedule add 6h "@codex audit recent commits for security regressions"
+tf schedule list
+tf schedule run-now
+tf daemon start --ui-port 4310
+tf daemon status
+tf daemon stop
+
+# Offline local SQLite BM25 repository index & run insights
+tf index "payment retry"
+tf insights
+```
+
+See [Platform Integrations](platform-integrations.md) for MCP client JSON configs, TypeScript SDK (`TaskForgeClient`), Ollama setup, and lifecycle hooks.
+
 ## 15. Configuration
 
 ### Do I need `.taskforge/config.yaml`?
@@ -977,12 +1010,37 @@ permissions:
     force_push: deny
     merge_main: deny
 
+agents:
+  claude:
+    enabled: true
+    model: claude-sonnet-4-6
+    effort: high
+  codex:
+    enabled: true
+    maxParallel: 2
+    model: o3
+    effort: high
+  agy:
+    enabled: true
+  ollama:
+    enabled: true
+    model: qwen2.5-coder:latest
+
 verification:
   tests: true
   lint: true
   typecheck: true
   review: true
   maxReworkCycles: 2
+
+hooks:
+  afterDirectEdit: "pnpm prettier --write $(git diff --name-only)"
+  onRunComplete: "echo 'Run finished'"
+  timeoutSeconds: 30
+
+notifications:
+  enabled: true
+  sound: false
 ```
 
 ### Verification commands in a real project

@@ -34,6 +34,12 @@ Be aware of what TaskForge does and does not enforce:
 - **Provider permission prompts are the provider's.** Agents run non-interactively with their provider's own permission handling. TaskForge's permission policy governs requests that reach it; it cannot veto an action a provider CLI performs on its own.
 - **Credentials are forwarded per provider.** Each agent receives only its own provider's variables (for example `ANTHROPIC_API_KEY` for Claude Code, `OPENAI_API_KEY` for Codex). TaskForge's own router key (`TASKFORGE_OPENAI_API_KEY`) is never forwarded, and neither is `SSH_AUTH_SOCK` unless you opt in with `agents.<id>.passEnv`.
 - **Nothing reaches your branch automatically** unless you set `delivery.mode: auto_apply` *and* `permissions.git.merge_main: allow`.
+- **Direct Mode edits run in your working tree (with checkpoints).** Unlike orchestrated runs that isolate writes inside `.taskforge/worktrees/`, Direct Mode edits modify the active working tree directly after creating an automatic rollback checkpoint (`/checkpoints`, `/undo`). Use orchestrated mode or container mode for untrusted tasks.
+- **Project configuration hooks execute local shell commands.** `hooks.afterDirectEdit`, `hooks.onRunComplete`, and `hooks.onAttentionRequired` in `.taskforge/config.yaml` run via your local shell (`sh -lc`). **Always inspect `.taskforge/config.yaml`** before launching `tf` inside a repository cloned from an untrusted third party.
+- **Local Web Cockpit (`tf ui` / `/ui`) is localhost-only and unauthenticated.** It binds strictly to `127.0.0.1` and exposes read/action endpoints (`/api/state`, `/api/diff`, `/api/events`, `/api/action`) for the local user. Never proxy or bind it to `0.0.0.0` or a public network interface.
+- **MCP Server (`tf mcp serve`) trusts its connected stdio client.** Any IDE or desktop client connected to `tf mcp serve` can invoke TaskForge tools (`taskforge_run_direct`, `taskforge_council`, `taskforge_blueprint`, `taskforge_memory`, `taskforge_checkpoints`) inside the configured repository.
+- **Local Daemon & Scheduled Automations (`tf daemon`, `tf schedule`) run unattended.** Commands stored in `.taskforge/schedules.json` execute periodically without interactive confirmation; keep scheduled commands read-only or scoped to trusted repositories.
+- **Local Voice Input (`/voice`) and Ollama (`@ollama`).** Default backends stay strictly local (`sox` + `whisper`/`whisper-cli`, `http://127.0.0.1:11434`). If you override `TASKFORGE_VOICE_CMD` or `OLLAMA_HOST`, verify that the target command/endpoint is trusted.
 
 ## What is in scope
 
@@ -41,20 +47,23 @@ TaskForge's design boundary is that model output may *propose* decisions but det
 
 - an agent action that bypasses the permission engine (`permissions.*` policy) or the headless policy;
 - writes outside an assignment's isolated worktree or outside its `allowedScope`/ownership rules;
-- secrets (for example `TASKFORGE_OPENAI_API_KEY`) leaking into agent subprocess environments, logs, the database or pull requests;
+- secrets (for example `TASKFORGE_OPENAI_API_KEY`) leaking into agent subprocess environments, logs, the database, Web Cockpit API responses, MCP responses, or pull requests;
 - a delivery path (`/apply`, `/pr`, `auto_apply`) that merges or pushes without the configured approvals, or touches the target branch on conflict;
-- path traversal or oversized-payload handling in project-instruction discovery (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`);
-- command injection through goal text, branch names or configuration values.
+- path traversal or oversized-payload handling in project-instruction discovery (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`), `/skills` loading, or `#file`/`#image` resolution;
+- command injection through goal text, branch names, schedule specs, or configuration values;
+- accidental exposure of the Local Web Cockpit outside `127.0.0.1` or cross-site request forgery against `/api/action`.
 
 ## Out of scope
 
-- Vulnerabilities in the third-party agent CLIs themselves (Claude Code, Codex CLI, Google Antigravity) or in model providers; report those upstream.
-- Behavior that requires an attacker to already control your machine, your `~/.taskforge/config.yaml`, or your repository's `.taskforge/config.yaml` with permissive settings you chose (for example setting `permissions.commands.sudo: allow`).
+- Vulnerabilities in the third-party agent CLIs or model runtimes themselves (Claude Code, Codex CLI, Google Antigravity, Ollama, Whisper); report those upstream.
+- Behavior that requires an attacker to already control your machine, your `~/.taskforge/config.yaml`, or your repository's `.taskforge/config.yaml` with permissive settings you chose (for example setting `permissions.commands.sudo: allow` or malicious `hooks.*` commands).
 - Agent output quality problems that do not cross a security boundary.
 
 ## Hardening tips for users
 
 - Keep the defaults: `workspace_write: allow` only inside worktrees, `network`, `package_install` and `push` as `ask_human`, `force_push`, `sudo` and `merge_main` as `deny`.
 - Prefer `delivery.mode: ask_human` or `pull_request`; `auto_apply` additionally requires `permissions.git.merge_main: allow` as an explicit opt-in.
+- Inspect `.taskforge/config.yaml` (especially `hooks.*` and `verification.commands`) and `.taskforge/schedules.json` before running `tf` in third-party repositories.
+- Keep `tf ui` bound to `127.0.0.1` (default) and never expose its port over LAN or the internet.
 - Store the OpenAI key in `TASKFORGE_OPENAI_API_KEY` or `~/.taskforge/config.yaml`, never in a repository file.
-- Review `/diff` before `/apply` or `/pr`.
+- Review `/diff` (or `tf ui`) before `/apply` or `/pr`.
