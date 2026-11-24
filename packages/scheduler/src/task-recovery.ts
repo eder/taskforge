@@ -111,6 +111,7 @@ const ENVIRONMENT_PATTERNS: RegExp[] = [
   /no [\w ]{0,30}api[_ ]?key[\w ]{0,20}(?:configured|set|found|provided)/,
   /(?:missing|unset|not set|not defined|required)[\w ,:'"-]{0,40}(?:api[_ ]?key|environment variable)/,
   /modulenotfounderror|cannot find module '(?!\.)/,
+  /err_pnpm_unsafe_task_run_state_path|refusing to use task run state directory/,
 ];
 
 function looksLikeEnvironmentFailure(text: string): boolean {
