@@ -73,7 +73,19 @@ import {
   planRunRepair,
   repairRun,
 } from '@taskforge/scheduler';
-import { InteractiveShell, TuiDashboard, runDashStream, theme, colors, summarizeGoal } from '@taskforge/conversation';
+import {
+  InteractiveShell,
+  TuiDashboard,
+  runDashStream,
+  theme,
+  colors,
+  summarizeGoal,
+  LocalWebCockpitServer,
+  TaskForgeMcpServer,
+  LocalDaemonController,
+  ScheduleStore,
+  TaskForgeClient,
+} from '@taskforge/conversation';
 import { TelemetryCollector, PerformanceEngine, computeInsights, formatInsights } from '@taskforge/telemetry';
 import { runSetup } from './setup.js';
 import { runSelftest } from './selftest.js';
@@ -1622,6 +1634,138 @@ export function createCli(): Command {
         }
       } finally {
         indexer.close();
+      }
+    });
+
+  // Wave J: Strictly-local Web Cockpit (`tf ui`)
+  program
+    .command('ui')
+    .description('Launch the strictly-local Web Cockpit (127.0.0.1) with visual diff, Living Plan & Council viewer')
+    .option('-p, --port <port>', 'Port on 127.0.0.1', '4310')
+    .option('--no-open', 'Do not auto-open the browser')
+    .action(async (opts: { port?: string; open?: boolean }) => {
+      const repoRoot = process.cwd();
+      const config = loadConfig();
+      const db = new TaskForgeDatabase(config.execution.databasePath);
+      const port = parseInt(opts.port ?? '4310', 10) || 4310;
+      const server = new LocalWebCockpitServer({ repoRoot, db, port });
+      const { url } = await server.start();
+      console.log(`${colors.green}✔${colors.reset} TaskForge Local Cockpit running at ${colors.cyan}${url}${colors.reset} (Ctrl-C to stop)`);
+      if (opts.open !== false) server.openInBrowser();
+
+      await new Promise<void>((resolve) => {
+        const stop = () => {
+          void server.stop().finally(() => {
+            db.close();
+            resolve();
+          });
+        };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+      });
+    });
+
+  // Wave L: Model Context Protocol (MCP) stdio server (`tf mcp serve`)
+  const mcpCmd = program.command('mcp').description('Expose TaskForge to IDEs via Model Context Protocol (MCP)');
+  mcpCmd
+    .command('serve')
+    .description('Start TaskForge MCP JSON-RPC 2.0 server over stdio')
+    .action(async () => {
+      const repoRoot = process.cwd();
+      const client = new TaskForgeClient({ repoRoot });
+      const mcp = new TaskForgeMcpServer({
+        repoRoot,
+        executeShellCommand: (cmd) => client.run(cmd),
+      });
+      await mcp.serveStdio();
+      client.close();
+    });
+
+  // Wave L: Persistent Local Daemon & Recurring Automations (`tf daemon`, `tf schedule`)
+  const daemonCmd = program.command('daemon').description('Manage the local persistent TaskForge daemon');
+  daemonCmd
+    .command('status')
+    .description('Check whether the local TaskForge daemon is running')
+    .action(() => {
+      const ctrl = new LocalDaemonController(process.cwd());
+      const st = ctrl.getStatus();
+      if (!st.running || !st.state) {
+        console.log('TaskForge daemon is not running.');
+        return;
+      }
+      console.log(`TaskForge daemon running (PID ${st.state.pid}, started ${st.state.startedAt}${st.state.uiUrl ? `, UI ${st.state.uiUrl}` : ''}).`);
+    });
+  daemonCmd
+    .command('stop')
+    .description('Stop the local TaskForge daemon')
+    .action(() => {
+      const ctrl = new LocalDaemonController(process.cwd());
+      console.log(ctrl.stopDaemon() ? 'Stopped TaskForge daemon.' : 'TaskForge daemon is not running.');
+    });
+  daemonCmd
+    .command('start')
+    .description('Start the local TaskForge daemon (polls scheduled automations and optionally serves Local Cockpit UI)')
+    .option('--ui-port <port>', 'Also serve Local Cockpit UI on 127.0.0.1:<port>')
+    .action(async (opts: { uiPort?: string }) => {
+      const repoRoot = process.cwd();
+      const ctrl = new LocalDaemonController(repoRoot);
+      const client = new TaskForgeClient({ repoRoot });
+      let uiServer: LocalWebCockpitServer | undefined;
+      if (opts.uiPort) {
+        uiServer = await client.startLocalUi(parseInt(opts.uiPort, 10) || 4310);
+      }
+      const state = ctrl.markStarted(uiServer?.url);
+      console.log(`TaskForge daemon started (PID ${state.pid}${state.uiUrl ? ` · UI ${state.uiUrl}` : ''}). Press Ctrl-C to stop.`);
+      ctrl.startPolling((cmd) => client.run(cmd));
+
+      await new Promise<void>((resolve) => {
+        const shutdown = () => {
+          ctrl.stopDaemon();
+          void (uiServer ? uiServer.stop() : Promise.resolve()).finally(() => {
+            client.close();
+            resolve();
+          });
+        };
+        process.once('SIGINT', shutdown);
+        process.once('SIGTERM', shutdown);
+      });
+    });
+
+  const scheduleCmd = program.command('schedule').description('Manage recurring TaskForge automations');
+  scheduleCmd
+    .command('list')
+    .description('List configured recurring automations')
+    .action(() => {
+      console.log(new ScheduleStore(process.cwd()).formatList());
+    });
+  scheduleCmd
+    .command('add <interval> <command...>')
+    .description('Schedule a recurring command (e.g. tf schedule add 6h "@codex audit security")')
+    .action((interval: string, commandParts: string[]) => {
+      const job = new ScheduleStore(process.cwd()).add(interval, commandParts.join(' '));
+      console.log(`Scheduled ${job.id} (${job.schedule}): ${job.command}`);
+    });
+  scheduleCmd
+    .command('remove <id>')
+    .description('Remove a scheduled automation')
+    .action((id: string) => {
+      console.log(new ScheduleStore(process.cwd()).remove(id) ? `Removed ${id}.` : `Schedule ${id} not found.`);
+    });
+  scheduleCmd
+    .command('run-now')
+    .description('Execute all currently due scheduled automations once')
+    .action(async () => {
+      const repoRoot = process.cwd();
+      const ctrl = new LocalDaemonController(repoRoot);
+      const client = new TaskForgeClient({ repoRoot });
+      const results = await ctrl.runDueSchedules((cmd) => client.run(cmd));
+      client.close();
+      if (results.length === 0) {
+        console.log('No scheduled automations are currently due.');
+        return;
+      }
+      for (const r of results) {
+        console.log(`[${r.status.toUpperCase()}] ${r.id}: ${r.output.slice(0, 160)}`);
       }
     });
 

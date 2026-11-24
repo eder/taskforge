@@ -11,6 +11,7 @@ import {
 } from './real-adapters.js';
 import { AgentQuotaTracker, AgentQuotaStatus } from './quota-tracker.js';
 import type { AuthStatus } from './auth-status.js';
+import { OllamaAdapter } from './ollama-adapter.js';
 
 export interface AgentDetectionReport {
   id: string;
@@ -105,6 +106,11 @@ const HARNESSES: HarnessDefinition[] = [
   { id: 'aider', create: (o) => new AiderAdapter(o), builtIn: false },
   { id: 'opencode', create: (o) => new OpenCodeAdapter(o), builtIn: false },
   { id: 'goose', create: (o) => new GooseAdapter(o), builtIn: false },
+  {
+    id: 'ollama',
+    create: (o) => new OllamaAdapter({ model: o.model, baseUrl: o.env?.OLLAMA_HOST }),
+    builtIn: false,
+  },
 ];
 
 export class AgentRegistry {

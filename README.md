@@ -284,6 +284,10 @@ The README intentionally lists the complete public slash-command catalog. The re
 | `/fix-ci` | Fetch failing GitHub Actions CI logs via `gh` and dispatch a targeted fix |
 | `/review-pr` | Run an independent multi-agent review on a GitHub Pull Request (`/review-pr [#number]`) with 1-Enter comment posting |
 | `/issue` | Fetch a GitHub Issue (`/issue <#number>`) into Orchestrated Planning, `/blueprint`, or `/council` |
+| `/ui` | Start or stop the strictly-local Web Cockpit (`127.0.0.1`) with live SSE updates, visual diff viewer, Living Plan tracker, and Debate Council browser (also `tf ui`) |
+| `/schedule` | Manage recurring scheduled automations (`/schedule [list\|add <interval> <cmd>\|remove <id>\|run <id>]`, also `tf schedule` & `tf daemon`) |
+| `/voice` | Capture and transcribe local voice prompts via `sox` + `whisper` / `TASKFORGE_VOICE_CMD` (`/voice [seconds]`) |
+| `/multirepo` | Coordinate linked sibling repositories (`/multirepo [status\|init <paths...>\|branch <name>]`) |
 | `/runs` | List past execution runs and delivery status |
 | `/inspect` | Inspect run → task → assignment history; accepts an optional run id |
 | `/tasks` | Show task and assignment status; accepts an optional task id |

@@ -225,6 +225,10 @@ import {
 import { LifecycleHookRunner } from './lifecycle-hooks.js';
 import { BackgroundJobManager } from './background-jobs.js';
 import { SpecialtyRouter } from './specialty-router.js';
+import { LocalWebCockpitServer } from './local-web-cockpit.js';
+import { ScheduleStore } from './daemon-scheduler.js';
+import { VoiceInputService } from './voice-input.js';
+import { MultiRepoCoordinator } from './multi-repo.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -289,6 +293,7 @@ export class InteractiveShell {
   private specialtyRouter: SpecialtyRouter;
   private hookRunner: LifecycleHookRunner;
   private backgroundJobs: BackgroundJobManager;
+  private localUiServer?: LocalWebCockpitServer;
   private directRunner: DirectAgentRunner;
   private debateCouncil: DebateCouncilRunner;
   /** Sticky direct chat target: 'auto' (Hybrid Smart Mode), 'all' (parallel multi-agent), or an agent id. */
@@ -1212,6 +1217,30 @@ export class InteractiveShell {
     const tddMatch = text.match(/^\/tdd(?:\s+(.*))?$/i);
     if (tddMatch) {
       return this.handleTddCommand((tddMatch[1] ?? '').trim(), abortSignal);
+    }
+
+    // Wave J: Strictly-local Web Cockpit (`/ui [port|stop]`)
+    const uiMatch = text.match(/^\/ui(?:\s+(.*))?$/i);
+    if (uiMatch) {
+      return this.handleUiCommand((uiMatch[1] ?? '').trim());
+    }
+
+    // Wave L: Recurring Scheduled Automations (`/schedule [list|add|remove|run]`)
+    const scheduleMatch = text.match(/^\/schedule(?:\s+(.*))?$/i);
+    if (scheduleMatch) {
+      return this.handleScheduleCommand((scheduleMatch[1] ?? '').trim(), abortSignal);
+    }
+
+    // Wave M: Local Voice Input (`/voice [seconds]`)
+    const voiceMatch = text.match(/^\/voice(?:\s+(\d+))?$/i);
+    if (voiceMatch) {
+      return this.handleVoiceCommand(voiceMatch[1] ? parseInt(voiceMatch[1], 10) : 8, abortSignal);
+    }
+
+    // Wave M: Multi-Repository Coordinator (`/multirepo [status|init|branch]`)
+    const multiRepoMatch = text.match(/^\/multirepo(?:\s+(.*))?$/i);
+    if (multiRepoMatch) {
+      return this.handleMultiRepoCommand((multiRepoMatch[1] ?? '').trim());
     }
 
     // Wave H: GitHub Autopilot (`/fix-ci`, `/review-pr`, `/issue` + PT/EN natural language)
@@ -3677,6 +3706,23 @@ export class InteractiveShell {
       return this.directRunner.getCompetitiveCandidateDiff(pending, parseInt(diffMatch[1], 10));
     }
 
+    // Wave K: Hybrid per-file cherry-pick across competing agents (`mix src/a.ts:#1 src/b.ts:#2`)
+    const mixMatch = /^mix\s+(.+)$/i.exec(text);
+    if (mixMatch) {
+      const picks: Array<{ file: string; candidateIndex: number }> = [];
+      for (const token of mixMatch[1].split(/[\s,]+/).filter(Boolean)) {
+        const pair = /^(.+?):#?(\d+)$/.exec(token);
+        if (pair) {
+          picks.push({ file: pair[1], candidateIndex: parseInt(pair[2], 10) });
+        }
+      }
+      if (picks.length > 0) {
+        this.pendingCompetitiveEdit = undefined;
+        return this.directRunner.applyCompetitiveFiles(pending, picks);
+      }
+      return `${colors.red}✖ Invalid mix syntax.${colors.reset} Example: mix src/a.ts:#1 src/b.ts:#2`;
+    }
+
     const pickNumMatch =
       /^(?:#?(\d+)|(?:aplica(?:r)?|apply|usa(?:r)?|use|escolho|pick|choose)\s+(?:o\s+|a\s+|#)?(\d+))$/i.exec(
         lower,
@@ -4236,6 +4282,131 @@ export class InteractiveShell {
     }
     this.pendingGitHubAction = undefined;
     return undefined;
+  }
+
+  /** Handles `/ui [port|stop]` to launch or stop the strictly-local Web Cockpit (127.0.0.1). */
+  private async handleUiCommand(argText: string): Promise<string> {
+    const lower = argText.toLowerCase();
+    if (lower === 'stop' || lower === 'close') {
+      if (!this.localUiServer) return `${colors.dim}Local Web Cockpit is not running.${colors.reset}`;
+      await this.localUiServer.stop();
+      this.localUiServer = undefined;
+      return `${colors.green}✔${colors.reset} Stopped Local Web Cockpit.`;
+    }
+    if (this.localUiServer) {
+      return `${colors.brand}✦ ${colors.bold}Local Web Cockpit${colors.reset} already running at ${colors.cyan}${this.localUiServer.url}${colors.reset} ${colors.dim}(/ui stop to close)${colors.reset}`;
+    }
+    const port = /^\d+$/.test(argText) ? parseInt(argText, 10) : 4310;
+    const server = new LocalWebCockpitServer({
+      repoRoot: this.repoRoot,
+      db: this.db,
+      gitService: this.gitService,
+      port,
+      onAction: async (action) => {
+        if (action === 'undo') {
+          const msg = await this.handleInput('/undo');
+          return { ok: true, message: msg };
+        }
+        return { ok: false, message: `Unsupported action: ${action}` };
+      },
+    });
+    const started = await server.start();
+    this.localUiServer = server;
+    server.openInBrowser();
+    return `${colors.green}✔${colors.reset} ${colors.bold}Local Web Cockpit running:${colors.reset} ${colors.cyan}${started.url}${colors.reset} ${colors.dim}(bound to 127.0.0.1 · /ui stop to close)${colors.reset}`;
+  }
+
+  /** Handles `/schedule [list|add <interval> <cmd>|remove <id>|run <id>]`. */
+  private async handleScheduleCommand(argText: string, abortSignal?: AbortSignal): Promise<string> {
+    if (!this.inRepo) {
+      return `${colors.red}✖ /schedule requires a Git repository.${colors.reset}`;
+    }
+    const store = new ScheduleStore(this.repoRoot);
+    if (!argText || argText.toLowerCase() === 'list') {
+      return store.formatList();
+    }
+    const addMatch = /^add\s+(\S+(?:\s+\S+)?)\s+(.+)$/i.exec(argText);
+    if (addMatch) {
+      // Support both "add 6h <cmd>" and "add every 6h <cmd>"
+      const tokens = argText.slice(4).trim().split(/\s+/);
+      let spec = tokens[0];
+      let cmdStart = 1;
+      if (spec.toLowerCase() === 'every' && tokens.length >= 3) {
+        spec = `${tokens[0]} ${tokens[1]}`;
+        cmdStart = 2;
+      }
+      const command = tokens.slice(cmdStart).join(' ').trim();
+      if (!command) {
+        return `${colors.red}✖ Missing command.${colors.reset} Example: /schedule add 6h @codex check security`;
+      }
+      try {
+        const job = store.add(spec, command);
+        return `${colors.green}✔${colors.reset} Scheduled ${colors.bold}${job.id}${colors.reset} (${job.schedule}): ${job.command}\n  ${colors.dim}Run automatically via \`tf daemon start\` or manually with \`/schedule run ${job.id}\`.${colors.reset}`;
+      } catch (err) {
+        return `${colors.red}✖ ${err instanceof Error ? err.message : String(err)}${colors.reset}`;
+      }
+    }
+    const remMatch = /^(?:remove|rm|delete)\s+(\S+)$/i.exec(argText);
+    if (remMatch) {
+      return store.remove(remMatch[1])
+        ? `${colors.green}✔${colors.reset} Removed schedule ${remMatch[1]}.`
+        : `${colors.red}✖ Schedule "${remMatch[1]}" not found.${colors.reset}`;
+    }
+    const runMatch = /^run\s+(\S+)$/i.exec(argText);
+    if (runMatch) {
+      const job = store.list().find((j) => j.id === runMatch[1]);
+      if (!job) return `${colors.red}✖ Schedule "${runMatch[1]}" not found.${colors.reset}`;
+      try {
+        const out = await this.handleInput(job.command, abortSignal);
+        store.markExecuted(job.id, 'ok', out);
+        return out;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        store.markExecuted(job.id, 'error', msg);
+        return `${colors.red}✖ Schedule ${job.id} failed:${colors.reset} ${msg}`;
+      }
+    }
+    return store.formatList();
+  }
+
+  /** Handles `/voice [seconds]` local speech-to-text capture. */
+  private async handleVoiceCommand(seconds: number, abortSignal?: AbortSignal): Promise<string> {
+    const voice = new VoiceInputService();
+    const res = await voice.recordAndTranscribe(seconds);
+    if (!res.ok || !res.transcript) {
+      return `${colors.yellow}⚠ Voice input unavailable:${colors.reset} ${res.error ?? 'transcription failed'}`;
+    }
+    this.viewport.writeUpper(
+      `\n  ${colors.cyan}🎙 Voice (${res.backend}):${colors.reset} "${res.transcript}"\n`,
+    );
+    return this.handleInput(res.transcript, abortSignal);
+  }
+
+  /** Handles `/multirepo [status|init <paths...>|branch <name>]`. */
+  private async handleMultiRepoCommand(argText: string): Promise<string> {
+    const coord = new MultiRepoCoordinator(this.repoRoot);
+    if (!argText || argText.toLowerCase() === 'status') {
+      return coord.formatStatusDisplay();
+    }
+    const initMatch = /^init\s+(.+)$/i.exec(argText);
+    if (initMatch) {
+      const paths = initMatch[1].split(/\s+/).filter(Boolean);
+      const { config, invalid } = coord.initFromPaths(paths);
+      const warn = invalid.length > 0 ? `\n  ${colors.yellow}⚠ Skipped missing paths:${colors.reset} ${invalid.join(', ')}` : '';
+      return `${colors.green}✔${colors.reset} Linked ${config.repos.length} repositories in .taskforge/workspace.json.${warn}\n${await coord.formatStatusDisplay()}`;
+    }
+    const branchMatch = /^branch\s+(\S+)$/i.exec(argText);
+    if (branchMatch) {
+      const results = await coord.createLinkedBranches(branchMatch[1]);
+      if (results.length === 0) {
+        return `${colors.dim}No linked repositories configured. Run /multirepo init <paths...> first.${colors.reset}`;
+      }
+      return [
+        `${colors.brand}✦ ${colors.bold}Synchronized Multi-Repo Branch:${colors.reset} ${colors.cyan}${branchMatch[1]}${colors.reset}`,
+        ...results.map((r) => `  ${r.ok ? `${colors.green}✔${colors.reset}` : `${colors.red}✖${colors.reset}`} ${r.repo}: ${r.detail}`),
+      ].join('\n');
+    }
+    return coord.formatStatusDisplay();
   }
 
   /** Lists saved Direct Mode working-tree checkpoints available for `/undo`. */
