@@ -359,6 +359,30 @@ export const TaskForgeConfigSchema = z.object({
     .default({
       mode: 'ask_human',
     }),
+  hooks: z
+    .object({
+      /** Shell command run after a Direct Mode agent modifies workspace files (e.g. "pnpm prettier --write"). */
+      afterDirectEdit: z.string().optional(),
+      /** Shell command run when an orchestrated run finishes. */
+      onRunComplete: z.string().optional(),
+      /** Shell command run when an agent pauses waiting for human input/approval. */
+      onAttentionRequired: z.string().optional(),
+      timeoutSeconds: z.number().int().positive().default(30),
+    })
+    .default({
+      timeoutSeconds: 30,
+    }),
+  notifications: z
+    .object({
+      /** Send native desktop notifications (macOS / Linux) on run completion and human-attention prompts. */
+      enabled: z.boolean().default(false),
+      /** Play a subtle system alert sound with macOS desktop notifications. */
+      sound: z.boolean().default(false),
+    })
+    .default({
+      enabled: false,
+      sound: false,
+    }),
   git: z
     .object({
       workflow: z.enum(GIT_WORKFLOW_KINDS).default('trunk'),

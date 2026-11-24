@@ -26,6 +26,7 @@ export class TerminalViewport {
   private currentCursorIndex = 0;
   private currentStatus = '';
   private currentPanelLines: string[] = [];
+  private modeBadge = '';
   private repoName: string;
   private branch: string;
   private resizeListener?: () => void;
@@ -63,6 +64,28 @@ export class TerminalViewport {
   public updateContext(repoName: string, branch: string) {
     this.repoName = repoName;
     this.branch = branch;
+  }
+
+  /**
+   * Sets the live dynamic prompt badge shown on the persistent input line
+   * (e.g. `auto`, `@codex · o3`, `@all · 2 ckpts`, `auto · 1 bg`).
+   */
+  public setModeBadge(badge: string) {
+    const normalized = badge.trim();
+    if (this.modeBadge === normalized) return;
+    this.modeBadge = normalized;
+    if (this.isInteractive) {
+      this.renderInputLine(this.currentBuffer, this.currentCursorIndex, this.currentStatus, this.currentPanelLines);
+    }
+  }
+
+  public getModeBadge(): string {
+    return this.modeBadge;
+  }
+
+  private getPromptVisualWidth(): number {
+    // `> ` (2) or `[badge] > ` (badge.length + 4)
+    return this.modeBadge ? this.modeBadge.length + 4 : 2;
   }
 
   public init() {
@@ -181,7 +204,7 @@ export class TerminalViewport {
     cursorVisualLine: number;
     cursorVisualCol: number;
   } {
-    const promptLen = 2; // visual width of "> " or "  "
+    const promptLen = this.getPromptVisualWidth();
     const maxCols = Math.max(20, this.cols || 80);
     const availWidth = Math.max(10, maxCols - promptLen - 2);
 
@@ -364,10 +387,15 @@ export class TerminalViewport {
     }
 
     // Render input lines
+    const continuationPad = ' '.repeat(this.getPromptVisualWidth());
     for (let i = 0; i < inputHeight; i++) {
       const row = inputStartRow + i;
       const isFirstLine = windowStart + i === 0;
-      const promptPrefix = isFirstLine ? `${colors.bold}${colors.green}>${colors.reset} ` : '  ';
+      const promptPrefix = isFirstLine
+        ? this.modeBadge
+          ? `${colors.dim}[${colors.cyan}${this.modeBadge}${colors.reset}${colors.dim}]${colors.reset} ${colors.bold}${colors.green}>${colors.reset} `
+          : `${colors.bold}${colors.green}>${colors.reset} `
+        : continuationPad;
       const lineText = displayLines[i];
       const formattedText = lineText
         .replace(

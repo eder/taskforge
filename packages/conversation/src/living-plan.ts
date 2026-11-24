@@ -4,6 +4,7 @@ import {
   DEFAULT_OPENAI_BASE_URL,
   type RepositoryProfile,
 } from '@taskforge/shared';
+import { TaskGraph, type Task } from '@taskforge/core';
 import { colors } from './theme.js';
 
 export type WaveStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
@@ -704,6 +705,101 @@ export function buildWaveExecutionGoal(
   }
 
   return sections.join('\n\n');
+}
+
+/**
+ * Deterministically compiles a parallel Living Plan Wave (e.g. Wave 2) directly
+ * into a multi-task `TaskGraph` where each module becomes an independent task
+ * with strictly disjoint `allowedScope` boundaries. Guarantees real multi-agent
+ * parallel fan-out even with zero OpenAI API key!
+ */
+export function compileWaveToTaskGraph(
+  plan: LivingPlan,
+  wave: LivingPlanWave,
+  goalId: string,
+  liveRepoProfile?: RepositoryProfile,
+): TaskGraph | undefined {
+  if (wave.mode !== 'parallel' || wave.modules.length < 2) return undefined;
+
+  const waveModules = wave.modules
+    .map((id) => plan.modules.find((m) => m.id === id))
+    .filter((m): m is LivingPlanModule => Boolean(m));
+  if (waveModules.length < 2) return undefined;
+
+  const tasks: Task[] = [];
+  const moduleIdToTaskId = new Map<string, string>();
+  waveModules.forEach((mod, idx) => {
+    moduleIdToTaskId.set(mod.id, `TASK-${String(idx + 1).padStart(2, '0')}`);
+  });
+
+  const liveMapBlock =
+    liveRepoProfile?.repositoryMap && liveRepoProfile.repositoryMap.length > 0
+      ? `\nObserved repository layout:\n${liveRepoProfile.repositoryMap.slice(0, 20).join('\n')}`
+      : '';
+  const contractsBlock =
+    plan.contracts.length > 0
+      ? `\nShared contracts to honor:\n${plan.contracts.map((c) => `- ${c}`).join('\n')}`
+      : '';
+
+  const now = new Date();
+  for (let i = 0; i < waveModules.length; i++) {
+    const mod = waveModules[i];
+    const taskId = moduleIdToTaskId.get(mod.id)!;
+    const intraWaveDeps = mod.dependsOn
+      .map((dep) => moduleIdToTaskId.get(dep))
+      .filter((depTaskId): depTaskId is string => Boolean(depTaskId) && depTaskId !== taskId);
+
+    const allowedScope = mod.scope.length > 0 ? [...mod.scope] : [`src/${mod.id}/**`, `tests/${mod.id}/**`];
+    const criteria = [
+      `Implement ${mod.name} cleanly within [${allowedScope.join(', ')}]`,
+      'Include unit tests covering the core behavior and edge cases',
+      'Honor shared contracts without modifying sibling module scopes',
+    ];
+    const task: Task = {
+      id: taskId,
+      goalId,
+      title: `Implement ${mod.name}`,
+      description: `${mod.responsibility} (Wave ${wave.number}: ${wave.name})`,
+      type: 'implementation',
+      status: 'proposed',
+      dependencies: intraWaveDeps,
+      acceptanceCriteria: criteria,
+      contract: {
+        objective: [
+          `[Living Plan Wave ${wave.number} — Module: ${mod.name}]`,
+          `Project goal: ${plan.goal}`,
+          `Module responsibility: ${mod.responsibility}`,
+          plan.stack.length > 0 ? `Stack: ${plan.stack.join(', ')}` : '',
+          contractsBlock,
+          liveMapBlock,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        allowedScope,
+        forbiddenChanges: [],
+        acceptanceCriteria: criteria,
+        dependencies: intraWaveDeps,
+        completionMode: 'mutation',
+        metadata: {
+          livingPlanWave: wave.number,
+          livingPlanModuleId: mod.id,
+        },
+      },
+      reworkCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    tasks.push(task);
+  }
+
+  return new TaskGraph(tasks, {
+    goalId,
+    planner: {
+      source: 'deterministic_decomposition',
+      model: 'living-plan-wave-compiler',
+      livingPlanWave: wave.number,
+    },
+  });
 }
 
 /** Formats a Living Plan cleanly for display inside the interactive REPL. */

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentRegistry } from '@taskforge/agents';
+import type { AgentAdapter, AgentActivityTracker, AgentRegistry } from '@taskforge/agents';
 import { AgentDetector } from '@taskforge/agents';
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -9,9 +9,14 @@ import {
   type AgentContext,
 } from '@taskforge/shared';
 import { colors } from './theme.js';
-import { resolveFileMentionsInPrompt } from './file-mention-completer.js';
+import {
+  appendImageContextToPrompt,
+  resolveFileMentionsInPrompt,
+} from './file-mention-completer.js';
 import { normalizeAgentAlias } from './direct-agent-router.js';
 import type { DirectConversationMemory } from './direct-agent-session.js';
+import type { DirectTelemetryStore } from './direct-telemetry.js';
+import { formatProjectMemoryForPrompt } from './project-memory.js';
 
 export interface CouncilProposal {
   index: number;
@@ -92,6 +97,8 @@ export interface DebateCouncilOptions {
   openAiBaseUrl?: string;
   openAiModel?: string;
   synthesizer?: CouncilSynthesizerFn;
+  activityTracker?: AgentActivityTracker;
+  directTelemetry?: DirectTelemetryStore;
   onStateChanged?: () => void;
 }
 
@@ -186,6 +193,8 @@ export class DebateCouncilRunner {
   private readonly openAiBaseUrl: string;
   private readonly openAiModel: string;
   private readonly synthesizer?: CouncilSynthesizerFn;
+  private readonly activityTracker?: AgentActivityTracker;
+  private readonly directTelemetry?: DirectTelemetryStore;
   private readonly onStateChanged?: () => void;
 
   constructor(options: DebateCouncilOptions) {
@@ -198,6 +207,8 @@ export class DebateCouncilRunner {
     this.openAiBaseUrl = (options.openAiBaseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/$/, '');
     this.openAiModel = options.openAiModel ?? 'gpt-4o-mini';
     this.synthesizer = options.synthesizer;
+    this.activityTracker = options.activityTracker;
+    this.directTelemetry = options.directTelemetry;
     this.onStateChanged = options.onStateChanged;
   }
 
@@ -247,9 +258,11 @@ export class DebateCouncilRunner {
       objective: prompt,
       status: 'running',
     };
+    const durableMemory = formatProjectMemoryForPrompt(this.repoRoot);
     const context: AgentContext = {
       worktreePath: this.repoRoot,
       originalUserRequest: originalProblem,
+      priorContext: durableMemory,
       conversationHistory,
       directMode: true,
       mutationAllowed: false,
@@ -265,26 +278,60 @@ export class DebateCouncilRunner {
       },
       onStreamEvent: (ev) => {
         if (ev.type === 'file_read') {
+          this.activityTracker?.updateStatus(assignment.id, `Read ${ev.path}`);
           this.onLiveLine?.(`  ${colors.dim}[${adapter.name}·${taskId}] Read ${ev.path}${colors.reset}\n`);
         }
       },
     };
+    const startedAt = new Date();
+    this.activityTracker?.register({
+      assignmentId: assignment.id,
+      taskId,
+      taskTitle: `Council: ${originalProblem.slice(0, 50)}`,
+      agentId: adapter.id,
+      agentName: adapter.name,
+      role: assignment.role,
+      status: `Council ${taskId}`,
+      startedAt,
+      lastActiveAt: startedAt,
+    });
     try {
       const res = await adapter.execute(assignment, context);
+      const durationMs = res.durationMs || Date.now() - start;
+      this.directTelemetry?.record({
+        agentId: adapter.id,
+        agentName: adapter.name,
+        category: 'council',
+        prompt: originalProblem,
+        success: res.success,
+        durationMs,
+        tokensUsed: res.usage?.totalTokens,
+      });
       return {
         success: res.success,
         content: (res.output || res.message || '').trim() || (res.success ? '(no output)' : 'Failed'),
-        durationMs: res.durationMs || Date.now() - start,
+        durationMs,
         tokensUsed: res.usage?.totalTokens,
         error: res.success ? undefined : res.message || 'Execution failed',
       };
     } catch (err) {
+      const durationMs = Date.now() - start;
+      this.directTelemetry?.record({
+        agentId: adapter.id,
+        agentName: adapter.name,
+        category: 'council',
+        prompt: originalProblem,
+        success: false,
+        durationMs,
+      });
       return {
         success: false,
         content: '',
-        durationMs: Date.now() - start,
+        durationMs,
         error: err instanceof Error ? err.message : String(err),
       };
+    } finally {
+      this.activityTracker?.completeAssignment(assignment.id);
     }
   }
 
@@ -294,7 +341,7 @@ export class DebateCouncilRunner {
     options: { abortSignal?: AbortSignal; saveReport?: boolean } = {},
   ): Promise<{ result: CouncilSessionResult; pending?: PendingCouncilDecision }> {
     const resolvedMentions = resolveFileMentionsInPrompt(rawProblem, this.repoRoot);
-    const problem = resolvedMentions.cleanedPrompt;
+    const problem = appendImageContextToPrompt(resolvedMentions.cleanedPrompt, resolvedMentions.images);
     const councilId = `council-${Date.now().toString(36)}`;
 
     const { adapters, unavailable } = await this.resolveAdapters(targets);
@@ -545,6 +592,129 @@ export class DebateCouncilRunner {
     };
 
     return { result, pending };
+  }
+
+  /**
+   * Runs an interactive extra round (Round 4+) on a specific follow-up question
+   * raised by the user after seeing the Council Verdict, updating the Verdict
+   * and persisted `.taskforge/councils/<id>.md` report.
+   */
+  public async runFollowUpRound(
+    decision: PendingCouncilDecision,
+    followUpQuestion: string,
+    options: { abortSignal?: AbortSignal; saveReport?: boolean } = {},
+  ): Promise<{ formatted: string; updatedDecision: PendingCouncilDecision }> {
+    const participants = decision.proposals
+      .map((p) => this.agentRegistry.get(p.agentId))
+      .filter((a): a is AgentAdapter => Boolean(a));
+
+    if (participants.length === 0) {
+      return {
+        formatted: `${colors.red}✖ No Council participants available for follow-up round.${colors.reset}`,
+        updatedDecision: decision,
+      };
+    }
+
+    this.onLiveLine?.(
+      `\n  ${colors.cyan}▸ Council Follow-Up Round:${colors.reset} "${followUpQuestion.slice(0, 80)}" (${participants.length} agents in parallel)...\n`,
+    );
+
+    const followUps: CouncilRefinement[] = await Promise.all(
+      decision.proposals.map(async (prop) => {
+        const adapter = this.agentRegistry.get(prop.agentId);
+        if (!adapter) {
+          return {
+            proposalIndex: prop.index,
+            agentId: prop.agentId,
+            agentName: prop.agentName,
+            content: '',
+            durationMs: 0,
+            success: false,
+            error: 'agent unavailable',
+          };
+        }
+        const prevRef = decision.refinements.find((r) => r.proposalIndex === prop.index);
+        const prompt = [
+          `Original problem:\n${decision.problem}`,
+          `\nCurrent Council Verdict:\n${decision.verdict.summary}`,
+          prevRef?.content ? `\nYour previous refined position:\n${prevRef.content.slice(0, 1800)}` : '',
+          `\nUser follow-up question for the Council:\n${followUpQuestion}`,
+          '\nAnswer this follow-up concisely (read-only) and update your recommendation if needed. Reply in the same language as the user.',
+        ]
+          .filter(Boolean)
+          .join('\n');
+
+        const res = await this.executeReadOnlyTurn(
+          adapter,
+          `FOLLOWUP-P${prop.index}`,
+          decision.problem,
+          prompt,
+          undefined,
+          options.abortSignal,
+        );
+        return {
+          proposalIndex: prop.index,
+          agentId: prop.agentId,
+          agentName: prop.agentName,
+          content: res.content,
+          durationMs: res.durationMs,
+          tokensUsed: res.tokensUsed,
+          success: res.success,
+          error: res.error,
+        };
+      }),
+    );
+
+    const updatedRefinements = decision.refinements.map((ref) => {
+      const f = followUps.find((x) => x.proposalIndex === ref.proposalIndex && x.success);
+      if (!f) return ref;
+      return {
+        ...ref,
+        content: `${ref.content}\n\n[Follow-up on "${followUpQuestion}"]:\n${f.content}`,
+      };
+    });
+
+    const newVerdict = await this.synthesizeVerdict(
+      `${decision.problem} (Follow-up: ${followUpQuestion})`,
+      decision.proposals,
+      decision.critiques,
+      updatedRefinements,
+    );
+    if (options.saveReport !== false) {
+      newVerdict.savedReportPath = this.saveCouncilReport(
+        decision.id,
+        decision.problem,
+        decision.proposals,
+        decision.critiques,
+        updatedRefinements,
+        newVerdict,
+      );
+    }
+
+    const updatedDecision: PendingCouncilDecision = {
+      ...decision,
+      refinements: updatedRefinements,
+      verdict: newVerdict,
+    };
+
+    const lines = [
+      `${colors.brand}✦ ${colors.bold}Council Follow-Up Round${colors.reset} ${colors.dim}— "${followUpQuestion}"${colors.reset}`,
+    ];
+    for (const f of followUps) {
+      const badge = f.success ? `${colors.green}✔${colors.reset}` : `${colors.red}✖${colors.reset}`;
+      lines.push(`\n${badge} ${colors.bold}${f.agentName}${colors.reset}:`);
+      lines.push(f.success ? f.content : `${colors.red}${f.error}${colors.reset}`);
+    }
+    lines.push(
+      `\n${colors.brand}✦ ${colors.bold}Updated Council Verdict${colors.reset}`,
+      newVerdict.summary,
+      `  ${colors.dim}↵ Enter: implement   ·   "blueprint" for Living Plan   ·   1..${decision.proposals.length} to pick   ·   "aprofundar <tópico>" for another round   ·   /back to close${colors.reset}`,
+    );
+
+    return {
+      formatted: lines.join('\n'),
+      updatedDecision,
+    };
   }
 
   private async synthesizeVerdict(

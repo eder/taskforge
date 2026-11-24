@@ -184,6 +184,7 @@ import {
   generateLivingPlanBlueprint,
   refineLivingPlan,
   buildWaveExecutionGoal,
+  compileWaveToTaskGraph,
   formatLivingPlanDisplay,
   type LivingPlan,
   type LivingPlanGeneratorFn,
@@ -196,6 +197,34 @@ import {
   type PendingCouncilDecision,
   type CouncilSynthesizerFn,
 } from './debate-council.js';
+import { DirectTelemetryStore } from './direct-telemetry.js';
+import {
+  addProjectMemoryEntry,
+  removeProjectMemoryEntry,
+  clearProjectMemory,
+  formatProjectMemoryDisplay,
+  parseNaturalMemoryCapture,
+} from './project-memory.js';
+import {
+  parseGitHubAutopilotCommand,
+  fetchLatestFailedCiRun,
+  fetchPullRequestContext,
+  postPullRequestReviewComment,
+  fetchGitHubIssueContext,
+  buildFixCiPrompt,
+  buildPrReviewPrompt,
+  formatIssueContextDisplay,
+  type GitHubAutopilotCommand,
+  type PendingGitHubAutopilotAction,
+} from './github-autopilot.js';
+import {
+  findProjectSkill,
+  expandSkillPrompt,
+  formatSkillsList,
+} from './project-skills.js';
+import { LifecycleHookRunner } from './lifecycle-hooks.js';
+import { BackgroundJobManager } from './background-jobs.js';
+import { SpecialtyRouter } from './specialty-router.js';
 
 // Public API preserved for existing importers.
 export { sanitizeDisplayedRepositoryPaths, findWordLeft, findWordRight };
@@ -256,6 +285,10 @@ export class InteractiveShell {
   private focusedAdvisor: FocusedRunAdvisor;
   private directMemory = new DirectConversationMemory();
   private checkpointManager: DirectCheckpointManager;
+  private directTelemetry: DirectTelemetryStore;
+  private specialtyRouter: SpecialtyRouter;
+  private hookRunner: LifecycleHookRunner;
+  private backgroundJobs: BackgroundJobManager;
   private directRunner: DirectAgentRunner;
   private debateCouncil: DebateCouncilRunner;
   /** Sticky direct chat target: 'auto' (Hybrid Smart Mode), 'all' (parallel multi-agent), or an agent id. */
@@ -268,6 +301,8 @@ export class InteractiveShell {
   private pendingDirectGitAction?: PendingDirectGitAction;
   /** Pending Wave D Multi-Agent Solution Debate Council verdict awaiting handoff choice. */
   private pendingCouncilDecision?: PendingCouncilDecision;
+  /** Pending Wave H GitHub Autopilot action (post PR review comment / hand off issue). */
+  private pendingGitHubAction?: PendingGitHubAutopilotAction;
   /** Active interactive Living Plan blueprint awaiting refinement or wave launch. */
   private pendingLivingPlan?: LivingPlan;
   /** Tracks the wave number currently being planned/executed from `.taskforge/plan.md`. */
@@ -414,6 +449,18 @@ export class InteractiveShell {
     this.enableLivingPlanAutoDetect = options.enableLivingPlanAutoDetect ?? !process.env.VITEST;
     this.livingPlanGenerator = options.livingPlanGenerator;
     this.checkpointManager = new DirectCheckpointManager(this.repoRoot, this.gitService);
+    this.directTelemetry = new DirectTelemetryStore(this.db);
+    this.specialtyRouter = new SpecialtyRouter(this.db, this.directTelemetry);
+    this.hookRunner = new LifecycleHookRunner(this.repoRoot, () => this.config);
+    this.backgroundJobs = new BackgroundJobManager((job) => {
+      const icon = job.status === 'completed' ? `${colors.green}✔${colors.reset}` : `${colors.red}✖${colors.reset}`;
+      const dur = job.durationMs !== undefined ? `${(job.durationMs / 1000).toFixed(1)}s` : '';
+      this.viewport.writeUpper(
+        `\n  ${icon} ${colors.brand}${colors.bold}Background job ${job.id} finished${colors.reset} ${colors.dim}(${dur}) — "${job.command.slice(0, 60)}" · run /bg ${job.id} to inspect.${colors.reset}\n`,
+      );
+      this.syncPromptBadge();
+      void this.hookRunner.notifyDesktop('TaskForge Background Job', `${job.id} ${job.status}: ${job.command.slice(0, 60)}`);
+    });
     this.directRunner = new DirectAgentRunner({
       repoRoot: this.repoRoot,
       agentRegistry: this.agentRegistry,
@@ -422,6 +469,10 @@ export class InteractiveShell {
       onLiveLine: (line) => this.viewport.writeUpper(line),
       gitService: this.gitService,
       checkpointManager: this.checkpointManager,
+      activityTracker: this.activityTracker,
+      directTelemetry: this.directTelemetry,
+      specialtyRouter: this.specialtyRouter,
+      hookRunner: this.hookRunner,
       worktreeManager: new WorktreeManager(
         this.repoRoot,
         this.config.execution.worktreesDir,
@@ -431,7 +482,10 @@ export class InteractiveShell {
       openAiBaseUrl: openaiBaseUrl,
       openAiModel: advisorModel,
       verificationCommands: this.config.verification.commands,
-      onStateChanged: () => this.persistDirectSessionState(),
+      onStateChanged: () => {
+        this.persistDirectSessionState();
+        this.syncPromptBadge();
+      },
     });
     this.debateCouncil = new DebateCouncilRunner({
       repoRoot: this.repoRoot,
@@ -443,11 +497,17 @@ export class InteractiveShell {
       openAiBaseUrl: openaiBaseUrl,
       openAiModel: advisorModel,
       synthesizer: options.councilSynthesizer,
-      onStateChanged: () => this.persistDirectSessionState(),
+      activityTracker: this.activityTracker,
+      directTelemetry: this.directTelemetry,
+      onStateChanged: () => {
+        this.persistDirectSessionState();
+        this.syncPromptBadge();
+      },
     });
     if (!options.freshSession) {
       this.hydrateDirectSessionState();
     }
+    this.syncPromptBadge();
     this.setupActivitySubscription();
     this.setupCockpitEventSubscription();
   }
@@ -494,6 +554,14 @@ export class InteractiveShell {
       if (panel) {
         this.viewport.writeUpper('\n' + panel + '\n');
       }
+      void this.hookRunner.runHook('onAttentionRequired', {
+        TASKFORGE_AGENT: state.agentId,
+        TASKFORGE_TASK_ID: state.taskId,
+      });
+      void this.hookRunner.notifyDesktop(
+        'TaskForge — Attention Required',
+        `${state.agentName} (${state.taskId}): ${attention.prompt.slice(0, 80)}`,
+      );
     }
 
     for (const assignmentId of this.surfacedAttentionByAssignment.keys()) {
@@ -1017,6 +1085,11 @@ export class InteractiveShell {
         this.pendingDirectGitAction = undefined;
         return this.executePendingDirectGitAction(action);
       }
+      if (this.pendingGitHubAction) {
+        const action = this.pendingGitHubAction;
+        this.pendingGitHubAction = undefined;
+        return this.executePendingGitHubAction(action, abortSignal);
+      }
       if (this.pendingCouncilDecision) {
         const decision = this.pendingCouncilDecision;
         this.pendingCouncilDecision = undefined;
@@ -1045,6 +1118,12 @@ export class InteractiveShell {
     // Pending direct git commit/PR confirmation
     if (this.pendingDirectGitAction) {
       const handled = await this.handleDirectGitActionReply(text);
+      if (handled !== undefined) return handled;
+    }
+
+    // Pending Wave H GitHub Autopilot confirmation (PR comment / Issue handoff)
+    if (this.pendingGitHubAction) {
+      const handled = await this.handleGitHubActionReply(text, abortSignal);
       if (handled !== undefined) return handled;
     }
 
@@ -1089,6 +1168,90 @@ export class InteractiveShell {
       return this.formatCheckpointsList();
     }
 
+    // Wave I: Background REPL jobs (`& <command>` and `/bg [id]`)
+    if (text.startsWith('&') && text.slice(1).trim().length > 0) {
+      const bgCommand = text.slice(1).trim();
+      const job = this.backgroundJobs.start(bgCommand, () => this.handleInput(bgCommand));
+      this.syncPromptBadge();
+      return `${colors.cyan}●${colors.reset} Started background job ${colors.bold}${job.id}${colors.reset}: ${colors.dim}${bgCommand.slice(0, 80)}${colors.reset}\n  ${colors.dim}Keep working freely — you will be notified inline when ${job.id} finishes (or run /bg ${job.id}).${colors.reset}`;
+    }
+
+    const bgMatch = text.match(/^\/bg(?:\s+(\S+))?$/i);
+    if (bgMatch) {
+      return bgMatch[1]
+        ? this.backgroundJobs.formatJobOutput(bgMatch[1])
+        : this.backgroundJobs.formatList();
+    }
+
+    // Wave G: Compact Direct Mode conversation memory (`/compact`)
+    if (/^\/compact$/i.test(text)) {
+      const { compactedCount, remainingCount } = this.directMemory.compact(6);
+      this.persistDirectSessionState();
+      if (compactedCount === 0) {
+        return `${colors.dim}Direct session memory is already compact (${remainingCount} entries).${colors.reset}`;
+      }
+      return `${colors.green}✔${colors.reset} Compacted ${compactedCount} older turn(s) into a dense rolling summary (${remainingCount} entries kept).`;
+    }
+
+    // Wave G: Durable project memory (`/memory [add|remove|clear]`)
+    const memoryMatch = text.match(/^\/memory(?:\s+(.*))?$/i);
+    if (memoryMatch) {
+      return this.handleMemoryCommand((memoryMatch[1] ?? '').trim());
+    }
+
+    // Wave I: Unified project skills (`/skills`, `/skill <name> [@agent|@all] [args]`)
+    if (/^\/skills$/i.test(text)) {
+      return formatSkillsList(this.repoRoot);
+    }
+    const skillMatch = text.match(/^\/skill(?:\s+(.*))?$/i);
+    if (skillMatch) {
+      return this.handleSkillCommand((skillMatch[1] ?? '').trim(), abortSignal);
+    }
+
+    // Wave H: Adversarial Multi-Agent TDD loop (`/tdd [@tester -> @implementer] <spec>`)
+    const tddMatch = text.match(/^\/tdd(?:\s+(.*))?$/i);
+    if (tddMatch) {
+      return this.handleTddCommand((tddMatch[1] ?? '').trim(), abortSignal);
+    }
+
+    // Wave H: GitHub Autopilot (`/fix-ci`, `/review-pr`, `/issue` + PT/EN natural language)
+    if (this.inRepo && !this.currentGraph && !this.focusedRun && this.interactionGateway.getPendingRequests().length === 0) {
+      const ghCmd = parseGitHubAutopilotCommand(text);
+      if (ghCmd) {
+        return this.handleGitHubAutopilot(ghCmd, abortSignal);
+      }
+    }
+
+    // Wave G: Natural-language durable project memory capture ("lembra que...", "remember that...")
+    if (
+      this.inRepo &&
+      this.stickyAgentMode === 'auto' &&
+      !this.currentGraph &&
+      !this.focusedRun &&
+      this.interactionGateway.getPendingRequests().length === 0
+    ) {
+      const memCapture = parseNaturalMemoryCapture(text);
+      if (memCapture) {
+        const res = addProjectMemoryEntry(this.repoRoot, memCapture.text, 'preference');
+        return memCapture.language === 'pt'
+          ? `${colors.green}✔${colors.reset} Salvo na memória durável do projeto (${colors.cyan}.taskforge/memory.md${colors.reset} · #${res.entry.id}): "${res.entry.text}"\n  ${colors.dim}Todos os agentes (claude, codex, agy) receberão essa regra automaticamente.${colors.reset}`
+          : `${colors.green}✔${colors.reset} Saved to durable project memory (${colors.cyan}.taskforge/memory.md${colors.reset} · #${res.entry.id}): "${res.entry.text}"\n  ${colors.dim}All agents (claude, codex, agy) will automatically honor this rule.${colors.reset}`;
+      }
+    }
+
+    // Wave I: Direct `/<skill-name> [args]` shortcut for custom project skills not colliding with built-in commands
+    if (text.startsWith('/')) {
+      const firstToken = text.split(/\s+/)[0].toLowerCase();
+      const isBuiltIn = SLASH_COMMANDS.some((c) => c.cmd === firstToken) || firstToken === '/waves' || firstToken === '/debate' || firstToken === '/resume' || firstToken === '/overview' || firstToken === '/quit';
+      if (!isBuiltIn) {
+        const customSkill = findProjectSkill(this.repoRoot, firstToken);
+        if (customSkill) {
+          const restArgs = text.slice(firstToken.length).trim();
+          return this.handleSkillCommand(`${customSkill.name}${restArgs ? ` ${restArgs}` : ''}`, abortSignal);
+        }
+      }
+    }
+
     const blueprintMatch = text.match(/^\/(?:blueprint|waves)(?:\s+(.*))?$/i);
     if (blueprintMatch) {
       return this.handleBlueprintCommand((blueprintMatch[1] ?? '').trim(), abortSignal);
@@ -1109,6 +1272,13 @@ export class InteractiveShell {
           { abortSignal, saveReport: this.inRepo },
         );
         this.pendingCouncilDecision = pending;
+        if (pending && this.inRepo) {
+          addProjectMemoryEntry(
+            this.repoRoot,
+            `Council (${councilCmd.problem.slice(0, 70)}): ${pending.verdict.summary.slice(0, 170)}`,
+            'council',
+          );
+        }
         return result.formatted;
       }
     }
@@ -1194,11 +1364,13 @@ export class InteractiveShell {
       if (directCmd.mode === 'auto') {
         this.stickyAgentMode = 'auto';
         this.persistDirectSessionState();
+        this.syncPromptBadge();
         return `${colors.green}✔${colors.reset} Mode set to ${colors.bold}Hybrid Smart (auto)${colors.reset}. ${colors.dim}Quick Q&A and small edits go straight to the best agent; multi-file/complex work scales to parallel worktrees.${colors.reset}`;
       }
       if (directCmd.mode === 'all') {
         this.stickyAgentMode = 'all';
         this.persistDirectSessionState();
+        this.syncPromptBadge();
         return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}@all (parallel multi-agent)${colors.reset}. ${colors.dim}Every message goes to all ready agents in parallel with shared memory. Type @auto or /use auto to return.${colors.reset}`;
       }
       const adapter = this.agentRegistry.get(directCmd.mode);
@@ -1207,6 +1379,7 @@ export class InteractiveShell {
       }
       this.stickyAgentMode = adapter.id;
       this.persistDirectSessionState();
+      this.syncPromptBadge();
       return `${colors.green}✔${colors.reset} Direct mode pinned to ${colors.bold}${adapter.name} (${adapter.id})${colors.reset}. ${colors.dim}Messages go straight to ${adapter.name} with shared cross-agent memory. Switch anytime with @codex/@claude/@agy/@all or @auto.${colors.reset}`;
     }
     if (directCmd.kind === 'model_config') {
@@ -1646,17 +1819,31 @@ export class InteractiveShell {
       }
 
       case 'inspect_cost': {
-        if (!this.activeRunId) {
+        const parts: string[] = [];
+        if (this.activeRunId) {
+          parts.push(this.telemetry.formatCostReport(this.activeRunId));
+        }
+        const directCost = this.directTelemetry.formatCostSection();
+        if (directCost) parts.push(directCost);
+        if (parts.length === 0) {
           return 'No active or recent runs for cost inquiry.';
         }
-        return this.telemetry.formatCostReport(this.activeRunId);
+        return parts.join('\n\n');
       }
 
       case 'inspect_stats': {
-        if (!this.activeRunId) {
+        const parts: string[] = [];
+        if (this.activeRunId) {
+          parts.push(this.telemetry.formatStatsReport(this.activeRunId));
+        }
+        const directCost = this.directTelemetry.formatCostSection();
+        if (directCost) parts.push(directCost);
+        const specialties = this.specialtyRouter.formatLearnedSpecialtiesSection();
+        if (specialties) parts.push(specialties);
+        if (parts.length === 0) {
           return 'No active or recent runs for statistics inquiry.';
         }
-        return this.telemetry.formatStatsReport(this.activeRunId);
+        return parts.join('\n\n');
       }
 
       case 'inspect_dashboard': {
@@ -2102,7 +2289,21 @@ export class InteractiveShell {
           }
         }
 
-        const proposedGraph = await this.planner.plan(goal, repoProfile);
+        // Wave F: Deterministically compile parallel Living Plan waves (e.g. Wave 2)
+        // directly into disjoint multi-module TaskGraph nodes so multi-agent fan-out
+        // is guaranteed even without an OpenAI API key!
+        let compiledWaveGraph: TaskGraph | undefined;
+        if (this.activeLivingPlanWave) {
+          const activePlan = loadLivingPlan(this.repoRoot);
+          const waveDef = activePlan?.waves.find(
+            (w) => w.number === this.activeLivingPlanWave?.waveNumber,
+          );
+          if (activePlan && waveDef) {
+            compiledWaveGraph = compileWaveToTaskGraph(activePlan, waveDef, goal.id, repoProfile);
+          }
+        }
+
+        const proposedGraph = compiledWaveGraph ?? (await this.planner.plan(goal, repoProfile));
         const negotiatedGraph = await this.negotiator.negotiateGraph(
           proposedGraph,
           this.activeRunId,
@@ -3591,6 +3792,19 @@ export class InteractiveShell {
       return `${colors.red}✖ Invalid solution #${idx}.${colors.reset} Choose 1..${decision.proposals.length}, inspect <n>, blueprint, Enter, or /back.`;
     }
 
+    // Interactive Council extra follow-up round ("aprofundar <tópico>", "debate <question>", "ask <question>")
+    const followUpMatch =
+      /^(?:aprofund(?:ar|em|a)|debat(?:er|a|e)|pergunt(?:ar|a)|ask|follow-?up)\s*[:-]?\s+(.+)$/i.exec(text);
+    if (followUpMatch) {
+      const followUp = await this.debateCouncil.runFollowUpRound(
+        decision,
+        followUpMatch[1].trim(),
+        { abortSignal, saveReport: this.inRepo },
+      );
+      this.pendingCouncilDecision = followUp.updatedDecision;
+      return followUp.formatted;
+    }
+
     // Any other message dismisses the pending council menu and proceeds normally.
     this.pendingCouncilDecision = undefined;
     return undefined;
@@ -3738,6 +3952,25 @@ export class InteractiveShell {
       return `${colors.green}✔${colors.reset} All ${plan.waves.length} waves in .taskforge/plan.md are already completed!`;
     }
 
+    // Wave F: Seamless wave-to-wave transition — if the previous completed wave
+    // produced a `ready_to_apply` delivery, apply it cleanly first so this wave
+    // re-scans and builds on top of the exact files created by the earlier wave!
+    let autoAppliedNote = '';
+    const prevWave = plan.waves.find((w) => w.number === wave.number - 1 && w.status === 'completed');
+    if (prevWave?.runId) {
+      const prevDelivery = this.deliveryService.getDelivery(prevWave.runId);
+      if (prevDelivery?.status === 'ready_to_apply') {
+        try {
+          const applied = await this.deliveryService.apply(prevWave.runId);
+          if (!applied.alreadyApplied) {
+            autoAppliedNote = `${colors.green}✔${colors.reset} Auto-applied Wave ${prevWave.number} (${prevWave.runId} → ${applied.commit.slice(0, 7)}) before scanning repo for Wave ${wave.number}.\n\n`;
+          }
+        } catch {
+          // Best-effort: if apply cannot cleanly fast-forward, proceed and let user resolve.
+        }
+      }
+    }
+
     // Re-analyze the live repository right before planning this wave so Wave 2+
     // plans strictly against the real files and directory topology created earlier!
     const liveRepoProfile = await new RepositoryAnalyzer(this.repoRoot, this.gitService)
@@ -3753,7 +3986,8 @@ export class InteractiveShell {
     const prevSmart = this.smartDirectDispatch;
     this.smartDirectDispatch = false;
     try {
-      return await this.handleInput(waveGoal, abortSignal);
+      const out = await this.handleInput(waveGoal, abortSignal);
+      return `${autoAppliedNote}${out}`;
     } finally {
       this.smartDirectDispatch = prevSmart;
     }
@@ -3761,6 +3995,15 @@ export class InteractiveShell {
 
   /** Updates `.taskforge/plan.md` when a wave run completes or fails and surfaces next-wave prompt. */
   private recordLivingPlanWaveOutcome(result: OrchestrationResult): string | undefined {
+    void this.hookRunner.runHook('onRunComplete', {
+      TASKFORGE_RUN_ID: result.runId,
+      TASKFORGE_RUN_STATUS: result.status,
+    });
+    void this.hookRunner.notifyDesktop(
+      `TaskForge Run ${result.status.toUpperCase()}`,
+      `${result.runId} finished (${result.tasksCompleted} task(s) completed).`,
+    );
+
     const active = this.activeLivingPlanWave;
     if (!active) return undefined;
     this.activeLivingPlanWave = undefined;
@@ -3793,6 +4036,208 @@ export class InteractiveShell {
     return `${colors.yellow}⚠${colors.reset} Living Plan Wave ${active.waveNumber} marked as failed in .taskforge/plan.md. Use /retry to finish it or /blueprint next to re-run.`;
   }
 
+  /** Syncs the dynamic live prompt badge (mode, model override, checkpoints, background jobs). */
+  public syncPromptBadge(): void {
+    const parts: string[] = [];
+    if (this.stickyAgentMode === 'auto') {
+      parts.push('auto');
+    } else if (this.stickyAgentMode === 'all') {
+      parts.push('@all');
+    } else {
+      const adapter = this.agentRegistry.get(this.stickyAgentMode);
+      const model = adapter?.getModelConfig?.().model ?? this.config.agents[this.stickyAgentMode]?.model;
+      parts.push(model ? `@${this.stickyAgentMode} · ${model}` : `@${this.stickyAgentMode}`);
+    }
+    const ckptCount = this.checkpointManager.list().length;
+    if (ckptCount > 0) {
+      parts.push(`${ckptCount} ckpt${ckptCount === 1 ? '' : 's'}`);
+    }
+    const runningBg = this.backgroundJobs.getRunningCount();
+    if (runningBg > 0) {
+      parts.push(`${runningBg} bg`);
+    }
+    this.viewport.setModeBadge(parts.join(' · '));
+  }
+
+  /** Handles `/memory [add <text> | remove <#> | clear]`. */
+  private handleMemoryCommand(argText: string): string {
+    if (!this.inRepo) {
+      return `${colors.red}✖ /memory requires a Git repository.${colors.reset}`;
+    }
+    if (!argText || argText.toLowerCase() === 'show' || argText.toLowerCase() === 'list') {
+      return formatProjectMemoryDisplay(this.repoRoot);
+    }
+    if (argText.toLowerCase() === 'clear') {
+      const cleared = clearProjectMemory(this.repoRoot);
+      return cleared
+        ? `${colors.green}✔${colors.reset} Cleared .taskforge/memory.md.`
+        : `${colors.dim}No .taskforge/memory.md to clear.${colors.reset}`;
+    }
+    const removeMatch = /^(?:remove|rm|del(?:ete)?)\s+#?(\d+)$/i.exec(argText);
+    if (removeMatch) {
+      const idx = parseInt(removeMatch[1], 10);
+      const ok = removeProjectMemoryEntry(this.repoRoot, idx);
+      return ok
+        ? `${colors.green}✔${colors.reset} Removed project memory #${idx}.`
+        : `${colors.red}✖ Memory entry #${idx} not found.${colors.reset} Run /memory to view entries.`;
+    }
+    const addMatch = /^add\s+(.+)$/i.exec(argText);
+    const fact = (addMatch ? addMatch[1] : argText).trim();
+    const res = addProjectMemoryEntry(this.repoRoot, fact, 'convention');
+    return res.duplicate
+      ? `${colors.dim}Already saved in .taskforge/memory.md (#${res.entry.id}).${colors.reset}`
+      : `${colors.green}✔${colors.reset} Added to .taskforge/memory.md (#${res.entry.id}): "${res.entry.text}"`;
+  }
+
+  /** Handles `/skill <name> [@agent|@all] [args]` across `.taskforge/skills/`, `.claude/commands/`, and `.agents/skills/`. */
+  private async handleSkillCommand(argText: string, abortSignal?: AbortSignal): Promise<string> {
+    if (!argText) return formatSkillsList(this.repoRoot);
+    const tokens = argText.split(/\s+/).filter(Boolean);
+    const skillName = tokens[0];
+    const skill = findProjectSkill(this.repoRoot, skillName);
+    if (!skill) {
+      return `${colors.red}✖ Skill "${skillName}" not found.${colors.reset}\n${formatSkillsList(this.repoRoot)}`;
+    }
+
+    let target: 'all' | 'smart' | string[] = 'smart';
+    let restTokens = tokens.slice(1);
+    if (restTokens[0]?.startsWith('@')) {
+      const raw = restTokens[0].slice(1).toLowerCase();
+      if (raw === 'all' || raw === 'todos') {
+        target = 'all';
+        restTokens = restTokens.slice(1);
+      } else {
+        const mapped = raw === 'antigravity' ? 'agy' : raw;
+        if (this.agentRegistry.get(mapped)) {
+          target = [mapped];
+          restTokens = restTokens.slice(1);
+        }
+      }
+    }
+
+    const expanded = expandSkillPrompt(skill, restTokens.join(' '));
+    const res = await this.directRunner.runAgents(target, expanded, {
+      abortSignal,
+      autoReason: `skill /${skill.name}`,
+    });
+    return res.formatted;
+  }
+
+  /** Handles `/tdd [@tester -> @implementer] <spec>` adversarial multi-agent TDD loop. */
+  private async handleTddCommand(argText: string, abortSignal?: AbortSignal): Promise<string> {
+    if (!argText) {
+      return `${colors.dim}Usage: /tdd [@tester -> @implementer] <feature or bug specification>${colors.reset}\n  ${colors.dim}Example: /tdd @agy -> @codex add rate limiter with 10 req/min sliding window${colors.reset}`;
+    }
+    let tester: string | 'smart' = 'smart';
+    let implementer: string | 'smart' = 'smart';
+    let spec = argText;
+
+    const pairMatch = /^@([a-zA-Z0-9_-]+)\s*(?:->|=>|→)\s*@([a-zA-Z0-9_-]+)\s+(.+)$/.exec(argText);
+    if (pairMatch) {
+      tester = pairMatch[1].toLowerCase() === 'antigravity' ? 'agy' : pairMatch[1].toLowerCase();
+      implementer = pairMatch[2].toLowerCase() === 'antigravity' ? 'agy' : pairMatch[2].toLowerCase();
+      spec = pairMatch[3].trim();
+    }
+
+    const res = await this.directRunner.runAdversarialTdd(tester, implementer, spec, {
+      abortSignal,
+    });
+    return res.formatted;
+  }
+
+  /** Handles Wave H GitHub Autopilot (`/fix-ci`, `/review-pr`, `/issue`). */
+  private async handleGitHubAutopilot(
+    cmd: GitHubAutopilotCommand,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    if (cmd.kind === 'fix_ci') {
+      const { info, error } = await fetchLatestFailedCiRun(this.repoRoot, cmd.runId, this.gitService);
+      if (error || !info) {
+        return `${colors.red}✖ ${error ?? 'Could not inspect failed CI run.'}${colors.reset}`;
+      }
+      const prompt = buildFixCiPrompt(info);
+      const res = await this.directRunner.runAgents('smart', prompt, {
+        abortSignal,
+        autoReason: `fixing CI run #${info.runId} (${info.workflowName})`,
+      });
+      return res.formatted;
+    }
+
+    if (cmd.kind === 'review_pr') {
+      const { pr, error } = await fetchPullRequestContext(this.repoRoot, cmd.prNumber);
+      if (error || !pr) {
+        return `${colors.red}✖ ${error ?? 'Could not load PR for review.'}${colors.reset}`;
+      }
+      const prompt = buildPrReviewPrompt(pr);
+      const res = await this.directRunner.runAgents(cmd.targets ?? 'all', prompt, {
+        abortSignal,
+        autoReason: `reviewing PR #${pr.number}`,
+      });
+      const reviewSummary = res.outcomes
+        .filter((o) => o.success && o.response)
+        .map((o) => `### ${o.agentName} Review\n\n${o.response}`)
+        .join('\n\n---\n\n');
+      if (reviewSummary) {
+        this.pendingGitHubAction = {
+          kind: 'post_pr_review',
+          prNumber: pr.number,
+          prUrl: pr.url,
+          reviewBody: `## TaskForge Multi-Agent PR Review\n\n${reviewSummary}`,
+          language: cmd.language,
+        };
+        return `${res.formatted}\n\n  ${colors.dim}↵ Enter: post this review as a comment on PR #${pr.number}   ·   /back to keep local only${colors.reset}`;
+      }
+      return res.formatted;
+    }
+
+    const { issue, error } = await fetchGitHubIssueContext(this.repoRoot, cmd.issueNumber);
+    if (error || !issue) {
+      return `${colors.red}✖ ${error ?? `Could not fetch issue #${cmd.issueNumber}.`}${colors.reset}`;
+    }
+    this.pendingGitHubAction = { kind: 'issue_handoff', issue, language: cmd.language };
+    return formatIssueContextDisplay(issue);
+  }
+
+  private async executePendingGitHubAction(
+    action: PendingGitHubAutopilotAction,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    if (action.kind === 'post_pr_review') {
+      const res = await postPullRequestReviewComment(this.repoRoot, action.prNumber, action.reviewBody);
+      return res.message;
+    }
+    const goal = `Resolve GitHub Issue #${action.issue.number}: ${action.issue.title}\n\n${action.issue.body}`;
+    return this.handleInput(goal, abortSignal);
+  }
+
+  private async handleGitHubActionReply(
+    text: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const pending = this.pendingGitHubAction;
+    if (!pending) return undefined;
+    const lower = text.toLowerCase();
+
+    if (/^(?:\/back|\/cancel|cancel(?:ar)?|n[aã]o|no|q)$/.test(lower)) {
+      this.pendingGitHubAction = undefined;
+      return `${colors.dim}Cancelled GitHub action.${colors.reset}`;
+    }
+    if (/^(?:y|yes|s|sim|ok|post(?:ar)?|implement(?:ar|e)?|go)$/.test(lower)) {
+      this.pendingGitHubAction = undefined;
+      return this.executePendingGitHubAction(pending, abortSignal);
+    }
+    if (pending.kind === 'issue_handoff' && /^(?:council|debate|conselho)$/.test(lower)) {
+      this.pendingGitHubAction = undefined;
+      return this.handleInput(`/council Issue #${pending.issue.number}: ${pending.issue.title}\n${pending.issue.body}`, abortSignal);
+    }
+    if (pending.kind === 'issue_handoff' && /^(?:blueprint|plan|plano|waves?)$/.test(lower)) {
+      this.pendingGitHubAction = undefined;
+      return this.handleBlueprintCommand(`Issue #${pending.issue.number}: ${pending.issue.title} — ${pending.issue.body.slice(0, 400)}`, abortSignal);
+    }
+    this.pendingGitHubAction = undefined;
+    return undefined;
+  }
+
   /** Lists saved Direct Mode working-tree checkpoints available for `/undo`. */
   private formatCheckpointsList(): string {
     const list = this.checkpointManager.list();
@@ -3823,6 +4268,7 @@ export class InteractiveShell {
       return `${colors.red}✖ ${res.error ?? 'Could not restore checkpoint.'}${colors.reset}`;
     }
     this.persistDirectSessionState();
+    this.syncPromptBadge();
     const touched = [...res.restoredFiles, ...res.removedFiles];
     const filesSummary =
       touched.length > 0
@@ -3914,6 +4360,7 @@ export class InteractiveShell {
       updates.push(`effort = ${cmd.effort}`);
     }
     this.config.agents[agentId] = current;
+    this.syncPromptBadge();
     const relFile = path.relative(this.repoRoot, configFile) || configFile;
     return [
       `${colors.green}✔${colors.reset} Updated ${colors.bold}${adapter.name} (${agentId})${colors.reset}: ${colors.cyan}${updates.join(', ')}${colors.reset}`,
