@@ -47,6 +47,10 @@ All workspace packages are released in lockstep under a single version.
   - Local-first voice prompt capture (`/voice [seconds]` via `sox` + `whisper`/`whisper-cli` or `TASKFORGE_VOICE_CMD`).
   - Multi-repository workspace coordination (`/multirepo init|status|branch`, `.taskforge/workspace.json`).
 - **Documentation Guides:** Added dedicated guides for [Direct Mode, Pipelines & Debate Council](docs/direct-mode-and-workflows.md), [Living Plan & Wave Execution](docs/living-plan-and-waves.md), and [Platform Integrations](docs/platform-integrations.md).
+- **Conversational Smart Delivery (`smart-delivery.ts`):**
+  - Detects embedded delivery instructions inside task prompts (PT & EN, e.g. `"corrige X e já abre uma PR"`, `"fix Y and commit"`) and automatically prepares the matching 1-Enter confirmation panel when the edit succeeds.
+  - Completed orchestrated runs now present a context-aware post-success delivery prompt (recommending PR on `github-flow`, apply on feature/trunk branches, or diff first whenever automated checks did not run) accepting natural replies (`Enter`/`sim`, `aplica`, `abre pr`, `diff`, `descarta`) while keeping `/apply` and `/pr` as explicit power shortcuts.
+  - Unified natural-language Git commands (`faz commit`, `abre um pr`, `commita e abre pr`) across both Direct Mode edits and orchestrated runs.
 
 ### Fixed
 - Fixed stale token budget percentage assertion in `packages/telemetry/tests/telemetry.test.ts` after cached-token weighting updates.
