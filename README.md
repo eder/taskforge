@@ -29,43 +29,86 @@ You describe the outcome. TaskForge plans the work, selects agents, creates isol
 
 ### Requirements
 
-- Node.js 22+
-- Git
-- pnpm
-- at least one supported coding-agent CLI installed and authenticated:
+- **Node.js 22+** (`node -v`)
+- **Git** (`git --version`)
+- **pnpm 12+** (run `corepack enable` to activate the pinned version automatically)
+- **At least one supported coding-agent CLI** installed and authenticated (no `OPENAI_API_KEY` is required to get started):
   - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) — `claude`
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `codex`
   - [Google Antigravity](https://antigravity.google/) — `agy`
   - *(Optional, local/air-gapped)* [Ollama](https://ollama.com/) — `@ollama` (read-only analysis, pipelines & Debate Councils at zero API cost)
 
+> [!TIP]
+> **No OpenAI API key required.** TaskForge works out of the box with whichever agent CLI(s) you already have signed in. Setting `TASKFORGE_OPENAI_API_KEY` (or a local OpenAI-compatible gateway) is optional and speeds up complex multi-task planning.
+
 ### Install from source
 
-TaskForge is currently distributed from source.
+> TaskForge `1.0.0-rc.1` is currently installed from source (or via Docker container mode). Do **not** use `npm link apps/cli`—npm cannot resolve pnpm `workspace:*` dependencies.
 
 ```bash
 git clone https://github.com/eder/taskforge.git
 cd taskforge
+corepack enable
 pnpm install
 pnpm build
-npm link apps/cli
+
+# Link `tf` globally with pnpm:
+pnpm --dir apps/cli link --global
+
+# Verify the binary is on your PATH:
+tf --version
 ```
 
-Then enter any Git repository:
+If `tf` is still not found after `pnpm link --global` (for example if pnpm's global bin directory is not on your `PATH`), create a direct symlink instead:
+
+```bash
+chmod +x apps/cli/dist/bin.js
+sudo ln -sf "$(pwd)/apps/cli/dist/bin.js" /usr/local/bin/tf
+```
+
+*(Prefer running isolated? Build and launch with Docker instead: `docker build -t taskforge .` then run `scripts/tf-container.sh` from your target repository.)*
+
+### First 5 minutes
+
+Enter any Git repository and verify your environment:
 
 ```bash
 cd /path/to/your-project
-tf setup       # guided first-time checks: environment, project config, a small test task
-tf selftest    # proves the whole flow (edit, verify, integrate, apply, undo) on a throwaway project with your agents
+tf setup       # guided first-time checks: environment, optional .taskforge/config.yaml, smoke test
+tf selftest    # optional: proves edit → verify → integrate → apply → undo on a throwaway repo
 tf
 ```
 
-Now describe the engineering outcome naturally:
+Inside `tf`, you start in **`auto ▸`** (Smart Auto-Dispatch):
 
 ```text
-> fix the duplicate payment race condition and add regression coverage
+# 1. Quick direct question or edit (fast, streamed, auto-checkpointed)
+auto ▸ explain how authentication works in #src/auth.ts
+
+# 2. Chain two agents directly (implement → independent review)
+auto ▸ @codex -> @claude add input validation to #src/routes/orders.ts
+
+# 3. Convene a 3-round architectural Debate Council across your ready agents
+auto ▸ /council should we store session state in Redis or Postgres?
+
+# 4. Full orchestrated plan (isolated worktrees, verification, explicit /diff /apply /pr)
+auto ▸ fix the duplicate payment race condition and add regression coverage
+
+# 5. Open the strictly-local Web Cockpit (127.0.0.1) in your browser
+auto ▸ /ui
 ```
 
-TaskForge proposes a plan before writable execution. You can approve it, revise it conversationally, or add constraints before any delivery happens.
+TaskForge routes quick questions and `@agent` directives straight to Direct Mode (with automatic `/undo` checkpoints), and proposes a structured plan before writable multi-task orchestration.
+
+<details>
+<summary><strong>Install troubleshooting</strong></summary>
+
+- **`tf: command not found`**: Run `pnpm bin -g` and ensure that folder is in your shell `PATH`, or use the `ln -sf "$(pwd)/apps/cli/dist/bin.js" /usr/local/bin/tf` symlink shown above.
+- **Wrong `pnpm` version**: Run `corepack enable` (ships with Node.js 22+) so pnpm matches `packageManager` in `package.json`.
+- **Agent reported as signed out**: Run `tf doctor` to see the exact login command (for example `claude auth login` or `codex login`).
+- **Running without linking globally**: From the TaskForge clone directory, you can always execute `pnpm tf -- --version`.
+
+</details>
 
 ## Safety: read this first
 
@@ -77,7 +120,7 @@ TaskForge proposes a plan before writable execution. You can approve it, revise 
 
 ### Known limits
 
-- Beta: interfaces and configuration may change between `0.x` releases.
+- Release candidate (`1.0.0-rc.1`): interfaces and configuration may still evolve before `1.0.0` GA.
 - Tested on macOS and in CI on Linux (Node 22 and 24). Windows is not supported or tested.
 - Deciding whether a request is read-only, and whether it refers to an earlier run, uses your planner model and works in any language. Without a model (no `OPENAI_API_KEY`) only English and Portuguese phrases are recognised for read-only requests, and only very short messages count as follow-ups.
 - Conversational commands ("yes", "no", "pause", "who is available?") are keyword-based and understood in English and Portuguese only. Anything else is treated as a new request for the planner, so in other languages use the slash commands (`/approve`, `/reject`, `/pause`, `/apply`, …). A bare constraint such as "do not change .env files" typed while nothing is running is still recorded as a constraint rather than as a request.
@@ -576,21 +619,16 @@ For deeper implementation notes, see:
 
 ## When TaskForge is a good fit
 
-TaskForge is useful when:
+TaskForge covers the full spectrum from quick single-agent turns to multi-agent engineering runs:
 
-- one prompt is no longer enough to represent the engineering workflow;
-- different tasks benefit from different coding agents or roles;
-- you want isolated concurrent execution;
-- you want live visibility without managing several terminals;
-- you want verification and bounded recovery before delivery;
-- your repository contains project instructions that should influence planning;
-- you want a Git delivery boundary between autonomous execution and your target branch.
-
-For a small edit where one agent already has everything it needs, using that coding agent directly may be simpler.
+- **Quick daily tasks (`auto` / Direct Mode):** ask questions, edit files with `#file` / `#image` context, switch models (`/model`), chain `@codex -> @claude`, or roll back instantly with `/undo`—all inside one terminal with shared `.taskforge/memory.md` and `/skills`.
+- **Architecture & high-stakes decisions:** convene a 3-round `/council` across multiple independent agents before writing code.
+- **Large features & greenfield builds:** plan iteratively in `.taskforge/plan.md` (`/blueprint`) and fan out Wave 2 modules across isolated Git worktrees with collision-free `.taskforge.env` ports.
+- **Strict verification & controlled Git delivery:** enforce tests, linting, typechecking, scope boundaries, bounded evidence-driven recovery, and explicit `/diff` → `/apply` / `/pr` delivery.
 
 ## Current status
 
-TaskForge is currently **v1.0.0-rc.1 (release candidate)** and undergoing real-agent pilot validation (see [docs/release-criteria-1.0.md](docs/release-criteria-1.0.md) and [docs/pilot.md](docs/pilot.md)). Pre-releases are published to npm under the `beta` tag (`npm install -g @taskforge/cli@beta`) until `1.0.0`.
+TaskForge is currently **v1.0.0-rc.1 (release candidate)** and undergoing real-agent pilot validation (see [docs/release-criteria-1.0.md](docs/release-criteria-1.0.md) and [docs/pilot.md](docs/pilot.md)). Until `1.0.0` is published to npm, install from source or Docker as shown in [Quick start](#quick-start).
 
 It is already dogfooded on real repositories, but users should expect interfaces and configuration to evolve while the control plane is hardened.
 
@@ -635,7 +673,11 @@ The full CI suite must remain green on Node.js 22 and Node.js 24.
 
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and the release process, and [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+Issues and pull requests are welcome. Please review:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — local setup, architecture boundaries, PR checklist, and release process
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — community standards
+- [SECURITY.md](SECURITY.md) — security model and private vulnerability reporting
 
 For changes to the control plane, keep the core design boundary intact: model output may propose or interpret decisions, but authoritative execution state, permissions, Git behavior, verification, and repository integrity should remain deterministic.
 

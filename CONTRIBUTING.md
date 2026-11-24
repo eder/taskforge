@@ -1,6 +1,6 @@
 # Contributing to TaskForge
 
-Thanks for helping! Issues and pull requests are welcome.
+Thanks for helping! Issues and pull requests are welcome. Participation in this project is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Design boundary (read this first)
 
@@ -10,13 +10,19 @@ Changes to the control plane must keep that boundary intact. Model output may *p
 
 ## Setup
 
-Requirements: Node.js 22+, Git, pnpm.
+Requirements: Node.js 22+, Git, pnpm 12+ (`corepack enable`).
 
 ```bash
 git clone https://github.com/eder/taskforge.git
 cd taskforge
+corepack enable
 pnpm install
 pnpm build
+
+# Optional: link the `tf` CLI globally while developing (do not use `npm link`)
+pnpm --dir apps/cli link --global
+# Or run directly without linking:
+pnpm tf -- --version
 ```
 
 Run the same checks as CI before opening a PR:
@@ -31,20 +37,22 @@ Tests are hermetic: `tests/setup/hermetic.ts` hides installed agent CLIs and API
 
 ## Repository layout
 
-- `apps/cli` — the `tf` command.
-- `packages/*` — control-plane packages (`planner`, `router`, `scheduler`, `agents`, `workspace`, `integration`, `git-workflow`, `persistence`, ...). Each has its own `src/` and `tests/`.
-- `tests/` — end-to-end suites.
-- `docs/` — architecture and usage documentation.
-
-See [`docs/usage.md`](docs/usage.md) and the architecture documents in `docs/` for details.
+- `apps/cli` — the `tf` CLI entry point (`bin.ts`, `cli.ts`, `setup.ts`, `selftest.ts`).
+- `packages/conversation` — interactive REPL, Direct Mode & Smart Auto-Dispatch, pipelines, Debate Council (`/council`), Living Plan (`/blueprint`), Project Memory (`/memory`), Skills (`/skills`), GitHub Autopilot, Local Web Cockpit (`tf ui`), MCP Server (`tf mcp serve`), Local Daemon/Scheduler (`tf daemon`, `tf schedule`), TypeScript SDK (`TaskForgeClient`), Voice (`/voice`), and Multi-Repo (`/multirepo`).
+- `packages/agents` — coding-agent adapters (`claude`, `codex`, `agy`, `ollama`, and opt-in extended adapters).
+- `packages/workspace` — Git service, isolated worktree manager, per-worktree port allocator (`WorktreePortAllocator`), and offline SQLite BM25 indexer (`RepositoryIndexer`).
+- `packages/collaboration` — multi-agent team execution, hybrid file mix, and `PeerMailbox` + advisory file locks.
+- `packages/*` — control-plane packages (`planner`, `router`, `scheduler`, `negotiation`, `verification`, `integration`, `git-workflow`, `persistence`, `telemetry`, `shared`, `core`, `execution`, `operator`, `plugins`). Each has its own `src/` and `tests/`.
+- `tests/` — end-to-end and scenario-matrix suites.
+- `docs/` — user guides (`usage.md`, `direct-mode-and-workflows.md`, `living-plan-and-waves.md`, `platform-integrations.md`) and architecture specifications.
 
 ## Pull requests
 
-- Keep PRs focused; one logical change per PR.
+- Keep PRs focused; one logical change per PR. Always target `main` directly (avoid stacked feature PRs).
 - Add or update tests with the change. Bug fixes should include a regression test.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) in the style already used in the history (`feat(scheduler): ...`, `fix(router): ...`, `test(...)`, `docs(...)`).
-- When adding a public slash command, update the command table in `README.md`; CI verifies the catalog stays documented.
-- When adding configuration, update `.taskforge/config.yaml` comments and the configuration section in `docs/usage.md`.
+- When adding a public slash command, update the command table in `README.md`; CI verifies the catalog stays documented (`slash-menu.test.ts`).
+- When adding configuration, CLI subcommands, or platform surfaces, update the relevant guide in `docs/` (`docs/usage.md`, `docs/direct-mode-and-workflows.md`, `docs/living-plan-and-waves.md`, `docs/platform-integrations.md`) and `SECURITY.md` if new trust boundaries are introduced.
 - Add an entry under **Unreleased** in `CHANGELOG.md` for user-visible changes.
 - Keep CI green on Node.js 22 and 24.
 
