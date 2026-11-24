@@ -43,6 +43,7 @@ const AGENT_ALIASES: Record<string, string> = {
   aider: 'aider',
   opencode: 'opencode',
   goose: 'goose',
+  ollama: 'ollama',
 };
 
 const ALL_ALIASES = new Set(['all', 'todos', 'every', 'everyone']);

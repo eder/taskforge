@@ -3,6 +3,10 @@ import * as fs from 'node:fs';
 import { ProcessRunner } from '@taskforge/execution';
 import { WorkspaceCreationError } from '@taskforge/shared';
 import { GitService } from './git-service.js';
+import {
+  WorktreePortAllocator,
+  type WorktreePortAllocation,
+} from './port-allocator.js';
 
 function isTrackedPathPlaceholder(target: string): boolean {
   try {
@@ -39,6 +43,8 @@ export interface WorktreeInfo {
   path: string;
   branchName: string;
   baseCommit: string;
+  /** Collision-free ephemeral port block allocated for this isolated worktree. */
+  ports?: WorktreePortAllocation;
 }
 
 export interface CreateWorktreeOptions {
@@ -79,6 +85,7 @@ export function parseAgeSpec(spec: string): number {
 
 export class WorktreeManager {
   private activeWorktrees: Map<string, WorktreeInfo> = new Map();
+  private readonly portAllocator = new WorktreePortAllocator();
 
   constructor(
     private repoRoot: string,
@@ -264,6 +271,15 @@ export class WorktreeManager {
 
     await this.linkDependencyDirs(targetPath);
 
+    // Allocate an isolated ephemeral port block so parallel worktrees never collide
+    // on localhost dev/test ports, and exclude `.taskforge.env` from git tracking.
+    try {
+      info.ports = await this.portAllocator.allocate(key, targetPath);
+      await new GitService(this.repoRoot).ensureLocalExclude('/.taskforge.env');
+    } catch {
+      // best-effort: never fail worktree creation if port probing is restricted
+    }
+
     this.activeWorktrees.set(key, info);
     return info;
   }
@@ -275,6 +291,7 @@ export class WorktreeManager {
     deleteBranch: boolean = true,
   ): Promise<void> {
     const key = `${taskId}:${assignmentId}`;
+    this.portAllocator.release(key);
     const info = this.activeWorktrees.get(key);
     const targetPath = this.getWorktreePath(taskId, assignmentId);
     const branchName = info?.branchName ?? `taskforge/${taskId}/${assignmentId}`;

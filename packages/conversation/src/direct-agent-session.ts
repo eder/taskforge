@@ -1165,8 +1165,8 @@ export class DirectAgentRunner {
     }
 
     const hint = recommendedIndex
-      ? `↵ Enter: apply #${recommendedIndex} (${candidates[recommendedIndex - 1].agentName})   ·   type 1..${candidates.length} to pick   ·   diff <n> to inspect   ·   /back to discard`
-      : `type 1..${candidates.length} to apply a candidate   ·   diff <n> to inspect   ·   /back to discard`;
+      ? `↵ Enter: apply #${recommendedIndex} (${candidates[recommendedIndex - 1].agentName})   ·   type 1..${candidates.length} to pick   ·   diff <n>   ·   mix fileA:#1 fileB:#2   ·   /back to discard`
+      : `type 1..${candidates.length} to apply   ·   diff <n>   ·   mix fileA:#1 fileB:#2   ·   /back to discard`;
     sections.push(`  ${colors.dim}${hint}${colors.reset}`);
 
     return {
@@ -1248,6 +1248,65 @@ export class DirectAgentRunner {
       `${colors.green}✔${colors.reset} Applied candidate ${colors.bold}#${candidate.index} (${candidate.agentName})${colors.reset} to your working tree (staged, not committed).`,
       `  ${colors.cyan}Files:${colors.reset} ${candidate.filesChanged.join(', ')}`,
       `  ${colors.dim}Temporary competitive worktrees cleaned up. Run !git diff --cached to review.${colors.reset}`,
+    ].join('\n');
+  }
+
+  /**
+   * Hybrid per-file cherry-pick across competing candidates (`mix src/a.ts:#1 src/b.ts:#2`),
+   * allowing the user to combine the best files from different agents with an automatic
+   * pre-apply checkpoint for `/undo`.
+   */
+  public async applyCompetitiveFiles(
+    pending: PendingCompetitiveEdit,
+    picks: Array<{ file: string; candidateIndex: number }>,
+  ): Promise<string> {
+    if (picks.length === 0) {
+      return `${colors.red}✖ Specify at least one file pick (e.g. mix src/a.ts:#1 src/b.ts:#2).${colors.reset}`;
+    }
+    const git = this.gitService ?? new GitService(this.repoRoot);
+    const checkpoint = this.checkpointManager
+      ? await this.checkpointManager.capture(`hybrid competitive mix: ${pending.prompt}`, 'mix')
+      : undefined;
+
+    const appliedSummary: string[] = [];
+    const touchedFiles: string[] = [];
+    try {
+      for (const pick of picks) {
+        const cand = pending.candidates.find((c) => c.index === pick.candidateIndex);
+        if (!cand || !cand.commitHash) {
+          throw new Error(`Candidate #${pick.candidateIndex} has no commit for "${pick.file}".`);
+        }
+        await git.exec(['checkout', cand.commitHash, '--', pick.file], this.repoRoot);
+        appliedSummary.push(`${pick.file} ← #${cand.index} (${cand.agentName})`);
+        touchedFiles.push(pick.file);
+      }
+      if (checkpoint) {
+        this.checkpointManager?.annotateFilesTouched(checkpoint.id, touchedFiles);
+      }
+    } catch (err) {
+      if (checkpoint) {
+        await this.checkpointManager?.discard(checkpoint.id);
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return `${colors.red}✖ Could not apply hybrid file picks:${colors.reset} ${msg}`;
+    }
+
+    await this.discardCompetitiveEdit(pending);
+    this.memory.record({
+      kind: 'agent',
+      agentId: 'mix',
+      agentName: 'Hybrid Competitive Mix',
+      response: `Applied hybrid file selection:\n${appliedSummary.map((s) => `- ${s}`).join('\n')}`,
+      durationMs: 0,
+      filesChanged: touchedFiles,
+      timestamp: new Date().toISOString(),
+    });
+    this.onStateChanged?.();
+
+    return [
+      `${colors.green}✔${colors.reset} Applied hybrid file selection to your working tree:`,
+      ...appliedSummary.map((s) => `  • ${colors.cyan}${s}${colors.reset}`),
+      `  ${colors.dim}Temporary competitive worktrees cleaned up.${checkpoint ? ` Checkpoint ${checkpoint.id} saved (/undo to revert).` : ''}${colors.reset}`,
     ].join('\n');
   }
 

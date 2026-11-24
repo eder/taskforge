@@ -7,6 +7,52 @@ All workspace packages are released in lockstep under a single version.
 
 ## [Unreleased]
 
+### Added
+- **Direct Mode Parity & Smart Auto-Dispatch (Wave A):**
+  - Default `auto` dispatch routes quick questions, inspections, and single-agent requests directly to healthy agents while keeping full orchestrated planning one step away.
+  - SQLite-persisted direct sessions (`DirectSessionRepository`), live streaming output (`stream-event-parser`), interactive `#file` autocomplete (`file-mention-completer`), and live prompt target badge (`auto ▸`, `@codex ▸`).
+- **Multi-Agent Direct Pipelines, Checkpoints & `/model` (Wave B):**
+  - Inline `@a -> @b` implement→review handoffs, `@a <-> @b` two-round debates, `@a @b --edit` competitive isolated edits, and conversational direct Git/PR actions.
+  - Automatic Direct Mode working-tree checkpoints (`DirectCheckpointManager`) with `/checkpoints` and instant `/undo`.
+  - Per-agent model and reasoning effort configuration via `/model <agent> <model> [effort]` (`low | medium | high | xhigh | max`), saved safely to `.taskforge/config.yaml` and applied immediately across Claude, Codex, Antigravity, and Ollama adapters.
+- **Domain-Agnostic Living Plan & Phased Wave Execution (Waves C & F):**
+  - Automatic greenfield repository detection (`isGreenfield`, `sourceFileCount`) with Wave 1 root `**` scope allowance.
+  - Git-trackable `.taskforge/plan.md` managed via `/blueprint` (alias `/waves`) with conversational refinement, seamless 1-Enter wave auto-apply + live repo re-scan, and deterministic Wave 2 parallel task-graph compilation (`compileWaveToTaskGraph`).
+- **3-Round Multi-Agent Solution Debate Council (Waves D & G):**
+  - `/council` (alias `/debate`) runs independent proposals (Round 1), dedicated per-solution cross-critiques (Round 2), proponent refinements (Round 3), and interactive Round 4+ follow-ups (`aprofundar` / `ask`).
+  - Persists structured transcripts to `.taskforge/councils/*.md` with 1-Enter handoff into implementation or `/blueprint`.
+- **Observability, Multimodal Context & Memory (Waves E & G):**
+  - Unified SQLite telemetry (`DirectTelemetryStore`) covering both Direct Mode and Orchestrated runs in `/cost` and `/stats`, plus live `AgentActivityTracker` updates in Direct Mode and Council.
+  - `#image.png` and absolute image path attachments for multimodal agent harnesses.
+  - Durable cross-agent project memory (`.taskforge/memory.md`, `/memory`, and natural-language `"remember that..."` / `"lembra que..."`) plus `/compact` and automatic rolling conversation compaction.
+- **GitHub Autopilot & Adversarial Multi-Agent TDD (Wave H):**
+  - `/fix-ci`, `/review-pr [#number]` (with 1-Enter GitHub comment posting), and `/issue <#number>` (handoff to Planning, `/blueprint`, or `/council`).
+  - `/tdd [@tester -> @implementer] <spec>` adversarial Red → Green loop across separate agents.
+- **Unified Skills, Lifecycle Hooks, Background Jobs & Specialty Routing (Wave I):**
+  - Unified skill discovery across `.taskforge/skills/`, `.claude/commands/`, and `.agents/skills/` (`/skills`, `/skill`, `/<name>`).
+  - Deterministic lifecycle hooks (`hooks.afterDirectEdit`, `hooks.onRunComplete`, `hooks.onAttentionRequired`) and opt-in native macOS/Linux desktop notifications (`notifications.enabled`, `notifications.sound`).
+  - Asynchronous background shell jobs (`& <command>`, `/bg`) and historical domain-based specialty routing (`SpecialtyRouter`).
+- **Strictly-Local Web Cockpit (Wave J):**
+  - Zero-dependency `127.0.0.1` web dashboard (`tf ui`, `/ui`) with live SSE updates (`/api/events`), visual unified diffs (`/api/diff`), Living Plan wave tracker, Debate Council archive, Project Memory editor, and telemetry views.
+- **Parallel Worktree Port Isolation, Peer Mailbox & Hybrid Mix (Wave K):**
+  - Collision-free per-worktree TCP port allocation (`WorktreePortAllocator`, writing git-excluded `.taskforge.env` with `PORT`, `TASKFORGE_PORT`, `TASKFORGE_API_PORT`, `TASKFORGE_DB_PORT`, `TASKFORGE_PORT_OFFSET`).
+  - File-backed `PeerMailbox` (`.taskforge/mailbox/<runId>.jsonl`) and deterministic advisory file locks (`<runId>.locks.json`) for concurrent sibling tasks.
+  - Hybrid per-file cherry-picking (`mix fileA:#1 fileB:#2`) across competitive `--edit` candidates.
+- **MCP Server, Local Daemon/Scheduler & TypeScript SDK (Wave L):**
+  - Zero-dependency stdio JSON-RPC 2.0 MCP server (`tf mcp serve`) exposing 6 tools (`taskforge_status`, `taskforge_memory`, `taskforge_blueprint`, `taskforge_council`, `taskforge_run_direct`, `taskforge_checkpoints`) and 2 resources (`taskforge://plan`, `taskforge://memory`).
+  - Persistent local daemon and recurring scheduler (`tf daemon start|status|stop`, `tf schedule list|add|remove|run-now`, `/schedule`, `.taskforge/schedules.json`).
+  - Programmatic `TaskForgeClient` TypeScript SDK exported from `@taskforge/conversation` and `@taskforge/cli`.
+- **Ollama Local Adapter, Local Voice Input & Multi-Repo Coordination (Wave M):**
+  - First-class local open-weight model adapter (`OllamaAdapter`, `@ollama`, `OLLAMA_HOST`, `TASKFORGE_OLLAMA_MODEL`).
+  - Local-first voice prompt capture (`/voice [seconds]` via `sox` + `whisper`/`whisper-cli` or `TASKFORGE_VOICE_CMD`).
+  - Multi-repository workspace coordination (`/multirepo init|status|branch`, `.taskforge/workspace.json`).
+- **Documentation Guides:** Added dedicated guides for [Direct Mode, Pipelines & Debate Council](docs/direct-mode-and-workflows.md), [Living Plan & Wave Execution](docs/living-plan-and-waves.md), and [Platform Integrations](docs/platform-integrations.md).
+
+### Fixed
+- Fixed stale token budget percentage assertion in `packages/telemetry/tests/telemetry.test.ts` after cached-token weighting updates.
+- Preserved `/undo` orchestrated fallback messaging and strict `DirectConversationMemory` entry caps when compaction thresholds are small.
+- Guarded natural-language memory capture so sticky direct-agent prompts are not mistakenly intercepted.
+
 ## [1.0.0-rc.1] - 2026-11-19
 
 First release candidate for 1.0. Published under the `beta` npm dist-tag while the real-agent pilot checklist (`docs/pilot.md`) and 1.0 criteria (`docs/release-criteria-1.0.md`) are validated.

@@ -10,3 +10,4 @@ export * from './stream-event-parser.js';
 export * from './structured-output.js';
 export * from './auth-status.js';
 export * from './agent-model-caller.js';
+export * from './ollama-adapter.js';
