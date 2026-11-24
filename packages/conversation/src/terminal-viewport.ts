@@ -83,9 +83,17 @@ export class TerminalViewport {
     return this.modeBadge;
   }
 
+  private buildPromptPrefix(): string {
+    return this.modeBadge
+      ? `${colors.dim}[${colors.cyan}${this.modeBadge}${colors.reset}${colors.dim}]${colors.reset} ${colors.bold}${colors.green}>${colors.reset} `
+      : `${colors.bold}${colors.green}>${colors.reset} `;
+  }
+
   private getPromptVisualWidth(): number {
-    // `> ` (2) or `[badge] > ` (badge.length + 4)
-    return this.modeBadge ? this.modeBadge.length + 4 : 2;
+    // Derive visual width directly from the rendered prefix (stripped of ANSI codes)
+    // so `[badge] > ` (`badge.length + 5`) and `> ` (`2`) can never drift out of sync.
+    // eslint-disable-next-line no-control-regex
+    return this.buildPromptPrefix().replace(/\x1b\[[0-9;]*m/g, '').length;
   }
 
   public init() {
@@ -391,11 +399,7 @@ export class TerminalViewport {
     for (let i = 0; i < inputHeight; i++) {
       const row = inputStartRow + i;
       const isFirstLine = windowStart + i === 0;
-      const promptPrefix = isFirstLine
-        ? this.modeBadge
-          ? `${colors.dim}[${colors.cyan}${this.modeBadge}${colors.reset}${colors.dim}]${colors.reset} ${colors.bold}${colors.green}>${colors.reset} `
-          : `${colors.bold}${colors.green}>${colors.reset} `
-        : continuationPad;
+      const promptPrefix = isFirstLine ? this.buildPromptPrefix() : continuationPad;
       const lineText = displayLines[i];
       const formattedText = lineText
         .replace(

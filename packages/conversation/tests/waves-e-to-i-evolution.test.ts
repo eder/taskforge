@@ -94,12 +94,27 @@ afterEach(() => {
 describe('Waves E–I: Complete Unified Multi-Agent Terminal Evolution', () => {
   describe('Wave E: Dynamic Prompt Badge, Unified Telemetry, Live Activity & Image Attachments', () => {
     it('updates dynamic prompt badge width accurately in TerminalViewport', () => {
-      const vp = new TerminalViewport(new PassThrough(), { interactive: false });
+      const chunks: string[] = [];
+      const stream = new PassThrough();
+      stream.on('data', (c) => chunks.push(c.toString('utf8')));
+      const vp = new TerminalViewport(stream, { interactive: true });
       expect(vp.computeVisualLines('hi', 2).cursorVisualCol).toBe(5); // `> ` (2) + 2 + 1
+
+      vp.setModeBadge('auto');
+      // `[auto] > ` = 4 + 5 = 9 visual cols -> typing `o` places cursor after `o` at col 9 + 1 + 1 = 11
+      expect(vp.computeVisualLines('o', 1).cursorVisualCol).toBe(11);
+
+      chunks.length = 0;
+      vp.renderInputLine('o', 1);
+      const rendered = chunks.join('');
+      // eslint-disable-next-line no-control-regex
+      const cursorMove = /\x1b\[\d+;(\d+)H$/.exec(rendered);
+      expect(cursorMove?.[1]).toBe('11');
+
       vp.setModeBadge('@codex · o3');
       expect(vp.getModeBadge()).toBe('@codex · o3');
-      // `[@codex · o3] > ` = 11 + 4 = 15 visual cols -> cursor at 15 + 2 + 1 = 18
-      expect(vp.computeVisualLines('hi', 2).cursorVisualCol).toBe(18);
+      // `[@codex · o3] > ` = 11 + 5 = 16 visual cols -> cursor at 16 + 2 + 1 = 19
+      expect(vp.computeVisualLines('hi', 2).cursorVisualCol).toBe(19);
     });
 
     it('detects #image.png and absolute screenshot paths and appends multimodal image context', () => {
