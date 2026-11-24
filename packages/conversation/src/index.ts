@@ -15,6 +15,7 @@ export * from './file-mention-completer.js';
 export * from './smart-auto-dispatcher.js';
 export * from './direct-checkpoint.js';
 export * from './direct-git-actions.js';
+export * from './smart-delivery.js';
 export * from './living-plan.js';
 export * from './debate-council.js';
 export * from './direct-telemetry.js';

@@ -250,11 +250,22 @@ Supported backends (checked in order):
 
 ---
 
-## 10. Conversational Git/PR & GitHub Autopilot
+## 10. Conversational Smart Delivery, Direct Git/PR & GitHub Autopilot
 
-### Conversational Git actions in Direct Mode
+You do **not** need to memorize `/apply` or `/pr` during normal interactive conversations (they remain available as explicit power shortcuts for scripting or older run IDs).
 
-Ask naturally in English or Portuguese to commit, check diffs, push, or open a PR from Direct Mode—TaskForge inspects `git status` / `git diff` and executes deterministic `git` / `gh` commands with confirmation where required.
+### Smart post-success delivery
+
+- **Include your delivery preference in the prompt itself:**
+  ```text
+  @codex fix the retry timeout in #src/client.ts and open a PR
+  corrige o bug de paginação e já faz commit
+  ```
+  When the task succeeds, TaskForge automatically prepares the exact requested Git action (branch + commit + PR or direct commit) with a 1-Enter confirmation panel.
+- **Intelligent prompt after every completed orchestrated run:**
+  TaskForge inspects your Git workflow (`git.workflow`), target branch, and verification checks and proposes the right next step (`↵ Enter / yes` to open a PR on `github-flow`, apply on a feature branch, or inspect the diff first whenever automated checks did not run). You can answer naturally (`sim`, `aplica`, `abre pr`, `diff`, `descarta`) or just type a new request to move on.
+- **Unified natural-language Git actions (Direct Mode & Orchestrated Mode):**
+  Say `"faz commit"`, `"abre um pr"`, `"commita e abre pr"`, `"mostra o diff"`, or `"desfaz"` at any time—TaskForge resolves whether to act on local Direct Mode edits or a completed orchestrated run automatically.
 
 ### GitHub Autopilot slash commands
 

@@ -175,6 +175,14 @@ import {
   type PendingDirectGitAction,
 } from './direct-git-actions.js';
 import {
+  extractRequestedDeliveryIntent,
+  buildOrchestratedDeliveryProposal,
+  parseDeliveryFollowUpReply,
+  formatDirectPostEditHint,
+  type PendingOrchestratedDelivery,
+  type RequestedDeliveryIntent,
+} from './smart-delivery.js';
+import {
   loadLivingPlan,
   saveLivingPlan,
   deleteLivingPlan,
@@ -304,6 +312,10 @@ export class InteractiveShell {
   private pendingPipelineFollowUp?: PendingPipelineFollowUp;
   /** Pending conversational direct git commit or PR confirmation. */
   private pendingDirectGitAction?: PendingDirectGitAction;
+  /** Pending conversational delivery prompt after a completed orchestrated run. */
+  private pendingOrchestratedDelivery?: PendingOrchestratedDelivery;
+  /** Advisory post-success delivery preference stated in the user's original prompt (e.g. "fix X and open a PR"). */
+  private lastRequestedDelivery?: RequestedDeliveryIntent;
   /** Pending Wave D Multi-Agent Solution Debate Council verdict awaiting handoff choice. */
   private pendingCouncilDecision?: PendingCouncilDecision;
   /** Pending Wave H GitHub Autopilot action (post PR review comment / hand off issue). */
@@ -1088,7 +1100,15 @@ export class InteractiveShell {
       if (this.pendingDirectGitAction) {
         const action = this.pendingDirectGitAction;
         this.pendingDirectGitAction = undefined;
+        this.pendingOrchestratedDelivery = undefined;
+        this.lastRequestedDelivery = undefined;
         return this.executePendingDirectGitAction(action);
+      }
+      if (this.pendingOrchestratedDelivery) {
+        return this.executeOrchestratedDeliveryChoice(
+          this.pendingOrchestratedDelivery,
+          this.pendingOrchestratedDelivery.recommendedAction,
+        );
       }
       if (this.pendingGitHubAction) {
         const action = this.pendingGitHubAction;
@@ -1123,6 +1143,12 @@ export class InteractiveShell {
     // Pending direct git commit/PR confirmation
     if (this.pendingDirectGitAction) {
       const handled = await this.handleDirectGitActionReply(text);
+      if (handled !== undefined) return handled;
+    }
+
+    // Pending conversational delivery prompt for a completed orchestrated run
+    if (this.pendingOrchestratedDelivery) {
+      const handled = await this.handleOrchestratedDeliveryReply(text);
       if (handled !== undefined) return handled;
     }
 
@@ -1449,7 +1475,7 @@ export class InteractiveShell {
       const result = await this.directRunner.runAgents(directCmd.targets, directCmd.prompt, {
         abortSignal,
       });
-      return result.formatted;
+      return this.finalizeDirectTurnOutput(directCmd.prompt, result);
     }
 
     // Conversational Direct Mode Git & Undo actions ("desfaz", "mostra o diff",
@@ -1481,7 +1507,7 @@ export class InteractiveShell {
       }
       const targets = this.stickyAgentMode === 'all' ? 'all' : [this.stickyAgentMode];
       const result = await this.directRunner.runAgents(targets, text, { abortSignal });
-      return result.formatted;
+      return this.finalizeDirectTurnOutput(text, result);
     }
 
     // Natural-language configuration updates (PT & EN): e.g. "usa até 5 codex e 5 agy em paralelo",
@@ -1727,6 +1753,7 @@ export class InteractiveShell {
       }
 
       case 'apply_run': {
+        this.pendingOrchestratedDelivery = undefined;
         const targetRunId = this.resolveDeliveryRunId(intent.runId);
         if (!targetRunId) {
           return 'No run is ready to apply. Use /runs to see the delivery status of past runs.';
@@ -1820,6 +1847,7 @@ export class InteractiveShell {
       }
 
       case 'create_pr': {
+        this.pendingOrchestratedDelivery = undefined;
         const targetRunId = this.resolveDeliveryRunId(intent.runId);
         if (!targetRunId) {
           return 'No run is ready for a pull request. Use /runs to see past runs.';
@@ -1839,6 +1867,7 @@ export class InteractiveShell {
       }
 
       case 'discard_run': {
+        this.pendingOrchestratedDelivery = undefined;
         const targetRunId = this.resolveDeliveryRunId(intent.runId);
         if (!targetRunId) {
           return 'No run is ready to discard. Use /runs to see past runs.';
@@ -1982,6 +2011,8 @@ export class InteractiveShell {
         this.focusedRun = undefined;
         this.pendingPipelineFollowUp = undefined;
         this.pendingDirectGitAction = undefined;
+        this.pendingOrchestratedDelivery = undefined;
+        this.lastRequestedDelivery = undefined;
         this.pendingCouncilDecision = undefined;
         this.pendingLivingPlan = undefined;
         this.activeLivingPlanWave = undefined;
@@ -2181,7 +2212,7 @@ export class InteractiveShell {
                   autoReason: decision.reason,
                 },
               );
-              return directRes.formatted;
+              return this.finalizeDirectTurnOutput(intent.goal, directRes);
             }
           }
         }
@@ -2189,6 +2220,7 @@ export class InteractiveShell {
         this.activeRunId = generateRunId();
         this.conversationState = 'PLANNING';
         this.lastGoalDescription = intent.goal;
+        this.lastRequestedDelivery = extractRequestedDeliveryIntent(intent.goal);
         const goal: Goal = {
           id: `goal-${Date.now()}`,
           description: intent.goal,
@@ -2740,7 +2772,9 @@ export class InteractiveShell {
 
               const summary = await this.formatRunSummary(result);
               const waveBanner = this.recordLivingPlanWaveOutcome(result);
-              this.viewport.writeUpper(`\n${summary}${waveBanner ? `\n\n${waveBanner}` : ''}\n`);
+              const deliveryPrompt = waveBanner ? '' : this.buildPostRunDeliveryPrompt(result);
+              const trailing = [waveBanner, deliveryPrompt].filter(Boolean).join('\n\n');
+              this.viewport.writeUpper(`\n${summary}${trailing ? `\n\n${trailing}` : ''}\n`);
               this.viewport.drawFooter('');
             })
             .catch((err) => {
@@ -2792,7 +2826,9 @@ export class InteractiveShell {
 
           const summary = await this.formatRunSummary(result);
           const waveBanner = this.recordLivingPlanWaveOutcome(result);
-          return waveBanner ? `${summary}\n\n${waveBanner}` : summary;
+          const deliveryPrompt = waveBanner ? '' : this.buildPostRunDeliveryPrompt(result);
+          const trailing = [waveBanner, deliveryPrompt].filter(Boolean).join('\n\n');
+          return trailing ? `${summary}\n\n${trailing}` : summary;
         } catch (err) {
           this.conversationState = 'IDLE';
           return `${this.describeUnexpectedStop(runId, err)}\n${colors.dim}(Tip: type "yes --fake" to test with simulated agents if real agents are not configured with API keys)${colors.reset}`;
@@ -4577,6 +4613,12 @@ export class InteractiveShell {
         this.directMemory.getEntries(),
         gitIntent.language,
       );
+      if (!prep.pending) {
+        const readyRunId = this.resolveDeliveryRunId();
+        if (readyRunId) {
+          return this.handleInput(`/apply ${readyRunId}`);
+        }
+      }
       this.pendingDirectGitAction = prep.pending;
       return prep.formatted;
     }
@@ -4589,14 +4631,167 @@ export class InteractiveShell {
         this.directMemory.getEntries(),
         gitIntent.language,
       );
-      if (!prep.pending && this.resolveDeliveryRunId()) {
-        return undefined; // Let orchestrated `/pr` open the PR for the completed run.
+      if (!prep.pending) {
+        const readyRunId = this.resolveDeliveryRunId();
+        if (readyRunId) {
+          return this.handleInput(`/pr ${readyRunId}`);
+        }
       }
       this.pendingDirectGitAction = prep.pending;
       return prep.formatted;
     }
 
     return undefined;
+  }
+
+  /**
+   * Post-processes a completed Direct Mode turn that modified workspace files:
+   * - If the user already requested commit/PR in their prompt ("corrige X e abre PR"),
+   *   immediately prepares the 1-Enter confirmation panel for that exact Git action.
+   * - Otherwise appends a concise contextual suggestion without forcing slash commands.
+   */
+  private async finalizeDirectTurnOutput(
+    prompt: string,
+    directRes: { formatted: string; outcomes: Array<{ success: boolean; filesChanged: string[] }> },
+  ): Promise<string> {
+    const modifiedFiles = [
+      ...new Set(directRes.outcomes.filter((o) => o.success).flatMap((o) => o.filesChanged)),
+    ];
+    if (!this.inRepo || modifiedFiles.length === 0) {
+      return directRes.formatted;
+    }
+
+    const requested = extractRequestedDeliveryIntent(prompt);
+    const language: 'pt' | 'en' =
+      requested?.language ??
+      (/\b(?:para|com|isso|essa|esse|corrige|corrigir|adiciona\w*|refatora\w*|atualiza\w*|cria\w*|faz(?:er)?)\b/i.test(
+        prompt,
+      )
+        ? 'pt'
+        : 'en');
+
+    if (requested?.kind === 'pr') {
+      const prep = await prepareDirectPr(
+        this.repoRoot,
+        this.gitService,
+        undefined,
+        this.directMemory.getEntries(),
+        language,
+      );
+      if (prep.pending) {
+        this.pendingDirectGitAction = prep.pending;
+      }
+      return `${directRes.formatted}\n\n${prep.formatted}`;
+    }
+
+    if (requested?.kind === 'commit' || requested?.kind === 'apply') {
+      const prep = await prepareDirectCommit(
+        this.repoRoot,
+        this.gitService,
+        undefined,
+        this.directMemory.getEntries(),
+        language,
+      );
+      if (prep.pending) {
+        this.pendingDirectGitAction = prep.pending;
+      }
+      return `${directRes.formatted}\n\n${prep.formatted}`;
+    }
+
+    const status = await this.gitService.getStatus(this.repoRoot).catch(() => undefined);
+    const branch = status?.currentBranch || 'main';
+    const hint = formatDirectPostEditHint(modifiedFiles, branch, language);
+    return `${directRes.formatted}\n\n${hint}`;
+  }
+
+  /**
+   * Builds and activates an intelligent post-success delivery prompt for a
+   * completed orchestrated run so users can confirm PR/apply/diff conversationally
+   * instead of memorizing `/apply` or `/pr`.
+   */
+  private buildPostRunDeliveryPrompt(result: OrchestrationResult): string {
+    if (result.status !== 'completed') {
+      this.pendingOrchestratedDelivery = undefined;
+      return '';
+    }
+    const delivery = this.deliveryService.getDelivery(result.runId);
+    if (!delivery || delivery.status !== 'ready_to_apply') {
+      this.pendingOrchestratedDelivery = undefined;
+      return '';
+    }
+    const { headline } = this.confidenceFor(result.runId).confidence;
+    const verified = headline === 'verified' || headline === 'not_applicable';
+    const goalText = this.lastGoalDescription ?? '';
+    const requested = this.lastRequestedDelivery ?? extractRequestedDeliveryIntent(goalText);
+    this.lastRequestedDelivery = undefined;
+    const language: 'pt' | 'en' =
+      requested?.language ??
+      (/\b(?:para|com|isso|essa|esse|corrige|corrigir|adiciona\w*|refatora\w*|atualiza\w*|implementa\w*|cria\w*)\b/i.test(
+        goalText,
+      )
+        ? 'pt'
+        : 'en');
+
+    const proposal = buildOrchestratedDeliveryProposal({
+      runId: result.runId,
+      branch: delivery.branch,
+      targetBranch: delivery.targetBranch,
+      verified,
+      gitWorkflow: this.config.git.workflow,
+      deliveryMode: this.config.delivery.mode,
+      requestedByUser: requested?.kind,
+      language,
+    });
+    this.pendingOrchestratedDelivery = proposal.pending;
+    return proposal.formatted;
+  }
+
+  private async executeOrchestratedDeliveryChoice(
+    pending: PendingOrchestratedDelivery,
+    choice: 'pr' | 'apply' | 'diff' | 'discard',
+  ): Promise<string> {
+    if (choice === 'diff') {
+      const diffOut = await this.handleInput(`/diff ${pending.runId}`);
+      // Keep the delivery prompt active after viewing the diff so the user can
+      // immediately say "aplica" / "apply" / "abre pr" without retyping the run id.
+      this.pendingOrchestratedDelivery = pending;
+      const followHint =
+        pending.language === 'pt'
+          ? `${colors.dim}Quando decidir, diga "aplica", "abre pr" ou "descarta" (ou /apply ${pending.runId}${pending.verified ? '' : ' --yes'}).${colors.reset}`
+          : `${colors.dim}When ready, say "apply", "open pr", or "discard" (or /apply ${pending.runId}${pending.verified ? '' : ' --yes'}).${colors.reset}`;
+      return `${diffOut}\n\n${followHint}`;
+    }
+
+    this.pendingOrchestratedDelivery = undefined;
+    if (choice === 'pr') {
+      return this.handleInput(`/pr ${pending.runId}`);
+    }
+    if (choice === 'apply') {
+      return this.handleInput(`/apply ${pending.runId}`);
+    }
+    return this.handleInput(`/discard ${pending.runId}`);
+  }
+
+  private async handleOrchestratedDeliveryReply(text: string): Promise<string | undefined> {
+    const pending = this.pendingOrchestratedDelivery;
+    if (!pending) return undefined;
+
+    if (text.startsWith('/') || text.startsWith('@') || text.startsWith('!')) {
+      this.pendingOrchestratedDelivery = undefined;
+      return undefined;
+    }
+
+    const reply = parseDeliveryFollowUpReply(text);
+    if (!reply) {
+      // Unrelated new prompt — clear delivery prompt and let normal flow handle it.
+      this.pendingOrchestratedDelivery = undefined;
+      return undefined;
+    }
+
+    if (reply === 'accept') {
+      return this.executeOrchestratedDeliveryChoice(pending, pending.recommendedAction);
+    }
+    return this.executeOrchestratedDeliveryChoice(pending, reply);
   }
 
   private async executePendingDirectGitAction(action: PendingDirectGitAction): Promise<string> {
@@ -4802,7 +4997,9 @@ export class InteractiveShell {
               );
             }
           }
-          return this.formatRunSummary(result);
+          const summary = await this.formatRunSummary(result);
+          const deliveryPrompt = this.buildPostRunDeliveryPrompt(result);
+          return deliveryPrompt ? `${summary}\n\n${deliveryPrompt}` : summary;
         };
         const execution = orchestrator.resume(runId, {
           abortSignal: controller.signal,

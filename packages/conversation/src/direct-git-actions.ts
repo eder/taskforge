@@ -89,23 +89,9 @@ export function parseDirectGitIntent(rawText: string): DirectGitIntent | undefin
     return { kind: 'status', language };
   }
 
-  // 4. Commit working tree changes
-  const commitMatch =
-    /^(?:(?:faz(?:er)?|fa[çc]a|cria(?:r)?|pode\s+fazer|make|create|do)\s+(?:um\s+|o\s+|a\s+)?)?(?:git\s+)?commit(?:a(?:r)?)?(?:\s+(?:disso|isso|as\s+altera[çc][õo]es|tudo|this|these(?:\s+changes)?|all))?(?:\s+(?:com\s+(?:a\s+)?mensagem|with\s+message|-m)\s*[:=]?\s*(.+))?$/i.exec(
-      text,
-    );
-  if (commitMatch && !/\b(?:run-\d+|pull\s+request|\bpr\b)\b/i.test(withoutQuote)) {
-    const rawMsg = (quotedMatch?.[1] ?? commitMatch[1] ?? '').trim().replace(/^["'“”]|["'“”]$/g, '');
-    return {
-      kind: 'commit',
-      ...(rawMsg ? { message: rawMsg } : {}),
-      language,
-    };
-  }
-
-  // 5. Open Pull Request
+  // 4. Open Pull Request (also handles combined "commita e abre pr" / "commit and open pr" — checked before commit)
   const prMatch =
-    /^(?:(?:abr[aeir]+|cria(?:r)?|faz(?:er)?|fa[çc]a|pode\s+abrir|open|create|make)\s+(?:um\s+|o\s+|a\s+)?)(?:pr|pull\s+request)(?:\s+(?:disso|dessa\s+branch|for\s+this))?(?:\s+(?:com\s+(?:o\s+)?t[ií]tulo|titled|with\s+title)\s*[:=]?\s*(.+))?$/i.exec(
+    /^(?:(?:(?:faz(?:er)?|fa[çc]a|pode\s+)?(?:commit(?:a(?:r)?)?|git\s+commit)(?:\s+(?:isso|disso|tudo|this|all))?\s+(?:e|and)\s+(?:j[aá]\s+)?)?(?:abr[aeir]+|cria(?:r)?|faz(?:er)?|fa[çc]a|pode\s+abrir|open|create|make)\s+(?:um[ao]?\s+|o\s+|a\s+)?)(?:pr|pull\s+request)(?:\s+(?:disso|dessa\s+branch|for\s+this))?(?:\s+(?:com\s+(?:o\s+)?t[ií]tulo|titled|with\s+title)\s*[:=]?\s*(.+))?$/i.exec(
       text,
     );
   if (prMatch && !/\brun-\d+\b/i.test(withoutQuote)) {
@@ -113,6 +99,20 @@ export function parseDirectGitIntent(rawText: string): DirectGitIntent | undefin
     return {
       kind: 'pr',
       ...(rawTitle ? { title: rawTitle } : {}),
+      language,
+    };
+  }
+
+  // 5. Commit working tree changes
+  const commitMatch =
+    /^(?:(?:faz(?:er)?|fa[çc]a|cria(?:r)?|pode(?:\s+fazer)?|make|create|do)\s+(?:um\s+|o\s+|a\s+)?)?(?:git\s+)?commit(?:a(?:r)?)?(?:\s+(?:disso|isso|as\s+altera[çc][õo]es|tudo|this|these(?:\s+changes)?|all))?(?:\s+(?:com\s+(?:a\s+)?mensagem|with\s+message|-m)\s*[:=]?\s*(.+))?$/i.exec(
+      text,
+    );
+  if (commitMatch && !/\b(?:run-\d+|pull\s+request|\bpr\b)\b/i.test(withoutQuote)) {
+    const rawMsg = (quotedMatch?.[1] ?? commitMatch[1] ?? '').trim().replace(/^["'“”]|["'“”]$/g, '');
+    return {
+      kind: 'commit',
+      ...(rawMsg ? { message: rawMsg } : {}),
       language,
     };
   }
