@@ -1,5 +1,5 @@
-# TaskForge System Configuration
-# Documentation: https://taskforge.dev
+# TaskForge System Configuration (Self-Hosting Optimized)
+# Documentation: https://github.com/eder/taskforge#configuration
 
 # 1. Router Configuration (OpenAI Structured Outputs or Heuristic Fallback)
 router:
@@ -11,31 +11,26 @@ router:
 
 # 2. Execution Settings
 execution:
+  profile: economy # 'economy' (1 agent/task, 1M cap) | 'standard' (2, 2M) | 'thorough' (3, 4M)
   maxParallelTasks: 3
   defaultTimeoutMinutes: 30
   worktreesDir: .taskforge/worktrees
   databasePath: .taskforge/taskforge.db
   runsDir: .taskforge/runs
-  # Opt-in: at the start of each run, remove TaskForge worktrees and temporary
-  # branches left behind by crashed sessions that are older than this age.
-  # autoPruneOlderThan: 7d
+  autoPruneOlderThan: 7d # Clean up stale worktrees and temporary branches older than 7 days
 
-# Optional deterministic write ownership. More-specific scopes win.
-# ownership:
-#   rules:
-#     - scope: ios/**
-#       writers: [codex]
-#     - scope: server/**
-#       writers: [claude, agy]
+# 3. Git Workflow & Delivery
+git:
+  workflow: github-flow # Always target PRs against main for clean dogfooding
 
-# 3. Collaboration & Communication Bus Limits
+# 4. Collaboration & Communication Bus Limits
 collaboration:
-  maxAgentsPerTask: 3
+  # maxAgentsPerTask is governed by execution.profile above (set explicitly to override)
   maxMessagesPerRound: 6
   maxRounds: 3
-  requireReasonForEscalation: true
+  reviewFixPasses: 1
 
-# 4. Deterministic Security & Permission Policy
+# 5. Deterministic Security & Permission Policy
 permissions:
   filesystem:
     workspace_write: allow
@@ -54,14 +49,14 @@ permissions:
     merge_main: deny
   fallback: ask_human
 
-# 5. Headless Automation Policy
+# 6. Headless Automation Policy
 headless:
   onHumanQuestion: block
   onUnknownPermission: deny
   onAuthenticationRequired: fail
   onConfirmationRequired: block
 
-# 6. Interaction Gateway & Human Timeouts
+# 7. Interaction Gateway & Human Timeouts
 interactions:
   humanResponseTimeout: 1800000 # 30 minutes in milliseconds
   onTimeout:
@@ -69,24 +64,54 @@ interactions:
     question: block
     confirmation: block
 
-# 7. Quality Gates & Verification
+# 8. Quality Gates & Fast Package-Scoped Verification
 verification:
   tests: true
   lint: true
   typecheck: true
   review: true
   maxReworkCycles: 2
-  # Global deterministic checks, used before repository auto-discovery.
   commands: []
-  # Optional scope-specific checks. Most-specific matching scope wins.
-  scopedCommands: []
-  # Opt-in: sensitive tasks need an independent agent's approval before integration.
-  # dualReview:
-  #   enabled: true
-  #   scopes: ['db/migrations/**', 'src/auth/**']
-  #   onNoIndependentReviewer: block   # or skip
-  # Example:
-  # scopedCommands:
-  #   - scope: ios/**
-  #     commands:
-  #       - xcodebuild -project ios/App.xcodeproj -scheme App -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
+  # Fast package-scoped checks (~5s per package instead of ~60s full monorepo suite)
+  scopedCommands:
+    - scope: packages/conversation/**
+      commands:
+        - pnpm --filter @taskforge/conversation build && pnpm vitest run packages/conversation/tests && pnpm lint
+    - scope: packages/scheduler/**
+      commands:
+        - pnpm --filter @taskforge/scheduler build && pnpm vitest run packages/scheduler/tests && pnpm lint
+    - scope: packages/agents/**
+      commands:
+        - pnpm --filter @taskforge/agents build && pnpm vitest run packages/agents/tests && pnpm lint
+    - scope: packages/workspace/**
+      commands:
+        - pnpm --filter @taskforge/workspace build && pnpm vitest run packages/workspace/tests && pnpm lint
+    - scope: packages/collaboration/**
+      commands:
+        - pnpm --filter @taskforge/collaboration build && pnpm vitest run packages/collaboration/tests && pnpm lint
+    - scope: packages/verification/**
+      commands:
+        - pnpm --filter @taskforge/verification build && pnpm vitest run packages/verification/tests && pnpm lint
+    - scope: packages/integration/**
+      commands:
+        - pnpm --filter @taskforge/integration build && pnpm vitest run packages/integration/tests && pnpm lint
+    - scope: packages/planner/**
+      commands:
+        - pnpm --filter @taskforge/planner build && pnpm vitest run packages/planner/tests && pnpm lint
+    - scope: packages/router/**
+      commands:
+        - pnpm --filter @taskforge/router build && pnpm vitest run packages/router/tests && pnpm lint
+    - scope: packages/persistence/**
+      commands:
+        - pnpm --filter @taskforge/persistence build && pnpm vitest run packages/persistence/tests && pnpm lint
+    - scope: packages/shared/**
+      commands:
+        - pnpm build && pnpm vitest run packages/shared/tests && pnpm lint
+    - scope: apps/cli/**
+      commands:
+        - pnpm build && pnpm vitest run tests/ && pnpm lint
+
+# 9. Optional Desktop Notifications (enable locally or in ~/.taskforge/config.yaml)
+notifications:
+  enabled: false
+  sound: false
