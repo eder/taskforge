@@ -1,6 +1,11 @@
 # TaskForge Usage Guide
 
-This guide covers the current TaskForge workflow from local setup through pull-request delivery.
+This guide covers the core TaskForge orchestrated workflow from local setup through pull-request delivery.
+
+> **Looking for Direct Mode, Debate Councils, Living Plans, or Platform Integrations?**
+> - [Direct Mode, Pipelines & Debate Council](direct-mode-and-workflows.md) — Smart Auto-Dispatch, `@agent`, `@a -> @b`, `@a <-> @b`, `--edit` + `mix`, `/tdd`, `/council`, `/undo`, `/model`, `/memory`, `/skills`, `&` background jobs, `/voice`, and GitHub Autopilot (`/fix-ci`, `/review-pr`, `/issue`).
+> - [Living Plan & Wave Execution](living-plan-and-waves.md) — `.taskforge/plan.md` (`/blueprint`), greenfield detection, Wave 2 deterministic parallel fan-out, per-worktree `.taskforge.env` port isolation, and Peer Mailbox + file locks.
+> - [Platform Integrations](platform-integrations.md) — `tf ui` Local Web Cockpit, `tf mcp serve` (Cursor / VS Code / Claude Desktop), `tf daemon` & `tf schedule`, `TaskForgeClient` TypeScript SDK, `@ollama`, lifecycle hooks, and `/multirepo`.
 
 TaskForge is designed around a simple boundary:
 
@@ -1187,6 +1192,10 @@ to open the interactive command menu.
 ## Next reading
 
 - [README](../README.md)
+- [Direct Mode, Pipelines & Debate Council](direct-mode-and-workflows.md)
+- [Living Plan & Wave Execution](living-plan-and-waves.md)
+- [Platform Integrations](platform-integrations.md)
+- [Roadmap & execution history](../ROADMAP.md)
 - [Git branch lifecycle and hardening](git-branch-lifecycle-and-hardening.md)
 - [Interaction Gateway specification](spec-v2-interaction-gateway.md)
 - [Architecture phases 0–5](architecture-phases-0-5.md)

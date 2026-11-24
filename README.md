@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  Open-source control plane for coordinating Claude Code, Codex CLI, and Google Antigravity across planning, isolated execution, live supervision, recovery, verification, and Git delivery.
+  Open-source local-first control plane for coordinating Claude Code, Codex CLI, Google Antigravity, and local Ollama models — from fast direct multi-agent pipelines & Debate Councils to Living Plans, isolated parallel worktrees, verification, and Git delivery.
 </p>
 
 <p align="center">
@@ -36,6 +36,7 @@ You describe the outcome. TaskForge plans the work, selects agents, creates isol
   - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) — `claude`
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `codex`
   - [Google Antigravity](https://antigravity.google/) — `agy`
+  - *(Optional, local/air-gapped)* [Ollama](https://ollama.com/) — `@ollama` (read-only analysis, pipelines & Debate Councils at zero API cost)
 
 ### Install from source
 
@@ -136,17 +137,69 @@ TaskForge is designed to remove that coordination overhead while preserving expl
 
 | Capability | What TaskForge does |
 | --- | --- |
-| Natural-language planning | Turns an engineering goal into structured tasks, dependencies, contracts, and acceptance criteria |
-| Repository-aware instructions | Discovers applicable `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and referenced Markdown guidance for planning |
-| Multi-agent routing | Chooses a minimum useful team based on availability, role fit, and task characteristics |
-| Isolated execution | Runs writable assignments in separate Git worktrees |
-| Live supervision | Streams agent activity and lets you inspect or focus active assignments from one terminal |
-| Human-in-the-loop | Centralizes questions, permissions, confirmation, and authentication boundaries |
-| Completion Gate | Separates “the process exited” from “the engineering task is complete” |
-| Verification | Runs configured tests, linting, typechecking, review, and explicit task verification commands |
-| Dual review (opt-in) | Requires an independent agent's explicit approval before sensitive changes (auth, payments, migrations) are integrated |
-| Progressive recovery | Reuses failure evidence and candidate state before escalating to another agent |
-| Explicit delivery | Keeps `/diff`, `/apply`, `/pr`, and `/discard` under human control |
+| Smart Auto-Dispatch & Direct Mode | Fast conversational prompts (`auto`, `@claude`, `@codex`, `@agy`, `@ollama`, `@all`, `@smart`) with live streaming, `#file` & `#image` attachments, SQLite sessions, and instant `/undo` checkpoints |
+| Multi-Agent Pipelines & TDD | Chain agents inline (`@a -> @b` implement→review, `@a <-> @b` debate, `@a @b --edit` competitive worktrees with hybrid per-file `mix`, `/tdd` adversarial Red→Green) |
+| 3-Round Debate Council | `/council` runs independent proposals, dedicated per-solution cross-critiques, refinements, Round 4+ follow-ups, `.taskforge/councils/*.md` transcripts, and 1-Enter handoff |
+| Living Plan & Wave Execution | Domain-agnostic `.taskforge/plan.md` (`/blueprint`) with greenfield detection, deterministic Wave 2 parallel fan-out, and seamless wave transitions |
+| Natural-language orchestration | Turns an engineering goal into structured tasks, dependencies, contracts, and acceptance criteria |
+| Repository instructions & Memory | Discovers `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, unified `/skills`, and durable cross-agent `.taskforge/memory.md` |
+| Isolated parallel worktrees | Runs writable tasks in separate Git worktrees with collision-free per-worktree port blocks (`.taskforge.env`) and a Peer Mailbox + advisory file locks |
+| Live supervision & Local Web Cockpit | Streams activity in one terminal (`tf`, `tf dash --stream`) or in the strictly-local `127.0.0.1` Web Cockpit (`tf ui` / `/ui`) |
+| Completion Gate & Verification | Separates “process exited” from “task complete”; runs tests, lint, typecheck, baseline diffing, review, and optional dual review |
+| Progressive recovery | Reuses failure evidence and candidate branches before reassigning to another healthy agent |
+| GitHub Autopilot & Explicit delivery | `/fix-ci`, `/review-pr`, `/issue`, plus controlled `/diff`, `/apply`, `/pr`, `/undo`, and `/discard` |
+| IDE, Automation & SDK | Stdio MCP server (`tf mcp serve`), local daemon & scheduler (`tf daemon`, `tf schedule`), lifecycle hooks & desktop notifications, `/voice`, `/multirepo`, and TypeScript `TaskForgeClient` SDK |
+
+## Direct Mode, Pipelines & Debate Council
+
+Inside `tf`, you don't need full orchestration ceremony for every request. In default **`auto`** mode, TaskForge routes quick questions and single-agent work directly while keeping full multi-agent power one prefix away:
+
+```text
+# Direct addressing with #file autocomplete and #image attachments
+@codex fix the retry bug in #src/client.ts
+@claude inspect the layout issue shown in #screenshots/header.png
+@all compare Redis vs Postgres advisory locks for job deduplication
+
+# Multi-agent pipelines & competitive edits
+@codex -> @claude implement webhook signature verification and review edge cases
+@claude <-> @codex debate whether to split billing into a separate worker
+@claude @codex --edit refactor #src/parser.ts   # compare diffs, or mix fileA:#1 fileB:#2
+/tdd @claude -> @codex enforce 100 req/min rate limiting on /api/*
+
+# 3-round Multi-Agent Solution Debate Council
+/council migrate our single-tenant Postgres schema to multi-tenant isolation
+
+# Instant safety net, model tuning & cross-agent memory
+/model codex o3 high
+/memory add Always use pnpm and strict TypeScript
+/undo                         # instant Direct Mode checkpoint rollback
+```
+
+See [docs/direct-mode-and-workflows.md](docs/direct-mode-and-workflows.md) for the complete guide (including `/skills`, `/compact`, `&` background jobs, `/voice`, and GitHub Autopilot `/fix-ci`, `/review-pr`, `/issue`).
+
+## Living Plan & Phased Wave Execution
+
+For greenfield builds or multi-module milestones, use `/blueprint` (alias `/waves`) to create and evolve a Git-trackable `.taskforge/plan.md`:
+
+```text
+/blueprint Build a multi-tenant invoicing API with Stripe webhooks and PDF export
+/blueprint refine Add a dedicated audit-log slice to Wave 2
+/blueprint next    # Wave 1 foundation → auto-apply + re-scan → Wave 2 parallel fan-out → Wave 3 integration
+```
+
+Parallel worktrees automatically receive collision-free port blocks in `.taskforge.env` (`PORT`, `TASKFORGE_API_PORT`, `TASKFORGE_DB_PORT`) and coordinate via a file-backed Peer Mailbox (`.taskforge/mailbox/`). See [docs/living-plan-and-waves.md](docs/living-plan-and-waves.md).
+
+## Web Cockpit, MCP Server, Daemon & TypeScript SDK
+
+TaskForge extends beyond the terminal while staying strictly local-first:
+
+- **Local Web Cockpit (`127.0.0.1`):** run `tf ui` (or `/ui` in the REPL) for live SSE status, visual diffs, Living Plan wave tracking, Debate Council transcripts, and memory management.
+- **MCP Server for IDEs:** run `tf mcp serve` to expose `taskforge_council`, `taskforge_blueprint`, `taskforge_memory`, `taskforge_run_direct`, `taskforge_checkpoints`, and `taskforge_status` to Cursor, VS Code, Claude Desktop, or Antigravity.
+- **Daemon & Recurring Schedules:** automate periodic audits or CI checks with `tf schedule add 6h "@codex audit security"` and `tf daemon start --ui-port 4310`.
+- **Programmatic TypeScript SDK:** drive pipelines, councils, blueprints, and memory from scripts via `TaskForgeClient`.
+- **Multi-Repo & Local Ollama:** coordinate sibling repos with `/multirepo` and run air-gapped local models with `@ollama`.
+
+See [docs/platform-integrations.md](docs/platform-integrations.md) for copy-pasteable MCP configs, SDK snippets, Ollama setup, and lifecycle hooks.
 
 ## Repository instructions are part of the plan
 
@@ -355,6 +408,16 @@ tf pr create run-<id> --base main
 # Optional per-project config (shows the file before writing it)
 tf init
 
+# Local Web Cockpit, IDE MCP server, daemon & scheduled automations
+tf ui --port 4310
+tf mcp serve
+tf schedule add 6h "@codex audit recent commits for security regressions"
+tf daemon start --ui-port 4310
+
+# Local offline BM25 repository index & insights
+tf index "payment retry"
+tf insights
+
 # Diagnostics and cleanup
 tf doctor
 tf health
@@ -392,12 +455,37 @@ execution:
 collaboration:
   maxAgentsPerTask: 3
 
+agents:
+  claude:
+    enabled: true
+    model: claude-sonnet-4-6
+    effort: high
+  codex:
+    enabled: true
+    maxParallel: 2
+    model: o3
+    effort: high
+  agy:
+    enabled: true
+  ollama:
+    enabled: true
+    model: qwen2.5-coder:latest
+
 verification:
   tests: true
   lint: true
   typecheck: true
   review: true
   maxReworkCycles: 2
+
+hooks:
+  afterDirectEdit: "pnpm prettier --write $(git diff --name-only)"
+  onRunComplete: "echo 'Run finished'"
+  timeoutSeconds: 30
+
+notifications:
+  enabled: true
+  sound: false
 ```
 
 ### Optional OpenAI router
@@ -519,8 +607,12 @@ CI targets Node.js 22 and Node.js 24.
 
 ## Documentation
 
-- [Usage guide](docs/usage.md)
+- [Direct Mode, Pipelines & Debate Council](docs/direct-mode-and-workflows.md) — `@agent`, `@a -> @b`, `@a <-> @b`, `--edit` + `mix`, `/tdd`, `/council`, `/undo`, `/model`, `/memory`, `/skills`, `&`, `/voice`, GitHub Autopilot
+- [Living Plan & Wave Execution](docs/living-plan-and-waves.md) — `.taskforge/plan.md`, `/blueprint`, greenfield detection, deterministic Wave 2 fan-out, per-worktree `.taskforge.env` ports, Peer Mailbox & file locks
+- [Platform Integrations](docs/platform-integrations.md) — `tf ui` Local Web Cockpit, `tf mcp serve` (Cursor / VS Code / Claude Desktop), `tf daemon` & `tf schedule`, `TaskForgeClient` TypeScript SDK, `@ollama`, lifecycle hooks, `/multirepo`
+- [Usage guide](docs/usage.md) — end-to-end orchestrated workflow from setup to PR delivery
 - [Pilot checklist (validate with real agents)](docs/pilot.md)
+- [Roadmap & execution history](ROADMAP.md)
 - [Architecture phases 0–5](docs/architecture-phases-0-5.md)
 - [Architecture phases 6–13](docs/architecture-phases-6-13.md)
 - [Architecture phases 14–22](docs/architecture-phases-14-22.md)
