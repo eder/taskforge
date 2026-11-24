@@ -189,37 +189,46 @@ try {
 
 ---
 
-## 5. Local Open-Weight Models via Ollama (`@ollama`)
+## 5. Local Open-Weight Models via Ollama (`@ollama` & Local Coordinator)
 
-Run completely air-gapped, zero-API-cost local models alongside your cloud coding agents via [Ollama](https://ollama.com/).
+Run completely air-gapped, zero-API-cost local models via [Ollama](https://ollama.com/) in **three roles** simultaneously:
+
+1. **Full Coding Agent (`@ollama`):** reads, searches, and edits files inside your workspace/worktree via Ollama's native tool-calling loop (`list_files`, `read_file`, `search_files`, `edit_file`, `write_file`, strictly confined inside the worktree boundary and disabled in read-only mode), with automatic graceful fallback to plain chat for models without tool support.
+2. **Local Control-Plane Coordinator (`router.provider: ollama`):** decomposes goals into parallel DAG tasks with disjoint `allowedScope` and dependencies, assigns each task to the best agent (`claude`, `codex`, `agy`, `ollama`), and runs with **zero OpenAI API key required**.
+3. **Zero-Cost Solution Arbiter:** compares competing diffs in `@codex @agy --edit`, synthesizes `@all` consensus/divergences, and chairs `/council` verdicts locally when no cloud API key is configured.
 
 ### Setup
 
-1. Install Ollama and pull a coding model:
+1. Install Ollama and pull a tool-capable coding model:
    ```bash
    ollama pull qwen2.5-coder:latest
    ```
 2. Optional environment variables:
    - `OLLAMA_HOST` — defaults to `http://127.0.0.1:11434`
-   - `TASKFORGE_OLLAMA_MODEL` — defaults to `qwen2.5-coder:latest` (if not installed, TaskForge auto-selects the first locally installed model reported by `/api/tags`)
-3. Optional `.taskforge/config.yaml` entry:
+   - `TASKFORGE_OLLAMA_MODEL` — defaults to `qwen2.5-coder:latest` (auto-selects the first locally installed model reported by `/api/tags` if the default is missing)
+3. Enable in `.taskforge/config.yaml` (or `~/.taskforge/config.yaml`):
    ```yaml
+   # Optional: run the Planner & Router 100% locally on Ollama (no OPENAI_API_KEY needed)
+   router:
+     provider: ollama
+     model: qwen2.5-coder:7b
+
+   # Enable @ollama as a full local coding agent & zero-cost solution arbiter
    agents:
      ollama:
        enabled: true
-       model: qwen2.5-coder:14b
+       model: qwen2.5-coder:latest
    ```
 
 ### Usage
 
 ```text
-@ollama explain the retry state machine in #packages/orchestrator/src/orchestrator.ts
-@ollama -> @codex draft edge-case test ideas, then implement them in Vitest
+@ollama add unit tests for edge cases in #src/utils.ts
+@ollama -> @codex analyze concurrency risks, then implement the fix
+@codex @agy --edit refactor #src/parser.ts   # Ollama automatically judges the diffs locally!
 /council @claude @codex @ollama compare SQLite vs DuckDB for local analytics
 /model ollama deepseek-coder-v2
 ```
-
-> **Note:** `OllamaAdapter` is currently read-only (`canRead: true`, `canWrite: false`), making it ideal for fast local explanations, architecture debates, code reviews, and first-stage pipeline analysis that hands off code edits to `@codex`, `@claude`, or `@agy`.
 
 ---
 

@@ -213,12 +213,25 @@ export interface CompetitiveEditCandidate {
   error?: string;
 }
 
+export interface CompetitiveJudgeResult {
+  winnerIndex: number;
+  reasoning: string;
+  hybridSuggestion?: string;
+  judgeLabel?: string;
+}
+
+export type CompetitiveJudgeFn = (
+  prompt: string,
+  candidates: CompetitiveEditCandidate[],
+) => Promise<CompetitiveJudgeResult | undefined>;
+
 export interface PendingCompetitiveEdit {
   id: string;
   prompt: string;
   baseCommit: string;
   candidates: CompetitiveEditCandidate[];
   recommendedIndex?: number;
+  judgeVerdict?: CompetitiveJudgeResult;
 }
 
 export interface PendingPipelineFollowUp {
@@ -256,6 +269,8 @@ export interface DirectRunnerOptions {
   hookRunner?: LifecycleHookRunner;
   /** Optional custom consensus synthesizer (overrides OpenAI lookup; great for deterministic tests). */
   consensusSynthesizer?: DirectConsensusSynthesizer;
+  /** Optional custom judge comparing viable competitive `--edit` candidates. */
+  competitiveJudge?: CompetitiveJudgeFn;
   /** Optional OpenAI credentials used to synthesize Consensus & Divergences on `@all` multi-agent turns. */
   openAiApiKey?: string;
   openAiBaseUrl?: string;
@@ -323,6 +338,7 @@ export class DirectAgentRunner {
   private readonly specialtyRouter?: SpecialtyRouter;
   private readonly hookRunner?: LifecycleHookRunner;
   private readonly consensusSynthesizer?: DirectConsensusSynthesizer;
+  private readonly competitiveJudge?: CompetitiveJudgeFn;
   private readonly openAiApiKey?: string;
   private readonly openAiBaseUrl: string;
   private readonly openAiModel: string;
@@ -346,6 +362,7 @@ export class DirectAgentRunner {
     this.specialtyRouter = options.specialtyRouter;
     this.hookRunner = options.hookRunner;
     this.consensusSynthesizer = options.consensusSynthesizer;
+    this.competitiveJudge = options.competitiveJudge;
     this.openAiApiKey = options.openAiApiKey;
     this.openAiBaseUrl = (options.openAiBaseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/$/, '');
     this.openAiModel = options.openAiModel ?? 'gpt-4o-mini';
@@ -895,7 +912,206 @@ export class DirectAgentRunner {
       }
     }
 
+    // Local Ollama arbiter fallback (zero cloud API cost) when configured and running.
+    const ollamaAdapter = this.agentRegistry.get('ollama');
+    if (ollamaAdapter && typeof ollamaAdapter.structuredQuery === 'function') {
+      try {
+        if (await ollamaAdapter.detect()) {
+          const sq = await ollamaAdapter.structuredQuery({
+            prompt: [
+              'Compare these parallel answers from multiple coding agents on the same question.',
+              'Reply in the SAME language as the user question.',
+              `User question:\n${prompt.slice(0, 800)}`,
+              ...outcomes.map(
+                (o) => `\n--- ${o.agentName} (${o.agentId}) ---\n${o.response.slice(0, 2200)}`,
+              ),
+            ].join('\n'),
+            schema: {
+              type: 'object',
+              properties: {
+                consensus: { type: 'array', items: { type: 'string' } },
+                divergences: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['consensus', 'divergences'],
+            },
+            cwd: this.repoRoot,
+            timeoutMs: 25_000,
+          });
+          const parsed = sq.value as { consensus?: unknown[]; divergences?: unknown[] } | undefined;
+          const consensus = Array.isArray(parsed?.consensus) ? parsed.consensus.map(String).filter(Boolean) : [];
+          const divergences = Array.isArray(parsed?.divergences)
+            ? parsed.divergences.map(String).filter(Boolean)
+            : [];
+          if (consensus.length > 0 || divergences.length > 0) {
+            const lines: string[] = [];
+            if (consensus.length > 0) {
+              lines.push('Consensus (via Ollama Local):', ...consensus.slice(0, 4).map((b) => `- ${b}`));
+            }
+            if (divergences.length > 0) {
+              lines.push(
+                'Divergences / Unique points:',
+                ...divergences.slice(0, 4).map((b) => `- ${b}`),
+              );
+            }
+            return lines.join('\n');
+          }
+        }
+      } catch {
+        // fall through to deterministic comparison
+      }
+    }
+
     return buildDeterministicConsensusFallback(outcomes);
+  }
+
+  /**
+   * Compares >= 2 viable competitive `--edit` candidates (all of which have
+   * already passed deterministic checks) using an injected judge, local Ollama
+   * (`structuredQuery`, zero API cost), or OpenAI to explain which solution is
+   * superior (e.g. Codex vs Antigravity) and optionally recommend a hybrid `mix`.
+   */
+  public async judgeCompetitiveCandidates(
+    prompt: string,
+    viable: CompetitiveEditCandidate[],
+    git: GitService,
+  ): Promise<CompetitiveJudgeResult | undefined> {
+    if (viable.length < 2) return undefined;
+    const validIndices = new Set(viable.map((c) => c.index));
+
+    const normalize = (
+      raw: Partial<CompetitiveJudgeResult> | undefined,
+      fallbackLabel: string,
+    ): CompetitiveJudgeResult | undefined => {
+      if (!raw || typeof raw.winnerIndex !== 'number' || !validIndices.has(raw.winnerIndex)) {
+        return undefined;
+      }
+      const reasoning = typeof raw.reasoning === 'string' ? raw.reasoning.trim() : '';
+      if (!reasoning) return undefined;
+      return {
+        winnerIndex: raw.winnerIndex,
+        reasoning: reasoning.slice(0, 450),
+        ...(typeof raw.hybridSuggestion === 'string' && raw.hybridSuggestion.trim()
+          ? { hybridSuggestion: raw.hybridSuggestion.trim().slice(0, 180) }
+          : {}),
+        judgeLabel: raw.judgeLabel || fallbackLabel,
+      };
+    };
+
+    if (this.competitiveJudge) {
+      try {
+        const res = await this.competitiveJudge(prompt, viable);
+        const normalized = normalize(res, 'Judge');
+        if (normalized) return normalized;
+      } catch {
+        // fall through
+      }
+    }
+
+    const diffPreviews = await Promise.all(
+      viable.map(async (c) => {
+        const diff = c.commitHash
+          ? await git
+              .exec(['diff', `${c.baseCommit}..${c.commitHash}`], this.repoRoot)
+              .catch(() => c.diffStat)
+          : c.diffStat;
+        return [
+          `### Candidate #${c.index} — ${c.agentName} (${c.agentId})`,
+          `Files: ${c.filesChanged.join(', ')}`,
+          `Checks: ${c.checkPassed === true ? 'PASSED' : 'not configured'}`,
+          `Diff:\n${diff.slice(0, 2600)}`,
+          c.response ? `Agent notes: ${c.response.slice(0, 500)}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      }),
+    );
+
+    const judgePrompt = [
+      'You are an objective staff-engineer code arbiter comparing competing implementations of the exact same task.',
+      'All candidates below already passed deterministic checks. Compare code correctness, edge-case handling, minimalism, and maintainability.',
+      'Return JSON: { "winnerIndex": <number>, "reasoning": "<2-3 crisp sentences in the same language as the task explaining why the winner is better>", "hybridSuggestion": "<optional mix command like mix a.ts:#1 b.ts:#2 if combining files is even better, else empty string>" }.',
+      `Allowed winnerIndex values: ${[...validIndices].join(', ')}.`,
+      `\nTask:\n${prompt.slice(0, 800)}`,
+      ...diffPreviews,
+    ].join('\n\n');
+
+    const schema = {
+      type: 'object',
+      properties: {
+        winnerIndex: { type: 'integer' },
+        reasoning: { type: 'string' },
+        hybridSuggestion: { type: 'string' },
+      },
+      required: ['winnerIndex', 'reasoning'],
+    };
+
+    // 1. Prefer local Ollama arbiter when enabled & running (zero cloud API cost).
+    const ollamaAdapter = this.agentRegistry.get('ollama');
+    if (ollamaAdapter && typeof ollamaAdapter.structuredQuery === 'function') {
+      try {
+        if (await ollamaAdapter.detect()) {
+          const sq = await ollamaAdapter.structuredQuery({
+            prompt: judgePrompt,
+            schema,
+            cwd: this.repoRoot,
+            timeoutMs: 30_000,
+          });
+          const normalized = normalize(
+            sq.value as Partial<CompetitiveJudgeResult>,
+            `Ollama Local (${ollamaAdapter.getModelConfig?.().model ?? 'local'})`,
+          );
+          if (normalized) return normalized;
+        }
+      } catch {
+        // fall through to OpenAI or deterministic ranking
+      }
+    }
+
+    // 2. Fall back to OpenAI / configured gateway if available outside Vitest.
+    if (this.openAiApiKey && !process.env.VITEST) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 18_000);
+        try {
+          const response = await fetch(`${this.openAiBaseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${this.openAiApiKey}`,
+            },
+            body: JSON.stringify({
+              model: this.openAiModel,
+              temperature: 0.1,
+              response_format: { type: 'json_object' },
+              messages: [
+                { role: 'system', content: 'Return strict JSON matching the requested schema.' },
+                { role: 'user', content: judgePrompt },
+              ],
+            }),
+            signal: controller.signal,
+          });
+          if (response.ok) {
+            const json = (await response.json()) as {
+              choices?: Array<{ message?: { content?: string } }>;
+            };
+            const rawText = json.choices?.[0]?.message?.content;
+            if (rawText) {
+              const normalized = normalize(
+                JSON.parse(rawText) as Partial<CompetitiveJudgeResult>,
+                this.openAiModel,
+              );
+              if (normalized) return normalized;
+            }
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch {
+        // fall through to deterministic ranking
+      }
+    }
+
+    return undefined;
   }
 
   /**
@@ -1087,7 +1303,8 @@ export class DirectAgentRunner {
 
     const candidates = await Promise.all(adapters.map((adapter, idx) => runCandidate(adapter, idx)));
 
-    // Pick recommended winner: produced changes + succeeded + checks passed (if run) + fastest
+    // Pick recommended winner: deterministic gate first (produced changes + succeeded + checks passed),
+    // then consult local Ollama / OpenAI code arbiter to compare diffs when >= 2 candidates tie on checks.
     const viable = candidates
       .filter((c) => c.success && c.filesChanged.length > 0 && c.checkPassed !== false)
       .sort((a, b) => {
@@ -1096,7 +1313,13 @@ export class DirectAgentRunner {
         if (aCheck !== bCheck) return bCheck - aCheck;
         return a.durationMs - b.durationMs;
       });
-    const recommendedIndex = viable[0]?.index;
+    const topCheckTier = viable.length > 0 ? viable[0].checkPassed : undefined;
+    const judgePool = viable.filter((c) => c.checkPassed === topCheckTier);
+    const judgeVerdict =
+      judgePool.length >= 2
+        ? await this.judgeCompetitiveCandidates(prompt, judgePool, git)
+        : undefined;
+    const recommendedIndex = judgeVerdict?.winnerIndex ?? viable[0]?.index;
 
     const pending: PendingCompetitiveEdit = {
       id: competeId,
@@ -1104,6 +1327,7 @@ export class DirectAgentRunner {
       baseCommit,
       candidates,
       recommendedIndex,
+      ...(judgeVerdict ? { judgeVerdict } : {}),
     };
 
     const sections: string[] = [
@@ -1162,6 +1386,19 @@ export class DirectAgentRunner {
         `  ${colors.dim}No candidate produced applicable changes; temporary worktrees were cleaned up.${colors.reset}`,
       );
       return { formatted: sections.join('\n\n') };
+    }
+
+    if (judgeVerdict) {
+      const judgeLines = [
+        `  ${colors.brand}✦ ${colors.bold}Arbiter Verdict${colors.reset} ${colors.dim}(${judgeVerdict.judgeLabel ?? 'Local Judge'} → #${judgeVerdict.winnerIndex})${colors.reset}`,
+        `    ${judgeVerdict.reasoning}`,
+      ];
+      if (judgeVerdict.hybridSuggestion) {
+        judgeLines.push(
+          `    ${colors.cyan}Hybrid option:${colors.reset} ${judgeVerdict.hybridSuggestion}`,
+        );
+      }
+      sections.push(judgeLines.join('\n'));
     }
 
     const hint = recommendedIndex

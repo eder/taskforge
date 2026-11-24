@@ -801,6 +801,59 @@ export class DebateCouncilRunner {
       }
     }
 
+    // Local Ollama Chairperson fallback (zero cloud API cost) when configured & running.
+    const ollamaAdapter = this.agentRegistry.get('ollama');
+    if (ollamaAdapter && typeof ollamaAdapter.structuredQuery === 'function') {
+      try {
+        if (await ollamaAdapter.detect()) {
+          const sq = await ollamaAdapter.structuredQuery({
+            prompt: [
+              'You are the chairperson of a Multi-Agent Engineering Debate Council. Compare the independent proposals, critiques, and refinements below, and produce a strict JSON verdict in the SAME language as the problem.',
+              `Problem:\n${problem}`,
+              ...proposals.map((p) => `\nProposal #${p.index} (${p.agentName}):\n${p.content.slice(0, 1500)}`),
+              ...critiques
+                .filter((c) => c.success)
+                .map(
+                  (c) =>
+                    `\nCritique of #${c.targetProposalIndex} by ${c.criticAgentName}:\n${c.content.slice(0, 900)}`,
+                ),
+              ...refinements
+                .filter((r) => r.success)
+                .map((r) => `\nRefined #${r.proposalIndex} (${r.agentName}):\n${r.content.slice(0, 1500)}`),
+            ].join('\n'),
+            schema: {
+              type: 'object',
+              properties: {
+                summary: { type: 'string' },
+                recommendedApproach: { type: 'string' },
+                recommendedProposalIndex: { type: 'integer' },
+                hybridHighlights: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['summary', 'recommendedApproach', 'recommendedProposalIndex'],
+            },
+            cwd: this.repoRoot,
+            timeoutMs: 30_000,
+          });
+          const parsed = sq.value as Partial<CouncilVerdict> | undefined;
+          if (typeof parsed?.summary === 'string' && typeof parsed?.recommendedApproach === 'string') {
+            return {
+              summary: parsed.summary.trim(),
+              recommendedApproach: parsed.recommendedApproach.trim(),
+              recommendedProposalIndex:
+                typeof parsed.recommendedProposalIndex === 'number'
+                  ? parsed.recommendedProposalIndex
+                  : proposals[0]?.index,
+              hybridHighlights: Array.isArray(parsed.hybridHighlights)
+                ? parsed.hybridHighlights.map(String).slice(0, 6)
+                : [],
+            };
+          }
+        }
+      } catch {
+        // fall through to deterministic synthesis
+      }
+    }
+
     return buildDeterministicCouncilVerdict(problem, proposals, critiques, refinements);
   }
 

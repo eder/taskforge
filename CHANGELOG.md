@@ -51,6 +51,10 @@ All workspace packages are released in lockstep under a single version.
   - Detects embedded delivery instructions inside task prompts (PT & EN, e.g. `"corrige X e já abre uma PR"`, `"fix Y and commit"`) and automatically prepares the matching 1-Enter confirmation panel when the edit succeeds.
   - Completed orchestrated runs now present a context-aware post-success delivery prompt (recommending PR on `github-flow`, apply on feature/trunk branches, or diff first whenever automated checks did not run) accepting natural replies (`Enter`/`sim`, `aplica`, `abre pr`, `diff`, `descarta`) while keeping `/apply` and `/pr` as explicit power shortcuts.
   - Unified natural-language Git commands (`faz commit`, `abre um pr`, `commita e abre pr`) across both Direct Mode edits and orchestrated runs.
+- **Full Agentic Ollama, Local Coordinator & Solution Arbiter:**
+  - Upgraded `OllamaAdapter` with a worktree-confined native tool-calling loop (`list_files`, `read_file`, `search_files`, plus `edit_file` / `write_file` strictly gated by `mutationAllowed`), path-traversal protection, graceful non-tool model fallback, and `structuredQuery()` support.
+  - Added first-class `router.provider: ollama` (plus `resolveRouterModel()`) so planning, parallel DAG decomposition, dependency management, and multi-agent task routing run 100% locally on Ollama with zero OpenAI API key required.
+  - Added local Ollama solution arbitration in `@a @b --edit` (`judgeCompetitiveCandidates` comparing candidate diffs after deterministic checks pass, with reasoning and optional `mix` suggestions), `@all` consensus synthesis, and `/council` verdicts.
 
 ### Fixed
 - Fixed stale token budget percentage assertion in `packages/telemetry/tests/telemetry.test.ts` after cached-token weighting updates.

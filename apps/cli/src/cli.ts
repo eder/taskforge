@@ -4,6 +4,7 @@ import {
   loadConfig,
   resolveOpenAIApiKey,
   resolveOpenAIBaseUrl,
+  resolveRouterModel,
   getGlobalStateDatabasePath,
   TASKFORGE_VERSION,
   parseTokenCount,
@@ -144,10 +145,11 @@ export function buildHeadlessPlannerAndRouter(
   const agentRegistry = new AgentRegistry(true, config.agents);
   const openaiApiKey = resolveOpenAIApiKey(config);
   const openaiBaseUrl = resolveOpenAIBaseUrl(config);
+  const routerModel = resolveRouterModel(config);
   const planner = new SemanticPlanner({
     apiKey: openaiApiKey,
     baseUrl: openaiBaseUrl,
-    model: process.env.PLANNER_MODEL || config.router.model || 'gpt-4o-mini',
+    model: process.env.PLANNER_MODEL || routerModel,
     timeoutMs: (config.router.timeoutSeconds ?? 60) * 1000,
     maxTasks: config.planner?.maxTasks,
     agentPlanning: config.planner?.agentPlanning,
@@ -159,8 +161,11 @@ export function buildHeadlessPlannerAndRouter(
   let router: RoutingProvider;
   if (config.router.adaptive && options.db) {
     router = new AdaptiveRoutingProvider(new PerformanceEngine(options.db));
-  } else if (config.router.provider === 'openai' && openaiApiKey) {
-    router = new OpenAIRoutingProvider(openaiApiKey, config.router.model, 15000, {
+  } else if (
+    (config.router.provider === 'openai' || config.router.provider === 'ollama') &&
+    openaiApiKey
+  ) {
+    router = new OpenAIRoutingProvider(openaiApiKey, routerModel, 15000, {
       baseUrl: openaiBaseUrl,
     });
   } else {
