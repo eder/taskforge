@@ -411,30 +411,56 @@ export class DeterministicScheduler {
    * For a review task, picks a healthy, actually-detected agent other than the
    * implementer(s) of its prerequisite tasks so code is reviewed by an
    * independent provider (e.g. Claude or Antigravity reviewing Codex's work)
-   * rather than self-reviewed. Never overrides simulated `--fake` runs.
+   * rather than self-reviewed. Prefers frontier CLI reviewers over local
+   * `ollama` models (even choosing a different frontier provider that authored
+   * fewer prerequisite tasks before falling back to `ollama`). Never overrides
+   * simulated `--fake` runs.
    */
   private async independentReviewerAgentId(
     task: Task,
-    excludedAgentIds: Set<string>,
+    authorCounts: Map<string, number>,
+    preferredForSlot: string,
   ): Promise<string | undefined> {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
     const quotaTracker = AgentQuotaTracker.getInstance();
     const allowedWriters = allowedWritersForTask(task, this.ctx.config);
-    for (const agent of this.ctx.agentRegistry.list()) {
-      if (
-        agent.id === 'fake' ||
-        excludedAgentIds.has(agent.id) ||
-        failed.has(agent.id) ||
-        !quotaTracker.isAvailable(agent.id) ||
-        (allowedWriters !== undefined && !allowedWriters.has(agent.id)) ||
-        !this.concurrency.canSchedule(agent.id)
-      ) {
-        continue;
-      }
+    const eligible = this.ctx.agentRegistry
+      .list()
+      .filter(
+        (agent) =>
+          agent.id !== 'fake' &&
+          !failed.has(agent.id) &&
+          quotaTracker.isAvailable(agent.id) &&
+          (allowedWriters === undefined || allowedWriters.has(agent.id)) &&
+          this.concurrency.canSchedule(agent.id),
+      );
+
+    // 1. Pure cross-agent frontier reviewer (did not author any prerequisite task).
+    for (const agent of eligible) {
+      if (agent.id === 'ollama' || authorCounts.has(agent.id)) continue;
       if (await agent.detect().catch(() => false)) {
         return agent.id;
       }
     }
+
+    // 2. Different frontier reviewer that authored the fewest prerequisite tasks
+    //    (e.g. Antigravity reviewing when Codex wrote 2/3 tasks and Antigravity wrote 1/3)
+    //    rather than routing a multi-file review to a small local Ollama model.
+    const partialFrontier = eligible
+      .filter((agent) => agent.id !== 'ollama' && agent.id !== preferredForSlot)
+      .sort((a, b) => (authorCounts.get(a.id) ?? 0) - (authorCounts.get(b.id) ?? 0));
+    for (const agent of partialFrontier) {
+      if (await agent.detect().catch(() => false)) {
+        return agent.id;
+      }
+    }
+
+    // 3. Local Ollama fallback only if no frontier reviewer is available and it wasn't an author.
+    const ollamaAgent = eligible.find((agent) => agent.id === 'ollama' && !authorCounts.has('ollama'));
+    if (ollamaAgent && (await ollamaAgent.detect().catch(() => false))) {
+      return ollamaAgent.id;
+    }
+
     return undefined;
   }
 
@@ -1254,13 +1280,19 @@ export class DeterministicScheduler {
           preferredForSlot !== 'fake' &&
           task.dependencies.length > 0
         ) {
-          const authorAgents = new Set<string>();
+          const authorCounts = new Map<string, number>();
           for (const depId of task.dependencies) {
             const recorded = this.taskAssignedAgent.get(depId);
-            if (recorded) authorAgents.add(recorded);
+            if (recorded) {
+              authorCounts.set(recorded, (authorCounts.get(recorded) ?? 0) + 1);
+            }
           }
-          if (authorAgents.has(preferredForSlot)) {
-            const independent = await this.independentReviewerAgentId(task, authorAgents);
+          if (authorCounts.has(preferredForSlot)) {
+            const independent = await this.independentReviewerAgentId(
+              task,
+              authorCounts,
+              preferredForSlot,
+            );
             if (independent) {
               this.ctx.onProgress?.(
                 `[${task.id}] Using independent reviewer ${independent} (instead of author ${preferredForSlot}) for cross-agent review.`,

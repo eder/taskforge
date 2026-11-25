@@ -226,6 +226,72 @@ function parseToolArgs(raw: Record<string, unknown> | string | undefined): Recor
 }
 
 /**
+ * Small local models (e.g. `qwen2.5-coder:3b`) occasionally emit tool calls as
+ * raw JSON (or inside a ```json fence) in `message.content` instead of using
+ * Ollama's structured `message.tool_calls` field. Detect and parse those inline
+ * calls so the agentic loop executes them instead of returning raw JSON.
+ */
+export function extractInlineToolCalls(
+  content: string,
+  allowedToolNames: ReadonlySet<string>,
+): OllamaToolCall[] {
+  const trimmed = content.trim();
+  if (!trimmed) return [];
+
+  const candidates: string[] = [];
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  while ((match = fenceRegex.exec(trimmed)) !== null) {
+    if (match[1]?.trim()) candidates.push(match[1].trim());
+  }
+  if (candidates.length === 0 && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+    candidates.push(trimmed);
+  }
+
+  const calls: OllamaToolCall[] = [];
+  const pushIfValid = (item: unknown) => {
+    if (!item || typeof item !== 'object') return;
+    const obj = item as Record<string, unknown>;
+    const fnObj =
+      obj.function && typeof obj.function === 'object'
+        ? (obj.function as Record<string, unknown>)
+        : obj;
+    const name = typeof fnObj.name === 'string' ? fnObj.name.trim() : '';
+    const args = fnObj.arguments ?? fnObj.parameters;
+    if (
+      name &&
+      allowedToolNames.has(name) &&
+      (args === undefined || typeof args === 'string' || (typeof args === 'object' && args !== null))
+    ) {
+      calls.push({
+        function: {
+          name,
+          arguments:
+            typeof args === 'string' || (typeof args === 'object' && args !== null)
+              ? (args as Record<string, unknown> | string)
+              : {},
+        },
+      });
+    }
+  };
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) pushIfValid(item);
+      } else {
+        pushIfValid(parsed);
+      }
+    } catch {
+      // Not valid JSON; ignore and treat as normal assistant prose.
+    }
+  }
+
+  return calls;
+}
+
+/**
  * First-class local open-weight coding agent & coordinator adapter powered by
  * Ollama (`http://127.0.0.1:11434` by default, or `OLLAMA_HOST`).
  *
@@ -483,6 +549,11 @@ export class OllamaAdapter implements AgentAdapter {
       let totalOutputTokens = 0;
       let finalOutput = '';
       let useTools = Boolean(tools && tools.length > 0);
+      const allowedToolNames = new Set(
+        (tools ?? [])
+          .map((t) => (t.function as { name?: string } | undefined)?.name)
+          .filter((n): n is string => Boolean(n)),
+      );
 
       for (let turn = 0; turn < this.maxToolTurns; turn++) {
         const res = await fetch(`${this.baseUrl}/api/chat`, {
@@ -516,16 +587,24 @@ export class OllamaAdapter implements AgentAdapter {
         totalOutputTokens += json.eval_count ?? 0;
 
         const msgContent = (json.message?.content ?? '').trim();
-        const toolCalls = json.message?.tool_calls;
+        const nativeToolCalls = json.message?.tool_calls;
+        const inlineToolCalls =
+          useTools && hasWorktree && (!Array.isArray(nativeToolCalls) || nativeToolCalls.length === 0)
+            ? extractInlineToolCalls(msgContent, allowedToolNames)
+            : [];
+        const toolCalls =
+          Array.isArray(nativeToolCalls) && nativeToolCalls.length > 0
+            ? nativeToolCalls
+            : inlineToolCalls;
 
-        if (!useTools || !Array.isArray(toolCalls) || toolCalls.length === 0 || !hasWorktree) {
+        if (!useTools || toolCalls.length === 0 || !hasWorktree) {
           finalOutput = msgContent;
           break;
         }
 
         messages.push({
           role: 'assistant',
-          content: msgContent,
+          content: inlineToolCalls.length > 0 ? '' : msgContent,
           tool_calls: toolCalls,
         });
 
@@ -544,6 +623,29 @@ export class OllamaAdapter implements AgentAdapter {
             role: 'tool',
             content: toolResult,
           });
+        }
+      }
+
+      if (!finalOutput && useTools) {
+        messages.push({
+          role: 'user',
+          content: 'Provide a concise final summary of your findings or changes without calling any more tools.',
+        });
+        const finalRes = await fetch(`${this.baseUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: this.model,
+            stream: false,
+            messages,
+          }),
+          signal: controller.signal,
+        });
+        if (finalRes.ok) {
+          const finalJson = (await finalRes.json()) as OllamaChatResponse;
+          totalInputTokens += finalJson.prompt_eval_count ?? 0;
+          totalOutputTokens += finalJson.eval_count ?? 0;
+          finalOutput = (finalJson.message?.content ?? '').trim();
         }
       }
 

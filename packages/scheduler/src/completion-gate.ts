@@ -247,6 +247,38 @@ function reviewTextExplicitlyRejects(text: string): boolean {
   );
 }
 
+/**
+ * Detects when an agent's entire response is an unexecuted JSON tool-call
+ * payload (e.g. `{"name": "search_files", "arguments": {...}}`), which must
+ * never be accepted as a substantive review or investigation report.
+ */
+function looksLikeRawToolCallPayload(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const unwrapped = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (!unwrapped.startsWith('{') && !unwrapped.startsWith('[')) return false;
+  try {
+    const parsed = JSON.parse(unwrapped) as unknown;
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    if (items.length === 0) return false;
+    return items.every((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const obj = item as Record<string, unknown>;
+      const fnObj =
+        obj.function && typeof obj.function === 'object'
+          ? (obj.function as Record<string, unknown>)
+          : obj;
+      return (
+        typeof fnObj.name === 'string' &&
+        fnObj.name.trim().length > 0 &&
+        ('arguments' in fnObj || 'parameters' in fnObj)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
 export interface CompletionGateContext {
   task: Task;
   assignment?: AgentAssignment;
@@ -388,13 +420,15 @@ export class CompletionGate {
     } else if (policy.requirement === 'substantive_report_required') {
       // Investigation / design evidence requires a substantive report.
       const outputText = sanitizeTaskOutput(agentResult.output ?? agentResult.message ?? '').trim();
-      if (outputText.length < 20) {
+      if (outputText.length < 20 || looksLikeRawToolCallPayload(outputText)) {
         return {
           accepted: false,
           failureReason: 'EMPTY_PROVIDER_RESULT',
           evidence: {
             investigationReportLength: outputText.length,
-            explanation: `${task.type.toUpperCase()} task '${task.id}' produced insufficient or empty analysis output (${outputText.length} chars). ${policy.reason}`,
+            explanation: looksLikeRawToolCallPayload(outputText)
+              ? `${task.type.toUpperCase()} task '${task.id}' emitted an unexecuted tool-call JSON payload instead of a substantive report. ${policy.reason}`
+              : `${task.type.toUpperCase()} task '${task.id}' produced insufficient or empty analysis output (${outputText.length} chars). ${policy.reason}`,
           },
         };
       }
@@ -451,13 +485,15 @@ export class CompletionGate {
       // of rejection, not evidence that the task completed successfully.
       const findings = agentResult.findings ?? [];
       const outputText = sanitizeTaskOutput(agentResult.output ?? agentResult.message ?? '').trim();
-      if (findings.length === 0 && outputText.length < 20) {
+      if (findings.length === 0 && (outputText.length < 20 || looksLikeRawToolCallPayload(outputText))) {
         return {
           accepted: false,
           failureReason: 'EMPTY_PROVIDER_RESULT',
           evidence: {
             reviewFindingsCount: 0,
-            explanation: `Review task '${task.id}' produced no review findings or analysis report. ${policy.reason}`,
+            explanation: looksLikeRawToolCallPayload(outputText)
+              ? `Review task '${task.id}' emitted an unexecuted tool-call JSON payload instead of a substantive review report. ${policy.reason}`
+              : `Review task '${task.id}' produced no review findings or analysis report. ${policy.reason}`,
           },
         };
       }

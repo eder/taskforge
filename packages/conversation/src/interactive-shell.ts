@@ -1067,7 +1067,7 @@ export class InteractiveShell {
         }
       }
     } else {
-      routerStatus = `${colors.gray}● static fallback${colors.reset}`;
+      routerStatus = `${colors.green}● deterministic${colors.reset} ${colors.dim}(CLI agent planning)${colors.reset}`;
     }
 
     const versionLabel = `v${TASKFORGE_VERSION}`;
@@ -1094,7 +1094,7 @@ export class InteractiveShell {
           )}`,
       ),
       '',
-      `  ${colors.bold}Router${colors.reset}      ${this.config.router.provider === 'ollama' ? 'Ollama      ' : 'OpenAI      '} ${routerStatus}`,
+      `  ${colors.bold}Router${colors.reset}      ${this.config.router.provider === 'ollama' ? 'Ollama      ' : this.config.router.provider === 'static' ? 'Static      ' : 'OpenAI      '} ${routerStatus}`,
       `  ${colors.bold}ECC${colors.reset}         ${profile.hasECC ? `${colors.green}● detected${colors.reset}` : `${colors.gray}○ not detected${colors.reset}`}`,
       `  ${colors.bold}Direct${colors.reset}      ${colors.dim}@claude · @codex · @agy · @all · !cmd · /use <agent|all|auto>${colors.reset}`,
       ` ${colors.brand}─────────────────────────────────────────────────────────────────${colors.reset}`,

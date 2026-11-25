@@ -57,8 +57,14 @@ export function plannerSourceLabel(
   }
 
   if (plannerMeta?.source === 'semantic_model') {
-    const providerLabel = plannerMeta.provider === 'custom' ? 'Custom' : 'Semantic';
-    return `${providerLabel} / ${plannerMeta.model || 'gpt-4o-mini'}`;
+    const providerLabel =
+      plannerMeta.provider === 'custom'
+        ? 'Custom'
+        : plannerMeta.provider === 'agent'
+          ? 'Agent'
+          : 'Semantic';
+    const defaultModel = plannerMeta.provider === 'agent' ? 'coding-agent' : 'gpt-4o-mini';
+    return `${providerLabel} / ${plannerMeta.model || defaultModel}`;
   }
 
   if (plannerMeta?.source === 'deterministic_decomposition') {

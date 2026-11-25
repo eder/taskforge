@@ -243,4 +243,54 @@ describe('OllamaAdapter (Agentic Tool-Calling & Structured Coordinator)', () => 
     });
     expect(sq.tokens).toBe(150);
   });
+
+  it('executes inline JSON tool calls emitted in message.content by small local models (e.g. qwen2.5-coder:3b)', async () => {
+    const wt = createTempWorktree();
+    const events: AgentStreamEvent[] = [];
+
+    const mock = await startMockOllamaServer((_reqPath, body) => {
+      const messages = (body.messages as Array<{ role: string; content: string }>) ?? [];
+      const toolMsgs = messages.filter((m) => m.role === 'tool');
+      if (toolMsgs.length === 0) {
+        // Small model prints tool call as fenced JSON in `content` instead of structured `tool_calls`.
+        return {
+          json: {
+            message: {
+              role: 'assistant',
+              content: '```json\n{"name": "read_file", "arguments": {"path": "math.ts"}}\n```',
+            },
+          },
+        };
+      }
+      if (toolMsgs.length === 1) {
+        expect(toolMsgs[0].content).toContain('a - b');
+        // Bare JSON tool call in `content`
+        return {
+          json: {
+            message: {
+              role: 'assistant',
+              content: JSON.stringify({
+                name: 'edit_file',
+                arguments: { path: 'math.ts', target: 'a - b', replacement: 'a + b' },
+              }),
+            },
+          },
+        };
+      }
+      expect(toolMsgs[1].content).toContain('OK: updated math.ts');
+      return {
+        json: {
+          message: { role: 'assistant', content: 'Updated math.ts via inline tool calls.' },
+        },
+      };
+    });
+    cleanups.push(mock.close);
+
+    const adapter = new OllamaAdapter({ baseUrl: mock.url, model: 'qwen2.5-coder:3b' });
+    const res = await adapter.execute(baseAssignment, makeContext(wt, true, events));
+    expect(res.success).toBe(true);
+    expect(res.output).toContain('Updated math.ts via inline tool calls.');
+    expect(fs.readFileSync(path.join(wt, 'math.ts'), 'utf8')).toContain('a + b');
+    expect(events.map((e) => e.type)).toEqual(['file_read', 'file_edit', 'agent_message']);
+  });
 });
