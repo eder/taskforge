@@ -1,6 +1,7 @@
 # TaskForge: Architecture & Verification Guide (Phases 14–22)
 
-**Milestones 3, 4 & 5: Real-Agent E2E, Plugin System, ECC Integration, Telemetry, Performance Engine, Adaptive Routing, TUI Dashboard, GitHub Workflows, and Experimental Remote Worker Stubs**
+**Milestones 3, 4 & 5: Real-Agent E2E, Plugin System, ECC Integration, Telemetry, Performance Engine, Adaptive Routing, TUI Dashboard, GitHub Workflows, and Experimental Remote Worker Stubs**  
+**Release Status:** Included in `v1.0.0-rc.1` (see [release-criteria-1.0.md](release-criteria-1.0.md) for 1.0 release criteria and compatibility guarantees)
 
 ---
 
@@ -48,7 +49,7 @@ flowchart TD
 
 ## 3. Detailed Phase Breakdown
 
-### Phase 14: Real-Agent E2E v0.1
+### Phase 14: Real-Agent E2E
 
 - **Real Agent Adapters**:
   - `ClaudeCodeAdapter`: Wraps native Anthropic `claude` CLI with `--print` and non-interactive automation flags.

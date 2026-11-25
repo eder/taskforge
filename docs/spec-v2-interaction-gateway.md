@@ -1,14 +1,14 @@
-# TaskForge Specification v2 (v1.1): Agent Interaction Gateway & Human-in-the-Loop Architecture
+# TaskForge Specification v2 (Spec Revision 1.1): Agent Interaction Gateway & Human-in-the-Loop Architecture
 
 **Specification Reference:** `taskforge-complete-product-engineering-spec-v2.md`  
 **Date:** September 2026  
-**Status:** Implemented & Verified
+**Status:** Implemented & Verified (included in `v1.0.0-rc.1`; see [release-criteria-1.0.md](release-criteria-1.0.md))
 
 ---
 
 ## 1. Executive Summary
 
-TaskForge Specification v2 (v1.1) elevates TaskForge by introducing a unified **Agent Interaction Gateway**, a deterministic **Permission Engine**, a semantic **Question Router**, **Conversational Approvals** with granular scopes, and full **Headless Automation** (`tf exec` and `tf inspect`).
+TaskForge Specification v2 (spec revision 1.1) elevates TaskForge by introducing a unified **Agent Interaction Gateway**, a deterministic **Permission Engine**, a semantic **Question Router**, **Conversational Approvals** with granular scopes, and full **Headless Automation** (`tf exec` and `tf inspect`).
 
 Instead of allowing underlying agent processes (such as Anthropic Claude Code, OpenAI Codex, or Google Gemini CLI) to block silently on unhandled `stdin` or bypass security policies, TaskForge intercepts, normalizes, and deterministically governs every interaction prompt via structured event streaming.
 

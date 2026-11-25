@@ -1,7 +1,7 @@
 # TaskForge Git Worktrees, Branch Lifecycle & Real-Agent Hardening Guide
 
 **Document Status:** Official Reference & User Guide  
-**Version:** v0.2.0  
+**Version:** v1.0.0-rc.1  
 **Target Audience:** Developers, Platform Engineers, and Multi-Agent Systems Architects  
 
 ---
@@ -204,7 +204,7 @@ tf clean
 
 ---
 
-## 4. Real-Agent Hardening (v0.1 Safe-by-Default Architecture)
+## 4. Real-Agent Hardening (Safe-by-Default Architecture)
 
 To bridge the gap between deterministic software and external CLI agents, TaskForge implements the **Real-Agent Hardening Specification**:
 
@@ -284,7 +284,7 @@ TaskForge includes an opt-in integration test suite (`packages/agents/tests/real
 
 > **Update:** the delivery branch (`DeliveryService.prepareDeliveryBranch()`) and slug utility (`slugifyGoal()` in `packages/git-workflow/src/branch-slug.ts`) now exist. The ephemeral `taskforge/run-<id>` scheme was intentionally **not** renamed to `taskforge/runs/<id>`: persisted runs and cleanup rules already depend on the current name, and the new delivery branch removes the user-facing need for the rename.
 
-This section exists so the next change lands in the right file on the first try instead of growing a parallel, slightly-different mechanism. These are known, deliberately deferred items (see `ROADMAP.md`, Horizon 1):
+This section exists so the next change lands in the right file on the first try instead of growing a parallel, slightly-different mechanism. These are known, deliberately deferred items targeting post-`1.0` (`1.1+`; see [release-criteria-1.0.md](release-criteria-1.0.md)):
 
 | Planned work | Ideal insertion point | Why there |
 | :--- | :--- | :--- |
