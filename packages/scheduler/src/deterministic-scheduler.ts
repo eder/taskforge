@@ -334,6 +334,9 @@ export class DeterministicScheduler {
     this.ctx.runRepo.mergeMetadata(this.ctx.runId, { taskOutputs: this.taskOutputs });
   }
 
+  /** Tracks which agent executed each task in this run so downstream review tasks pick an independent reviewer. */
+  private taskAssignedAgent = new Map<string, string>();
+
   private resolveAgentId(task: Task): string | undefined {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
     const quotaTracker = AgentQuotaTracker.getInstance();
@@ -400,6 +403,27 @@ export class DeterministicScheduler {
           quotaTracker.isAvailable(agent.id) &&
           (allowedWriters === undefined || allowedWriters.has(agent.id)) &&
           (!requireZeroActive || this.concurrency.getAgentActiveCount(agent.id) === 0) &&
+          this.concurrency.canSchedule(agent.id),
+      )?.id;
+  }
+
+  /**
+   * For a review task, picks a healthy agent other than the implementer(s) of
+   * its prerequisite tasks so code is reviewed by an independent provider
+   * (e.g. Claude or Antigravity reviewing Codex's work) rather than self-reviewed.
+   */
+  private independentReviewerAgentId(task: Task, excludedAgentIds: Set<string>): string | undefined {
+    const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
+    const quotaTracker = AgentQuotaTracker.getInstance();
+    const allowedWriters = allowedWritersForTask(task, this.ctx.config);
+    return this.ctx.agentRegistry
+      .list()
+      .find(
+        (agent) =>
+          !excludedAgentIds.has(agent.id) &&
+          !failed.has(agent.id) &&
+          quotaTracker.isAvailable(agent.id) &&
+          (allowedWriters === undefined || allowedWriters.has(agent.id)) &&
           this.concurrency.canSchedule(agent.id),
       )?.id;
   }
@@ -1211,22 +1235,42 @@ export class DeterministicScheduler {
         // providers (e.g. Codex + Antigravity + Claude) work simultaneously, rather than
         // stacking a 2nd task onto an agent with maxParallel > 1 while another sits idle.
         const hasExplicitUserPin = typeof task.contract.metadata?.preferredAgent === 'string';
-        const preferredBusy = this.concurrency.getAgentActiveCount(agentId) > 0;
+        let preferredForSlot = agentId;
+        const isReviewTask =
+          task.type === 'review' || task.contract.completionMode === 'review';
+        if (isReviewTask && !hasExplicitUserPin && task.dependencies.length > 0) {
+          const authorAgents = new Set<string>();
+          for (const depId of task.dependencies) {
+            const recorded = this.taskAssignedAgent.get(depId);
+            if (recorded) authorAgents.add(recorded);
+          }
+          if (authorAgents.has(preferredForSlot)) {
+            const independent = this.independentReviewerAgentId(task, authorAgents);
+            if (independent) {
+              this.ctx.onProgress?.(
+                `[${task.id}] Using independent reviewer ${independent} (instead of author ${preferredForSlot}) for cross-agent review.`,
+              );
+              preferredForSlot = independent;
+            }
+          }
+        }
+        const preferredBusy = this.concurrency.getAgentActiveCount(preferredForSlot) > 0;
         const spreadIdleAgent =
           preferredBusy && !hasExplicitUserPin
-            ? this.idleAlternativeAgentId(task, agentId, true)
+            ? this.idleAlternativeAgentId(task, preferredForSlot, true)
             : undefined;
         const slotAgentId =
           spreadIdleAgent ??
-          (this.concurrency.canSchedule(agentId)
-            ? agentId
-            : this.idleAlternativeAgentId(task, agentId, false));
+          (this.concurrency.canSchedule(preferredForSlot)
+            ? preferredForSlot
+            : this.idleAlternativeAgentId(task, preferredForSlot, false));
         if (slotAgentId) {
-          if (slotAgentId !== agentId) {
+          if (slotAgentId !== preferredForSlot) {
             this.ctx.onProgress?.(
-              `[${task.id}] ${agentId} is busy; running it on ${slotAgentId} so independent tasks proceed together.`,
+              `[${task.id}] ${preferredForSlot} is busy; running it on ${slotAgentId} so independent tasks proceed together.`,
             );
           }
+          this.taskAssignedAgent.set(task.id, slotAgentId);
           this.concurrency.acquire(task.id, slotAgentId);
 
           const taskPromise = this.executeTask(task, slotAgentId).finally(() => {

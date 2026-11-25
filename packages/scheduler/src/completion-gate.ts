@@ -242,7 +242,7 @@ export function resolveCompletionPolicy(task: Task): TaskCompletionPolicy {
 
 function reviewTextExplicitlyRejects(text: string): boolean {
   if (!text.trim()) return false;
-  return /\b(review rejected|review failed|not approved|do not approve|cannot approve|blocks approval|revis[aã]o reprovada|revis[aã]o rejeitada|n[aã]o aprovad[ao]|bloqueia a aprova[cç][aã]o)\b/i.test(
+  return /\b(review rejected|review failed|review blocked|not approved|do not approve|cannot approve|blocks approval|changes requested|critical defects?|critical bugs?|review_verdict:\s*rejected|revis[aã]o reprovada|revis[aã]o rejeitada|revis[aã]o bloqueada|n[aã]o aprovad[ao]|bloqueia a aprova[cç][aã]o|altera[cç][õo]es solicitadas|defeitos? cr[ií]ticos?|falhas? cr[ií]ticas?)\b/i.test(
     text,
   );
 }

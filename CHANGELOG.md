@@ -57,6 +57,10 @@ All workspace packages are released in lockstep under a single version.
   - Added local Ollama solution arbitration in `@a @b --edit` (`judgeCompetitiveCandidates` comparing candidate diffs after deterministic checks pass, with reasoning and optional `mix` suggestions), `@all` consensus synthesis, and `/council` verdicts.
 
 ### Fixed
+- **True multi-agent parallelism & independent cross-agent review:**
+  - `SemanticPlanner` now treats short follow-up prompts carrying rich `goal.context` (e.g. a preceding Direct Mode analysis) as complex goals and escalates automatically to `agentCaller` (Codex/Claude read-only) whenever a small/local router model fails plan schema validation instead of collapsing to the 2-task serial heuristic.
+  - `DeterministicScheduler` now prefers an independent reviewer agent (different from the implementer of prerequisite tasks) for `review` tasks whenever another healthy agent is available.
+  - Expanded `CompletionGate`'s `reviewTextExplicitlyRejects()` to catch `"Revisão bloqueada"`, `"review blocked"`, `"changes requested"`, and `"defeitos críticos"` / `"critical defects"` so blocked reviews are never accepted.
 - Fixed three real-world dogfooding issues:
   - Carried over the latest substantive Direct Mode agent report (as `REFERENCE DATA`) into `SemanticPlanner` when the user follows up with an orchestrated implementation request (e.g. `"Então siga fazendo tudo que é necessário"`, `"implement items 1-4"`).
   - Normalized pre-implementation `review` tasks that have no mutating prerequisites to `investigation` (`report`) in `TaskGraphValidator`, preventing `CompletionGate` from rejecting upfront analysis tasks when smaller planner models mislabel them as `review`.

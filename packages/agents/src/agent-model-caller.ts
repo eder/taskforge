@@ -1,8 +1,12 @@
 import type { AgentRegistry } from './agent-registry.js';
 import { AgentQuotaTracker } from './quota-tracker.js';
 
-/** Agents that can answer a structured question; opt-in local Ollama saves cloud quota when enabled. */
-const PREFERENCE = ['ollama', 'codex', 'claude'];
+/**
+ * Agents that can answer complex structured planning queries: prefer frontier
+ * coding CLIs (`codex`, `claude`) for high-quality parallel DAG decomposition,
+ * falling back to local `ollama` when offline or when cloud CLIs are unavailable.
+ */
+const PREFERENCE = ['codex', 'claude', 'ollama'];
 
 export interface AgentModelCallerOptions {
   /** Repository the agent reads to ground its answer. */
