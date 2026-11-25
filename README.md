@@ -650,7 +650,7 @@ CI targets Node.js 22 and Node.js 24.
 - [Platform Integrations](docs/platform-integrations.md) — `tf ui` Local Web Cockpit, `tf mcp serve` (Cursor / VS Code / Claude Desktop), `tf daemon` & `tf schedule`, `TaskForgeClient` TypeScript SDK, `@ollama`, lifecycle hooks, `/multirepo`
 - [Usage guide](docs/usage.md) — end-to-end orchestrated workflow from setup to PR delivery
 - [Pilot checklist (validate with real agents)](docs/pilot.md)
-- [Roadmap & execution history](ROADMAP.md)
+- [Release criteria for 1.0](docs/release-criteria-1.0.md)
 - [Architecture phases 0–5](docs/architecture-phases-0-5.md)
 - [Architecture phases 6–13](docs/architecture-phases-6-13.md)
 - [Architecture phases 14–22](docs/architecture-phases-14-22.md)
