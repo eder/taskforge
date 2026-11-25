@@ -408,24 +408,34 @@ export class DeterministicScheduler {
   }
 
   /**
-   * For a review task, picks a healthy agent other than the implementer(s) of
-   * its prerequisite tasks so code is reviewed by an independent provider
-   * (e.g. Claude or Antigravity reviewing Codex's work) rather than self-reviewed.
+   * For a review task, picks a healthy, actually-detected agent other than the
+   * implementer(s) of its prerequisite tasks so code is reviewed by an
+   * independent provider (e.g. Claude or Antigravity reviewing Codex's work)
+   * rather than self-reviewed. Never overrides simulated `--fake` runs.
    */
-  private independentReviewerAgentId(task: Task, excludedAgentIds: Set<string>): string | undefined {
+  private async independentReviewerAgentId(
+    task: Task,
+    excludedAgentIds: Set<string>,
+  ): Promise<string | undefined> {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
     const quotaTracker = AgentQuotaTracker.getInstance();
     const allowedWriters = allowedWritersForTask(task, this.ctx.config);
-    return this.ctx.agentRegistry
-      .list()
-      .find(
-        (agent) =>
-          !excludedAgentIds.has(agent.id) &&
-          !failed.has(agent.id) &&
-          quotaTracker.isAvailable(agent.id) &&
-          (allowedWriters === undefined || allowedWriters.has(agent.id)) &&
-          this.concurrency.canSchedule(agent.id),
-      )?.id;
+    for (const agent of this.ctx.agentRegistry.list()) {
+      if (
+        agent.id === 'fake' ||
+        excludedAgentIds.has(agent.id) ||
+        failed.has(agent.id) ||
+        !quotaTracker.isAvailable(agent.id) ||
+        (allowedWriters !== undefined && !allowedWriters.has(agent.id)) ||
+        !this.concurrency.canSchedule(agent.id)
+      ) {
+        continue;
+      }
+      if (await agent.detect().catch(() => false)) {
+        return agent.id;
+      }
+    }
+    return undefined;
   }
 
   private objectiveWithDependencyEvidence(task: Task): string {
@@ -1238,14 +1248,19 @@ export class DeterministicScheduler {
         let preferredForSlot = agentId;
         const isReviewTask =
           task.type === 'review' || task.contract.completionMode === 'review';
-        if (isReviewTask && !hasExplicitUserPin && task.dependencies.length > 0) {
+        if (
+          isReviewTask &&
+          !hasExplicitUserPin &&
+          preferredForSlot !== 'fake' &&
+          task.dependencies.length > 0
+        ) {
           const authorAgents = new Set<string>();
           for (const depId of task.dependencies) {
             const recorded = this.taskAssignedAgent.get(depId);
             if (recorded) authorAgents.add(recorded);
           }
           if (authorAgents.has(preferredForSlot)) {
-            const independent = this.independentReviewerAgentId(task, authorAgents);
+            const independent = await this.independentReviewerAgentId(task, authorAgents);
             if (independent) {
               this.ctx.onProgress?.(
                 `[${task.id}] Using independent reviewer ${independent} (instead of author ${preferredForSlot}) for cross-agent review.`,

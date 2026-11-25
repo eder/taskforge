@@ -143,7 +143,8 @@ export function buildHeadlessPlannerAndRouter(
 } {
   if (options.fake) return {};
   const agentRegistry = new AgentRegistry(true, config.agents);
-  const openaiApiKey = resolveOpenAIApiKey(config);
+  const openaiApiKey =
+    config.router.provider === 'static' ? undefined : resolveOpenAIApiKey(config);
   const openaiBaseUrl = resolveOpenAIBaseUrl(config);
   const routerModel = resolveRouterModel(config);
   const planner = new SemanticPlanner({
