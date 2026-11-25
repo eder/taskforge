@@ -166,9 +166,10 @@ describe('WorktreeManager dependency links', () => {
     ]);
     const wt = await manager.createWorktree('TASK-01', 'ASGN-1', head);
 
-    expect(fs.lstatSync(path.join(wt.path, 'node_modules')).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(path.join(wt.path, 'node_modules')).isDirectory()).toBe(true);
+    expect(fs.lstatSync(path.join(wt.path, 'node_modules/dep')).isSymbolicLink()).toBe(true);
     expect(fs.existsSync(path.join(wt.path, 'node_modules/dep/index.js'))).toBe(true);
-    expect(fs.lstatSync(path.join(wt.path, 'packages/a/node_modules')).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(path.join(wt.path, 'packages/a/node_modules')).isDirectory()).toBe(true);
 
     // An agent making a change and the scheduler committing with `git add -A`:
     fs.writeFileSync(path.join(wt.path, 'feature.js'), 'f\n');
