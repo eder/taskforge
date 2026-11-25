@@ -7,6 +7,8 @@ function task(
   type: Task['type'],
   dependencies: string[],
   mode: 'report' | 'mutation',
+  forbiddenChanges = mode === 'mutation' ? [] : ['*'],
+  architectureBoundaryDecision = false,
 ): Task {
   return {
     id,
@@ -19,10 +21,11 @@ function task(
     contract: {
       objective: 'Persisted state, events and the api layer boundary',
       allowedScope: mode === 'mutation' ? ['src/**'] : [],
-      forbiddenChanges: mode === 'mutation' ? [] : ['*'],
+      forbiddenChanges,
       acceptanceCriteria: ['done'],
       dependencies,
       completionMode: mode,
+      metadata: architectureBoundaryDecision ? { architectureBoundaryDecision: true } : undefined,
     },
     acceptanceCriteria: ['done'],
     reworkCount: 0,
@@ -55,5 +58,30 @@ describe('enforceArchitectureBoundaryDecision', () => {
       task('OTHER', 'implementation', [], 'mutation'),
     ]);
     expect(enforceArchitectureBoundaryDecision(graph).changed).toBe(true);
+  });
+
+  it('adds a read-only decision without a cycle when a marked mutable report is already a dependency', () => {
+    const graph = new TaskGraph([
+      task('LATE-DESIGN', 'architecture', [], 'report', [], true),
+      task('IMPL', 'implementation', ['LATE-DESIGN'], 'mutation'),
+    ]);
+
+    const result = enforceArchitectureBoundaryDecision(graph);
+
+    expect(result.changed).toBe(true);
+    expect(result.architectureTaskId).toBeDefined();
+    expect(graph.getTask('LATE-DESIGN')?.dependencies).toContain(result.architectureTaskId);
+    expect(graph.getTask('IMPL')?.dependencies).toContain(result.architectureTaskId);
+    expect(() => graph.validate()).not.toThrow();
+  });
+
+  it('treats an architecture report as read-only only when all changes are forbidden', () => {
+    const graph = new TaskGraph([
+      task('DESIGN', 'architecture', [], 'report', ['*'], true),
+      task('IMPL', 'implementation', ['DESIGN'], 'mutation'),
+    ]);
+
+    expect(enforceArchitectureBoundaryDecision(graph).changed).toBe(false);
+    expect(graph.getAllTasks()).toHaveLength(2);
   });
 });

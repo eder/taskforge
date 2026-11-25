@@ -151,8 +151,18 @@ const ARCHITECTURE_BOUNDARY_SIGNALS =
 
 function taskRequiresMutation(task: Task): boolean {
   if (task.contract.completionMode === 'mutation') return true;
-  if (task.contract.forbiddenChanges?.includes('*')) return false;
-  return task.type === 'implementation' || task.type === 'refactoring';
+  if (
+    task.type === 'architecture' &&
+    task.contract.completionMode === 'report' &&
+    task.contract.forbiddenChanges?.includes('*')
+  ) {
+    return false;
+  }
+  return (
+    task.type === 'implementation' ||
+    task.type === 'refactoring' ||
+    task.type === 'architecture'
+  );
 }
 
 /**
@@ -175,7 +185,8 @@ export function enforceArchitectureBoundaryDecision(
     tasks.some(
       (task) =>
         task.type === 'architecture' &&
-        task.contract.metadata?.architectureBoundaryDecision === true,
+        task.contract.metadata?.architectureBoundaryDecision === true &&
+        !taskRequiresMutation(task),
     )
   ) {
     return { changed: false };
