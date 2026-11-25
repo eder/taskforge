@@ -33,6 +33,8 @@ export interface ControlPlaneShellContext {
   hasDirtyWorkingTree: boolean;
   hasUndoCheckpoint: boolean;
   currentBranch: string;
+  /** True when the immediately preceding turn was a read-only Direct Mode analysis/audit. */
+  hasRecentDirectAnalysis?: boolean;
 }
 
 export type StructuredClassifierCaller = (
@@ -134,6 +136,9 @@ const DIRECT_GIT_CONFIRM_SCHEMA: Record<string, unknown> = {
 const CONTROL_PLANE_INTENT_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
+    asksForCodeChanges: {
+      type: 'boolean',
+    },
     intent: {
       type: 'string',
       enum: [
@@ -159,7 +164,7 @@ const CONTROL_PLANE_INTENT_SCHEMA: Record<string, unknown> = {
       enum: ['high', 'medium', 'low'],
     },
   },
-  required: ['intent', 'language', 'confidence'],
+  required: ['asksForCodeChanges', 'intent', 'language', 'confidence'],
   additionalProperties: false,
 };
 
@@ -328,10 +333,14 @@ export class ConversationalIntentClassifier {
 
     const systemPrompt = [
       'You classify a user message (in ANY language) in a multi-agent coding CLI (TaskForge).',
-      'Decide whether the user is issuing a pure Git/control-plane action OR a software engineering request (coding, bug fix, refactoring, docs, code explanation, analysis).',
-      'Return ONLY valid JSON matching the schema:',
-      '- "open_pr": ONLY asks to publish/push existing work and open a Pull Request (no new code edits requested).',
-      '- "commit_changes": ONLY asks to commit existing changes (no new code edits requested).',
+      'STEP 1 — Decide "asksForCodeChanges":',
+      '  true if the user asks to make, implement, apply, fix, refactor, create, add, update, or execute ANY code/docs/config/test changes or improvements (for example, implementing improvements found in a previous analysis, EVEN IF the message also mentions PRs, pull requests, or commits).',
+      '  false ONLY when the user is NOT asking for any new code edits — only asking to publish/commit/diff/undo existing already-made changes or inspect status.',
+      'STEP 2 — Choose "intent":',
+      '  If asksForCodeChanges is true, intent MUST be "engineering_task".',
+      '  Otherwise choose from:',
+      '- "open_pr": ONLY asks to publish/push ALREADY-EXISTING work and open a Pull Request (zero new edits requested).',
+      '- "commit_changes": ONLY asks to commit ALREADY-EXISTING changes (zero new edits requested).',
       '- "apply_run": ONLY asks to apply/merge a ready completed run onto the current branch.',
       '- "show_diff": asks to view the current git diff or see what files changed.',
       '- "discard_run": asks to discard a ready completed run.',
@@ -340,8 +349,15 @@ export class ConversationalIntentClassifier {
       '- "inspect_agents": asks which coding agents are available/ready/online.',
       '- "inspect_tasks": asks to see current/running tasks.',
       '- "inspect_health": asks about system/router/agent health status.',
-      '- "engineering_task": ANY request that asks to write/edit/fix/refactor/test/review/explain/analyze code, OR combines coding + PR/commit in one request.',
-      'CRITICAL: If the user asks to both change code AND open a PR (e.g. "fix the bug and open a PR"), return "engineering_task". When in doubt, return "engineering_task".',
+      '- "engineering_task": ANY request that asks to write/edit/fix/refactor/test/review/explain/analyze code, OR asks to implement changes in separate PRs.',
+      'Examples:',
+      '- "Faça todas as alterações necessárias que vc encontrou mas em Pull requests separados" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"pt","confidence":"high"}',
+      '- "Make all the improvements you found in separate PRs" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"en","confidence":"high"}',
+      '- "Fix the bug in auth.ts and open a PR" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"en","confidence":"high"}',
+      '- "Sobe isso pro GitHub num PR" -> {"asksForCodeChanges":false,"intent":"open_pr","language":"pt","confidence":"high"}',
+      '- "Open a PR for these changes" -> {"asksForCodeChanges":false,"intent":"open_pr","language":"en","confidence":"high"}',
+      '- "Which agents are online?" -> {"asksForCodeChanges":false,"intent":"inspect_agents","language":"en","confidence":"high"}',
+      'When in doubt, return asksForCodeChanges: true and intent: "engineering_task".',
       'Set "language" to "pt" if the message is in Portuguese, otherwise "en".',
     ].join('\n');
 
@@ -354,8 +370,19 @@ export class ConversationalIntentClassifier {
       CONTROL_PLANE_INTENT_SCHEMA,
     );
     if (!raw || typeof raw !== 'object') return undefined;
-    const obj = raw as { intent?: unknown; language?: unknown; confidence?: unknown };
+    const obj = raw as {
+      asksForCodeChanges?: unknown;
+      intent?: unknown;
+      language?: unknown;
+      confidence?: unknown;
+    };
     if (obj.confidence === 'low') return undefined;
+    if (obj.asksForCodeChanges === true) {
+      return {
+        intent: 'engineering_task',
+        language: obj.language === 'pt' ? 'pt' : 'en',
+      };
+    }
     if (
       typeof obj.intent === 'string' &&
       VALID_CONTROL_PLANE_INTENTS.has(obj.intent as ControlPlaneIntentKind)

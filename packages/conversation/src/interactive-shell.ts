@@ -876,6 +876,30 @@ export class InteractiveShell {
   }
 
   /**
+   * Resolves the latest `ready_to_apply` run that still has unmerged commits
+   * ahead of its target branch. Runs whose integration branch was already merged
+   * on GitHub outside TaskForge (0 commits ahead) are ignored so natural-language
+   * prompts never accidentally attempt to open an empty PR for an old merged run.
+   */
+  private async resolveUnmergedDeliveryRunId(): Promise<string | undefined> {
+    const latest = this.deliveryService.findLatestReady();
+    if (!latest) return undefined;
+    try {
+      const countRaw = await this.gitService.exec(
+        ['rev-list', '--count', `${latest.delivery.targetBranch}..${latest.delivery.branch}`],
+        this.repoRoot,
+      );
+      const ahead = Number.parseInt(countRaw.trim(), 10);
+      if (Number.isFinite(ahead) && ahead <= 0) {
+        return undefined;
+      }
+      return latest.runId;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Summary-first diff view (Part 20): total files/insertions/deletions up
    * top, then a per-file M/A/D list. Never dumps a full unified diff
    * automatically -- that stays an explicit, separate escape hatch.
@@ -1581,17 +1605,34 @@ export class InteractiveShell {
       this.interactionGateway.getPendingRequests().length === 0 &&
       intent.type === 'submit_goal'
     ) {
-      const readyRunId = this.resolveDeliveryRunId();
+      const readyRunId = await this.resolveUnmergedDeliveryRunId();
       const gitStatus = await this.gitService.getStatus(this.repoRoot).catch(() => undefined);
+      const hasDirtyWorkingTree = Boolean(gitStatus && !gitStatus.isClean);
+      const recentEntries = this.directMemory.getEntries();
+      const latestEntry = recentEntries[recentEntries.length - 1];
+      const hasRecentDirectAnalysis = Boolean(
+        latestEntry && latestEntry.kind === 'agent' && latestEntry.response.trim().length >= 80,
+      );
       const aiControl = await this.intentClassifier.classifyControlPlaneIntent(text, {
         hasReadyRun: Boolean(readyRunId),
-        hasDirtyWorkingTree: Boolean(gitStatus && !gitStatus.isClean),
+        hasDirtyWorkingTree,
         hasUndoCheckpoint: Boolean(this.checkpointManager.getLatest()),
         currentBranch: gitStatus?.currentBranch ?? 'main',
+        hasRecentDirectAnalysis,
       });
       if (aiControl && aiControl.intent !== 'engineering_task') {
         switch (aiControl.intent) {
           case 'open_pr': {
+            // Only intercept as a standalone PR creation when there is actually
+            // unmerged work (dirty working tree, non-default branch, or unmerged ready run).
+            const onFeatureBranch =
+              Boolean(gitStatus?.currentBranch) &&
+              gitStatus?.currentBranch !== 'main' &&
+              gitStatus?.currentBranch !== 'master' &&
+              gitStatus?.currentBranch !== 'HEAD';
+            if (!hasDirtyWorkingTree && !onFeatureBranch && !readyRunId) {
+              break;
+            }
             const handled = await this.handleDirectGitIntent({
               kind: 'pr',
               language: aiControl.language,
@@ -4739,7 +4780,7 @@ export class InteractiveShell {
 
     if (gitIntent.kind === 'diff') {
       const diffRes = await formatWorkingTreeDiff(this.repoRoot, this.gitService, gitIntent.language);
-      if (!diffRes.hasChanges && this.resolveDeliveryRunId()) {
+      if (!diffRes.hasChanges && (await this.resolveUnmergedDeliveryRunId())) {
         return undefined; // Let orchestrated `/diff` inspect the completed run instead.
       }
       return diffRes.formatted;
@@ -4758,7 +4799,7 @@ export class InteractiveShell {
         gitIntent.language,
       );
       if (!prep.pending) {
-        const readyRunId = this.resolveDeliveryRunId();
+        const readyRunId = await this.resolveUnmergedDeliveryRunId();
         if (readyRunId) {
           return this.handleInput(`/apply ${readyRunId}`);
         }
@@ -4776,7 +4817,7 @@ export class InteractiveShell {
         gitIntent.language,
       );
       if (!prep.pending) {
-        const readyRunId = this.resolveDeliveryRunId();
+        const readyRunId = await this.resolveUnmergedDeliveryRunId();
         if (readyRunId) {
           return this.handleInput(`/pr ${readyRunId}`);
         }

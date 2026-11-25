@@ -241,6 +241,31 @@ describe('ConversationalIntentClassifier (Ollama -> OpenAI -> Fast-Path Fallback
     );
     expect(multiLine).toBeUndefined();
     expect(calls).toBe(callsBefore);
+
+    // Even if a small model outputs intent='open_pr', asksForCodeChanges=true forces engineering_task.
+    const guardedClassifier = new ConversationalIntentClassifier({
+      config: getDefaultConfig(),
+      agentRegistry: new AgentRegistry(false),
+      repoRoot: process.cwd(),
+      customCaller: async () => ({
+        asksForCodeChanges: true,
+        intent: 'open_pr',
+        language: 'pt',
+        confidence: 'high',
+      }),
+    });
+    expect(
+      await guardedClassifier.classifyControlPlaneIntent(
+        'Faça todas as alterações necessárias que vc encontrou mas em Pull requests separados',
+        {
+          hasReadyRun: false,
+          hasDirtyWorkingTree: false,
+          hasUndoCheckpoint: false,
+          currentBranch: 'main',
+          hasRecentDirectAnalysis: true,
+        },
+      ),
+    ).toEqual({ intent: 'engineering_task', language: 'pt' });
   });
 
   it('integrates end-to-end with InteractiveShell for multilingual delivery, git confirm, and control-plane commands', async () => {
