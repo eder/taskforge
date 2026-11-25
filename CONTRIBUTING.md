@@ -65,12 +65,12 @@ Use the issue templates for bugs and feature requests. For vulnerabilities, foll
 All packages share one version.
 
 ```bash
-node scripts/set-version.mjs 0.2.0     # or: pnpm version:set 0.2.0
+node scripts/set-version.mjs 1.0.0     # or: pnpm version:set 1.0.0
 # update CHANGELOG.md (move "Unreleased" under the new version)
 pnpm release:verify                     # versions, license, files, workspace deps
-git commit -am "chore(release): v0.2.0"
+git commit -am "chore(release): v1.0.0"
 # merge to main, then:
-git tag v0.2.0 && git push origin v0.2.0
+git tag v1.0.0 && git push origin v1.0.0
 ```
 
 Pushing the tag runs `.github/workflows/release.yml`: it verifies the tag matches the package version, runs build, typecheck, lint and tests, packs every package, publishes to npm with provenance, and creates the GitHub Release. Running the workflow manually performs a dry run only.
