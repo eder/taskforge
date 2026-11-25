@@ -102,7 +102,7 @@ function isWildcardScope(scope: string): boolean {
   return normalized === '' || normalized === '*' || normalized === '**' || normalized === '.';
 }
 
-function globToRegExp(glob: string): RegExp {
+function globToRegExp(glob: string, caseInsensitive = false): RegExp {
   let out = '';
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -120,20 +120,30 @@ function globToRegExp(glob: string): RegExp {
       out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
-  return new RegExp(`^${out}$`);
+  return new RegExp(`^${out}$`, caseInsensitive ? 'i' : '');
 }
 
+const DEFAULT_CASE_INSENSITIVE_FS =
+  process.platform === 'darwin' || process.platform === 'win32';
+
 /** Whether a repository-relative file path falls inside any of the allowed scopes. */
-export function scopeAllowsPath(scopes: string[], filePath: string): boolean {
-  const file = normalizeScope(filePath);
+export function scopeAllowsPath(
+  scopes: string[],
+  filePath: string,
+  options?: { caseInsensitive?: boolean },
+): boolean {
+  const caseInsensitive = options?.caseInsensitive ?? DEFAULT_CASE_INSENSITIVE_FS;
+  const rawFile = normalizeScope(filePath);
+  const file = caseInsensitive ? rawFile.toLowerCase() : rawFile;
   return scopes.some((raw) => {
     if (isWildcardScope(raw)) return true;
-    const scope = normalizeScope(raw);
+    const rawScope = normalizeScope(raw);
+    const scope = caseInsensitive ? rawScope.toLowerCase() : rawScope;
     if (scope.endsWith('/**')) {
       const prefix = scope.slice(0, -3);
       return file === prefix || file.startsWith(`${prefix}/`);
     }
-    if (/[*?]/.test(scope)) return globToRegExp(scope).test(file);
+    if (/[*?]/.test(rawScope)) return globToRegExp(rawScope, caseInsensitive).test(rawFile);
     return file === scope || file.startsWith(`${scope}/`);
   });
 }
@@ -142,7 +152,11 @@ export function scopeAllowsPath(scopes: string[], filePath: string): boolean {
  * Files changed by a task that fall outside its declared writable scope.
  * An empty or repository-wide scope constrains nothing.
  */
-export function filesOutsideScope(scopes: string[] | undefined, changedFiles: string[]): string[] {
+export function filesOutsideScope(
+  scopes: string[] | undefined,
+  changedFiles: string[],
+  options?: { caseInsensitive?: boolean },
+): string[] {
   if (!scopes || scopes.length === 0 || scopes.some(isWildcardScope)) return [];
-  return changedFiles.filter((file) => !scopeAllowsPath(scopes, file));
+  return changedFiles.filter((file) => !scopeAllowsPath(scopes, file, options));
 }

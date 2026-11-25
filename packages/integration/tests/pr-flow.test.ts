@@ -116,4 +116,46 @@ describe('pull request flow', () => {
     expect(summary).toContain('❌ `npm run lint`');
     db.close();
   });
+
+  it('derives meaningful PR titles from mutating tasks and supports editPullRequest via gh', async () => {
+    const { db, service: gh } = service();
+    const taskRepo = new TaskRepository(db);
+    taskRepo.create({
+      id: 'TASK-01',
+      runId: 'run-pr',
+      title: 'Update Security Workflow',
+      description: 'Add schedule',
+      type: 'implementation',
+      status: 'integrated',
+    });
+    taskRepo.create({
+      id: 'TASK-02',
+      runId: 'run-pr',
+      title: 'Update Release Docs',
+      description: 'Align to 1.0.0',
+      type: 'implementation',
+      status: 'integrated',
+    });
+    taskRepo.create({
+      id: 'TASK-03',
+      runId: 'run-pr',
+      title: 'Final Review',
+      description: 'Review',
+      type: 'review',
+      status: 'integrated',
+    });
+
+    expect(gh.suggestPullRequestTitle('run-pr')).toBe('Update Security Workflow and Update Release Docs');
+
+    const editRes = await gh.editPullRequest({
+      prNumber: 7,
+      title: 'ci,docs: schedule security workflow',
+      body: '## Summary\n\nClean English body.',
+      repoRoot: repo,
+    });
+    expect(editRes.success).toBe(true);
+    const args = fs.readFileSync(path.join(tmp, 'gh-args.txt'), 'utf8');
+    expect(args).toContain('pr edit 7 --title ci,docs: schedule security workflow');
+    db.close();
+  });
 });
