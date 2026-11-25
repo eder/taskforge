@@ -184,6 +184,10 @@ import {
   type RequestedDeliveryIntent,
 } from './smart-delivery.js';
 import {
+  ConversationalIntentClassifier,
+  type StructuredClassifierCaller,
+} from './conversational-intent-classifier.js';
+import {
   loadLivingPlan,
   saveLivingPlan,
   deleteLivingPlan,
@@ -279,6 +283,8 @@ export interface ShellOptions {
   livingPlanGenerator?: LivingPlanGeneratorFn;
   /** Optional custom synthesizer for Wave D Solution Debate Council verdicts. */
   councilSynthesizer?: CouncilSynthesizerFn;
+  /** Optional custom AI classifier caller for language-agnostic conversational intent routing. */
+  intentClassifierCaller?: StructuredClassifierCaller;
 }
 
 /** An agent reading the repository to plan can take a minute or more (measured: 25-60 s with Codex). */
@@ -293,6 +299,7 @@ export class InteractiveShell {
   private usageCalibration: UsageCalibrationEngine;
   private operator: OperatorAgent;
   private agentRegistry: AgentRegistry;
+  private intentClassifier: ConversationalIntentClassifier;
   private gitService: GitService;
   private planner: SemanticPlanner | HeuristicPlanner;
   private focusedAdvisor: FocusedRunAdvisor;
@@ -402,6 +409,12 @@ export class InteractiveShell {
     this.usageCalibration = new UsageCalibrationEngine(this.db);
     this.operator = new OperatorAgent();
     this.agentRegistry = new AgentRegistry(true, this.config.agents);
+    this.intentClassifier = new ConversationalIntentClassifier({
+      config: this.config,
+      agentRegistry: this.agentRegistry,
+      repoRoot: this.repoRoot,
+      customCaller: options.intentClassifierCaller,
+    });
     this.gitService = new GitService(this.repoRoot);
     const openaiApiKey =
       this.config.router.provider === 'static' ? undefined : resolveOpenAIApiKey(this.config);
@@ -1534,12 +1547,114 @@ export class InteractiveShell {
       }
     }
 
-    const intent = this.operator.parseIntent(text, {
+    let intent = this.operator.parseIntent(text, {
       conversationState: this.conversationState,
       hasActivePlan: Boolean(this.currentGraph),
       hasPendingInteractions: this.interactionGateway.getPendingRequests().length > 0,
       hasDeliverable: Boolean(this.activeRunId && this.deliveryService.getDelivery(this.activeRunId)),
     });
+
+    // Language-agnostic AI classification (Ollama local -> OpenAI API -> Tier 1 fast-path fallback):
+    // 1. When a plan is awaiting approval and deterministic parsing fell back to `revise_plan`,
+    //    let AI classify natural-language approve/reject/revise replies in ANY language.
+    if (
+      !text.startsWith('/') &&
+      (this.conversationState === 'AWAITING_PLAN_APPROVAL' || Boolean(this.currentGraph)) &&
+      intent.type === 'revise_plan'
+    ) {
+      const decision = await this.intentClassifier.classifyPlanApproval(text);
+      if (decision === 'approve') {
+        intent = { type: 'approve_plan' };
+      } else if (decision === 'reject') {
+        intent = { type: 'reject_plan', feedback: text };
+      }
+    }
+
+    // 2. When no modal prompt is pending and deterministic parsing saw a generic `submit_goal`,
+    //    let AI detect pure Git/control-plane intents in ANY language (e.g. "ship this to a PR",
+    //    "sobe pro GitHub", "revert what you just did", "which agents are online?").
+    if (
+      this.inRepo &&
+      !text.startsWith('/') &&
+      !this.currentGraph &&
+      !this.focusedRun &&
+      this.interactionGateway.getPendingRequests().length === 0 &&
+      intent.type === 'submit_goal'
+    ) {
+      const readyRunId = this.resolveDeliveryRunId();
+      const gitStatus = await this.gitService.getStatus(this.repoRoot).catch(() => undefined);
+      const aiControl = await this.intentClassifier.classifyControlPlaneIntent(text, {
+        hasReadyRun: Boolean(readyRunId),
+        hasDirtyWorkingTree: Boolean(gitStatus && !gitStatus.isClean),
+        hasUndoCheckpoint: Boolean(this.checkpointManager.getLatest()),
+        currentBranch: gitStatus?.currentBranch ?? 'main',
+      });
+      if (aiControl && aiControl.intent !== 'engineering_task') {
+        switch (aiControl.intent) {
+          case 'open_pr': {
+            const handled = await this.handleDirectGitIntent({
+              kind: 'pr',
+              language: aiControl.language,
+            });
+            if (handled !== undefined) return handled;
+            break;
+          }
+          case 'commit_changes': {
+            const handled = await this.handleDirectGitIntent({
+              kind: 'commit',
+              language: aiControl.language,
+            });
+            if (handled !== undefined) return handled;
+            break;
+          }
+          case 'show_diff': {
+            const handled = await this.handleDirectGitIntent({
+              kind: 'diff',
+              language: aiControl.language,
+            });
+            if (handled !== undefined) return handled;
+            if (readyRunId) return this.handleInput(`/diff ${readyRunId}`);
+            break;
+          }
+          case 'undo': {
+            const handled = await this.handleDirectGitIntent({
+              kind: 'undo',
+              language: aiControl.language,
+            });
+            if (handled !== undefined) return handled;
+            break;
+          }
+          case 'git_status': {
+            const handled = await this.handleDirectGitIntent({
+              kind: 'status',
+              language: aiControl.language,
+            });
+            if (handled !== undefined) return handled;
+            break;
+          }
+          case 'apply_run': {
+            if (readyRunId) return this.handleInput(`/apply ${readyRunId}`);
+            break;
+          }
+          case 'discard_run': {
+            if (readyRunId) return this.handleInput(`/discard ${readyRunId}`);
+            break;
+          }
+          case 'inspect_agents': {
+            intent = { type: 'inspect_agents' };
+            break;
+          }
+          case 'inspect_tasks': {
+            intent = { type: 'inspect_tasks' };
+            break;
+          }
+          case 'inspect_health': {
+            intent = { type: 'inspect_health' };
+            break;
+          }
+        }
+      }
+    }
 
     // The REPL is "in" a stopped run: a plain yes/no answers its proposal, and
     // any open-text message resolves or guides that run unless the planner says
@@ -4810,7 +4925,14 @@ export class InteractiveShell {
       return undefined;
     }
 
-    const reply = parseDeliveryFollowUpReply(text);
+    // Tier 1 fast-path (0ms), then Tier 2 language-agnostic AI classifier (Ollama -> OpenAI)
+    let reply = parseDeliveryFollowUpReply(text);
+    if (!reply) {
+      const aiReply = await this.intentClassifier.classifyDeliveryReply(text, pending);
+      if (aiReply && aiReply !== 'unrelated') {
+        reply = aiReply;
+      }
+    }
     if (!reply) {
       // Unrelated new prompt — clear delivery prompt and let normal flow handle it.
       this.pendingOrchestratedDelivery = undefined;
@@ -4936,6 +5058,20 @@ export class InteractiveShell {
     if (text.startsWith('/') || text.startsWith('@') || text.startsWith('!')) {
       this.pendingDirectGitAction = undefined;
       return undefined;
+    }
+
+    // Tier 2 language-agnostic AI classifier (Ollama -> OpenAI) distinguishes natural
+    // confirmations/cancellations in any language from a custom commit message or PR title.
+    const aiDecision = await this.intentClassifier.classifyDirectGitConfirmation(text, pending);
+    if (aiDecision === 'cancel') {
+      this.pendingDirectGitAction = undefined;
+      return pending.language === 'pt'
+        ? `${colors.dim}Ação git cancelada.${colors.reset}`
+        : `${colors.dim}Git action cancelled.${colors.reset}`;
+    }
+    if (aiDecision === 'confirm') {
+      this.pendingDirectGitAction = undefined;
+      return this.executePendingDirectGitAction(pending);
     }
 
     // Otherwise treat non-command text as a custom commit message or PR title!
