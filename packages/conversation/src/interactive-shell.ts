@@ -403,7 +403,8 @@ export class InteractiveShell {
     this.operator = new OperatorAgent();
     this.agentRegistry = new AgentRegistry(true, this.config.agents);
     this.gitService = new GitService(this.repoRoot);
-    const openaiApiKey = resolveOpenAIApiKey(this.config);
+    const openaiApiKey =
+      this.config.router.provider === 'static' ? undefined : resolveOpenAIApiKey(this.config);
     const openaiBaseUrl = resolveOpenAIBaseUrl(this.config);
     this.planner = new SemanticPlanner({
       apiKey: openaiApiKey,
