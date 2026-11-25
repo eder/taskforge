@@ -133,6 +133,12 @@ verification:
     - scope: apps/cli/**
       commands:
         - pnpm build && pnpm vitest run tests/ && pnpm lint
+    - scope: .github/**
+      commands:
+        - git diff --check
+    - scope: .taskforge/**
+      commands:
+        - git diff --check
 
 # 9. Optional Desktop Notifications (enable locally or in ~/.taskforge/config.yaml)
 notifications:

@@ -129,16 +129,28 @@ export class IntegrationService {
           .split('\n')
           .map((line) => line.trim())
           .filter(Boolean);
+        const documentationOnly = isDocumentationOnlyChange(changedFiles);
+        const configuredCommands =
+          config.verification.commands && config.verification.commands.length > 0
+            ? config.verification.commands
+            : documentationOnly
+              ? undefined
+              : resolveScopedCommandsForFiles(
+                  changedFiles,
+                  config.verification.scopedCommands ?? [],
+                );
         const verResult = await this.verificationRunner.verify({
           taskId: `FINAL-${runId}`,
           runId,
           worktreePath: wt.path,
           config,
-          documentationOnlyChange: isDocumentationOnlyChange(changedFiles),
+          documentationOnlyChange: documentationOnly,
           // What the project says verifies it. Without this only Node scripts are discovered,
           // and a project that configured its own command failed after every task had passed.
-          ...(config.verification.commands && config.verification.commands.length > 0
-            ? { explicitCommands: config.verification.commands }
+          // When `commands` is empty and every non-doc changed file is covered by `scopedCommands`,
+          // run the union of those scoped commands instead of an unrelated full-monorepo suite.
+          ...(configuredCommands && configuredCommands.length > 0
+            ? { explicitCommands: configuredCommands }
             : {}),
         });
         verified = verResult.passed;
@@ -174,4 +186,55 @@ export class IntegrationService {
         .catch(() => {});
     }
   }
+}
+
+function normalizeScopePattern(scope: string): string {
+  const normalized = scope.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  return normalized === '**' ? '*' : normalized;
+}
+
+function scopedRuleMatchesFile(ruleScope: string, filePath: string): boolean {
+  const rule = normalizeScopePattern(ruleScope);
+  const file = normalizeScopePattern(filePath);
+  if (rule === '*') return true;
+  if (rule === file) return true;
+  if (rule.endsWith('/**')) {
+    const prefix = rule.slice(0, -3);
+    return file === prefix || file.startsWith(`${prefix}/`);
+  }
+  return false;
+}
+
+function scopeSpecificity(scope: string): number {
+  return normalizeScopePattern(scope).replace(/[*?]/g, '').length;
+}
+
+/**
+ * Resolves the deduplicated union of `scopedCommands` when every non-doc
+ * changed file matches at least one configured scope rule. Returns `undefined`
+ * if any non-doc file is uncovered so `VerificationRunner` falls back safely
+ * to full project verification.
+ */
+function resolveScopedCommandsForFiles(
+  changedFiles: string[],
+  scopedRules: Array<{ scope: string; commands: string[] }>,
+): string[] | undefined {
+  if (changedFiles.length === 0 || scopedRules.length === 0) return undefined;
+  const nonDocFiles = changedFiles.filter((file) => !isDocumentationOnlyChange([file]));
+  if (nonDocFiles.length === 0) return undefined;
+
+  const commands = new Set<string>();
+  for (const file of nonDocFiles) {
+    const matches = scopedRules
+      .filter((rule) => scopedRuleMatchesFile(rule.scope, file))
+      .sort((a, b) => scopeSpecificity(b.scope) - scopeSpecificity(a.scope));
+    if (matches.length === 0) return undefined;
+    const mostSpecific = scopeSpecificity(matches[0].scope);
+    for (const rule of matches.filter((m) => scopeSpecificity(m.scope) === mostSpecific)) {
+      for (const cmd of rule.commands) {
+        if (cmd.trim()) commands.add(cmd);
+      }
+    }
+  }
+  return commands.size > 0 ? [...commands] : undefined;
 }

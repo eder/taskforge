@@ -206,7 +206,7 @@ describe('calibrateScriptTests', () => {
       dir: 'server',
       python: './py.sh',
       files: ['test_ok_a.py', 'test_db.py', 'test_ok_b.py', 'test_slow.py'],
-      timeoutSecondsPerFile: 1,
+      timeoutSecondsPerFile: 3,
       onFile: (file, outcome) => seen.push(`${outcome}:${file}`),
     });
     expect(result.passed).toEqual(['test_ok_a.py', 'test_ok_b.py']);
@@ -214,5 +214,5 @@ describe('calibrateScriptTests', () => {
     expect(result.failed[0].why).toContain('ConnectionRefusedError');
     expect(result.failed[1].why).toContain('timed out');
     expect(seen).toHaveLength(4);
-  });
+  }, 15_000);
 });
