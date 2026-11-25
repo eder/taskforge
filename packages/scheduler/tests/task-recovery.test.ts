@@ -99,4 +99,12 @@ describe('task recovery policy', () => {
     expect(text).toContain('exit=1');
     expect(text).toContain('1 failing test');
   });
+
+  it('classifies pnpm v12 ERR_PNPM_UNSAFE_TASK_RUN_STATE_PATH as an environment failure', () => {
+    const failureClass = classifyVerificationFailure(
+      "Check 'explicit-1' failed with exit code 1",
+      'Error: ERR_PNPM_UNSAFE_TASK_RUN_STATE_PATH\nRefusing to use task run state directory at /repo/.taskforge/worktrees/T1/node_modules because it is a symbolic link or not a directory',
+    );
+    expect(failureClass).toBe('environment');
+  });
 });
