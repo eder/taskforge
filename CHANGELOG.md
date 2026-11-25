@@ -57,6 +57,7 @@ All workspace packages are released in lockstep under a single version.
   - Added local Ollama solution arbitration in `@a @b --edit` (`judgeCompetitiveCandidates` comparing candidate diffs after deterministic checks pass, with reasoning and optional `mix` suggestions), `@all` consensus synthesis, and `/council` verdicts.
 
 ### Fixed
+- Fixed `pnpm v12` `ERR_PNPM_UNSAFE_TASK_RUN_STATE_PATH` failures inside isolated worktrees by creating `node_modules` as a real directory with per-entry symlinks (excluding `.pnpm-task-run-state*` and `.pnpm-workspace-state*`) in `WorktreeManager`, and classified that error as an `environment` failure in `task-recovery.ts` so recovery never wastes agent tokens on it.
 - Fixed stale token budget percentage assertion in `packages/telemetry/tests/telemetry.test.ts` after cached-token weighting updates.
 - Preserved `/undo` orchestrated fallback messaging and strict `DirectConversationMemory` entry caps when compaction thresholds are small.
 - Guarded natural-language memory capture so sticky direct-agent prompts are not mistakenly intercepted.

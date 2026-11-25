@@ -139,9 +139,15 @@ export class WorktreeManager {
   }
 
   /**
-   * Symlinks gitignored dependency directories from the main checkout into a
-   * fresh worktree. The links are excluded from git (root-anchored, so the
-   * symlink itself is ignored too) and can never be staged by `git add -A`.
+   * Links gitignored dependency directories from the main checkout into a
+   * fresh worktree.
+   *
+   * For `node_modules`, creates a real directory with per-entry symlinks
+   * (excluding pnpm runtime state entries such as `.pnpm-task-run-state*` and
+   * `.pnpm-workspace-state*`). pnpm v12+ refuses to run tasks when
+   * `node_modules` itself is a symlink (`ERR_PNPM_UNSAFE_TASK_RUN_STATE_PATH`),
+   * and giving each worktree its own real directory also isolates parallel
+   * build state across concurrent worktrees.
    */
   private async linkDependencyDirs(worktreePath: string): Promise<void> {
     const links = this.expandLinkPaths();
@@ -153,8 +159,26 @@ export class WorktreeManager {
       try {
         const src = path.join(this.repoRoot, rel);
         fs.mkdirSync(path.dirname(target), { recursive: true });
-        const symlinkType = fs.statSync(src).isDirectory() ? 'dir' : 'file';
-        fs.symlinkSync(src, target, symlinkType);
+        const isDir = fs.statSync(src).isDirectory();
+        if (isDir && path.basename(rel) === 'node_modules') {
+          fs.mkdirSync(target, { recursive: true });
+          const entries = fs.readdirSync(src, { withFileTypes: true });
+          for (const entry of entries) {
+            if (
+              entry.name.startsWith('.pnpm-task-run-state') ||
+              entry.name.startsWith('.pnpm-workspace-state')
+            ) {
+              continue;
+            }
+            const entrySrc = path.join(src, entry.name);
+            const entryTarget = path.join(target, entry.name);
+            if (fs.existsSync(entryTarget)) continue;
+            const entryType = entry.isDirectory() ? 'dir' : 'file';
+            fs.symlinkSync(entrySrc, entryTarget, entryType);
+          }
+        } else {
+          fs.symlinkSync(src, target, isDir ? 'dir' : 'file');
+        }
         await git.ensureLocalExclude(`/${rel.replace(/\\/g, '/')}`);
       } catch {
         // best effort: a missing link only means verification may need its own setup
