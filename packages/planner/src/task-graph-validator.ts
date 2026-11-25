@@ -459,6 +459,41 @@ export class TaskGraphValidator {
       };
     });
 
+    // Normalize pre-implementation "review" tasks: when a plan contains writable
+    // work (implementation/refactoring/test-authoring), any `review` task that
+    // does NOT transitively depend on a mutating task cannot be reviewing an
+    // implementation produced by this plan (smaller planner models frequently
+    // label upfront "Analyze existing code" / "Design" tasks as `review`, which
+    // would otherwise cause CompletionGate to treat analysis findings as an
+    // implementation rejection). Pure read-only review plans are left untouched.
+    const hasMutatingTask = tasks.some((t) => t.contract.completionMode === 'mutation');
+    if (hasMutatingTask) {
+      const taskById = new Map(tasks.map((t) => [t.id, t]));
+      const dependsOnMutation = (taskId: string, seen = new Set<string>()): boolean => {
+        if (seen.has(taskId)) return false;
+        seen.add(taskId);
+        const current = taskById.get(taskId);
+        if (!current) return false;
+        for (const depId of current.dependencies) {
+          const dep = taskById.get(depId);
+          if (!dep) continue;
+          if (dep.contract.completionMode === 'mutation') return true;
+          if (dependsOnMutation(depId, seen)) return true;
+        }
+        return false;
+      };
+
+      for (const t of tasks) {
+        if (
+          (t.type === 'review' || t.contract.completionMode === 'review') &&
+          !dependsOnMutation(t.id)
+        ) {
+          t.type = 'investigation';
+          t.contract.completionMode = 'report';
+        }
+      }
+    }
+
     const graph = new TaskGraph(tasks);
     return {
       valid: true,

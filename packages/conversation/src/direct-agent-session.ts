@@ -809,11 +809,13 @@ export class DirectAgentRunner {
         ? `${colors.green}✔${colors.reset}`
         : `${colors.red}✖${colors.reset}`;
       const header = `${statusBadge} ${colors.brand}${colors.bold}${outcome.agentName}${colors.reset} ${colors.dim}(${outcome.agentId} · ${secs}${tokensNote}${sessionNote})${colors.reset}`;
+      const streamedTrimmed = (streamedTextByAgent.get(outcome.agentId) ?? '').trim();
+      const responseTrimmed = outcome.response.trim();
       const alreadyStreamed =
         !isMultiAgent &&
         outcome.success &&
-        (streamedTextByAgent.get(outcome.agentId)?.trim() ?? '') === outcome.response.trim() &&
-        outcome.response.trim().length > 0;
+        responseTrimmed.length > 0 &&
+        (streamedTrimmed === responseTrimmed || streamedTrimmed.endsWith(responseTrimmed));
       const body = outcome.success
         ? alreadyStreamed
           ? ''
@@ -1807,10 +1809,12 @@ export class DirectAgentRunner {
 
       const secs = `${(outcome.durationMs / 1000).toFixed(1)}s`;
       const badge = outcome.success ? `${colors.green}✔${colors.reset}` : `${colors.red}✖${colors.reset}`;
+      const streamedTrimmed = lastSeen.streamed.trim();
+      const responseTrimmed = outcome.response.trim();
       const alreadyStreamed =
         outcome.success &&
-        lastSeen.streamed.trim() === outcome.response.trim() &&
-        outcome.response.trim().length > 0;
+        responseTrimmed.length > 0 &&
+        (streamedTrimmed === responseTrimmed || streamedTrimmed.endsWith(responseTrimmed));
       const body = outcome.success
         ? alreadyStreamed
           ? ''

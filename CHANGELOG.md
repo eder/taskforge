@@ -57,6 +57,10 @@ All workspace packages are released in lockstep under a single version.
   - Added local Ollama solution arbitration in `@a @b --edit` (`judgeCompetitiveCandidates` comparing candidate diffs after deterministic checks pass, with reasoning and optional `mix` suggestions), `@all` consensus synthesis, and `/council` verdicts.
 
 ### Fixed
+- Fixed three real-world dogfooding issues:
+  - Carried over the latest substantive Direct Mode agent report (as `REFERENCE DATA`) into `SemanticPlanner` when the user follows up with an orchestrated implementation request (e.g. `"Então siga fazendo tudo que é necessário"`, `"implement items 1-4"`).
+  - Normalized pre-implementation `review` tasks that have no mutating prerequisites to `investigation` (`report`) in `TaskGraphValidator`, preventing `CompletionGate` from rejecting upfront analysis tasks when smaller planner models mislabel them as `review`.
+  - Fixed Direct Mode streaming deduplication (`alreadyStreamed`) so responses preceded by a live progress preamble are no longer printed twice.
 - Fixed stale token budget percentage assertion in `packages/telemetry/tests/telemetry.test.ts` after cached-token weighting updates.
 - Preserved `/undo` orchestrated fallback messaging and strict `DirectConversationMemory` entry caps when compaction thresholds are small.
 - Guarded natural-language memory capture so sticky direct-agent prompts are not mistakenly intercepted.
