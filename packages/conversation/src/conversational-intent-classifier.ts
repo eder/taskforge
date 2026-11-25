@@ -17,6 +17,7 @@ export type DirectGitConfirmationDecision = 'confirm' | 'cancel' | 'custom_text'
 
 export type ControlPlaneIntentKind =
   | 'open_pr'
+  | 'edit_pr'
   | 'commit_changes'
   | 'apply_run'
   | 'show_diff'
@@ -73,6 +74,7 @@ const VALID_DIRECT_GIT_DECISIONS = new Set<DirectGitConfirmationDecision>([
 
 const VALID_CONTROL_PLANE_INTENTS = new Set<ControlPlaneIntentKind>([
   'open_pr',
+  'edit_pr',
   'commit_changes',
   'apply_run',
   'show_diff',
@@ -143,6 +145,7 @@ const CONTROL_PLANE_INTENT_SCHEMA: Record<string, unknown> = {
       type: 'string',
       enum: [
         'open_pr',
+        'edit_pr',
         'commit_changes',
         'apply_run',
         'show_diff',
@@ -165,6 +168,16 @@ const CONTROL_PLANE_INTENT_SCHEMA: Record<string, unknown> = {
     },
   },
   required: ['asksForCodeChanges', 'intent', 'language', 'confidence'],
+  additionalProperties: false,
+};
+
+const REWRITE_PR_TEXT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    body: { type: 'string' },
+  },
+  required: ['title', 'body'],
   additionalProperties: false,
 };
 
@@ -340,6 +353,7 @@ export class ConversationalIntentClassifier {
       '  If asksForCodeChanges is true, intent MUST be "engineering_task".',
       '  Otherwise choose from:',
       '- "open_pr": ONLY asks to publish/push ALREADY-EXISTING work and open a Pull Request (zero new edits requested).',
+      '- "edit_pr": asks to edit, translate, rename, or update the title/description/body text of an ALREADY OPEN GitHub Pull Request (e.g. "translate the PR text to English", "ajusta o texto do PR para inglês", "update the PR title"). This edits GitHub PR metadata via gh CLI, NOT repository source files.',
       '- "commit_changes": ONLY asks to commit ALREADY-EXISTING changes (zero new edits requested).',
       '- "apply_run": ONLY asks to apply/merge a ready completed run onto the current branch.',
       '- "show_diff": asks to view the current git diff or see what files changed.',
@@ -354,6 +368,8 @@ export class ConversationalIntentClassifier {
       '- "Faça todas as alterações necessárias que vc encontrou mas em Pull requests separados" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"pt","confidence":"high"}',
       '- "Make all the improvements you found in separate PRs" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"en","confidence":"high"}',
       '- "Fix the bug in auth.ts and open a PR" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"en","confidence":"high"}',
+      '- "Eu preciso que vc ajuste o texto do PR para ingles" -> {"asksForCodeChanges":false,"intent":"edit_pr","language":"pt","confidence":"high"}',
+      '- "Translate the PR description and title to English" -> {"asksForCodeChanges":false,"intent":"edit_pr","language":"en","confidence":"high"}',
       '- "Sobe isso pro GitHub num PR" -> {"asksForCodeChanges":false,"intent":"open_pr","language":"pt","confidence":"high"}',
       '- "Open a PR for these changes" -> {"asksForCodeChanges":false,"intent":"open_pr","language":"en","confidence":"high"}',
       '- "Which agents are online?" -> {"asksForCodeChanges":false,"intent":"inspect_agents","language":"en","confidence":"high"}',
@@ -393,6 +409,40 @@ export class ConversationalIntentClassifier {
       };
     }
     return undefined;
+  }
+
+  /**
+   * Rewrites or translates an open GitHub Pull Request's title and Markdown body
+   * according to a user's natural-language instruction (e.g. "translate the PR
+   * text to English", "make the PR description shorter and clearer").
+   */
+  async rewritePullRequestText(
+    pr: { title: string; body: string },
+    instruction: string,
+  ): Promise<{ title: string; body: string } | undefined> {
+    const systemPrompt = [
+      'You rewrite or translate a GitHub Pull Request title and Markdown body according to the user instruction.',
+      'Keep technical facts, file paths, commit/check details, and formatting accurate and clean.',
+      'Remove any raw terminal box-drawing artifacts (like leading "│") if present.',
+      'Keep the title concise (under 90 chars, conventional-commit style when appropriate).',
+      'Return ONLY valid JSON matching the schema {"title": string, "body": string}.',
+    ].join('\n');
+
+    const raw = await this.classify(
+      systemPrompt,
+      JSON.stringify({
+        instruction,
+        currentTitle: pr.title,
+        currentBody: pr.body,
+      }),
+      REWRITE_PR_TEXT_SCHEMA,
+    );
+    if (!raw || typeof raw !== 'object') return undefined;
+    const obj = raw as { title?: unknown; body?: unknown };
+    const title = typeof obj.title === 'string' ? obj.title.trim() : '';
+    const body = typeof obj.body === 'string' ? obj.body.trim() : '';
+    if (!title || !body) return undefined;
+    return { title, body };
   }
 
   private async classify(

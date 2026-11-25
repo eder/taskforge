@@ -1640,6 +1640,37 @@ export class InteractiveShell {
             if (handled !== undefined) return handled;
             break;
           }
+          case 'edit_pr': {
+            const explicitPrMatch = text.match(/#(\d+)\b|\bpr\s+(\d+)\b/i);
+            const prRef = explicitPrMatch?.[1] ?? explicitPrMatch?.[2];
+            const openPr = await this.githubWorkflowService.getLatestOpenPullRequest(
+              prRef,
+              this.repoRoot,
+            );
+            if (!openPr) {
+              return aiControl.language === 'pt'
+                ? `${colors.yellow}⚠${colors.reset} Nenhum Pull Request aberto encontrado para editar via \`gh\`.`
+                : `${colors.yellow}⚠${colors.reset} No open Pull Request found to edit via \`gh\`.`;
+            }
+            const rewritten = await this.intentClassifier.rewritePullRequestText(openPr, text);
+            if (!rewritten) {
+              return aiControl.language === 'pt'
+                ? `${colors.yellow}⚠${colors.reset} Não consegui reescrever o texto do PR #${openPr.number} automaticamente.`
+                : `${colors.yellow}⚠${colors.reset} Could not rewrite PR #${openPr.number} text automatically.`;
+            }
+            const editRes = await this.githubWorkflowService.editPullRequest({
+              prNumber: openPr.number,
+              title: rewritten.title,
+              body: rewritten.body,
+              repoRoot: this.repoRoot,
+            });
+            if (!editRes.success) {
+              return `${colors.red}✖${colors.reset} ${editRes.message}`;
+            }
+            return aiControl.language === 'pt'
+              ? `${colors.green}✔${colors.reset} PR #${openPr.number} atualizado: ${colors.bold}${rewritten.title}${colors.reset}\n  ${colors.cyan}${editRes.prUrl ?? openPr.url}${colors.reset}`
+              : `${colors.green}✔${colors.reset} Updated PR #${openPr.number}: ${colors.bold}${rewritten.title}${colors.reset}\n  ${colors.cyan}${editRes.prUrl ?? openPr.url}${colors.reset}`;
+          }
           case 'commit_changes': {
             const handled = await this.handleDirectGitIntent({
               kind: 'commit',

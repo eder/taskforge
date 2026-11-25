@@ -327,4 +327,73 @@ describe('ConversationalIntentClassifier (Ollama -> OpenAI -> Fast-Path Fallback
     const agentsOut = stripAnsi(await shell.handleInput('me diz quais agentes estao de pe agora'));
     expect(agentsOut).toContain('Available agents:');
   });
+
+  it('classifies edit_pr and rewrites open PR title/body via gh without starting a coding run', async () => {
+    const repoRoot = initTempGitRepo();
+    cleanups.push(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const db = new TaskForgeDatabase(':memory:');
+    cleanups.push(() => db.close());
+
+    const editedCalls: Array<{ prNumber?: number | string; title?: string; body?: string }> = [];
+    const shell = new InteractiveShell({
+      repoRoot,
+      database: db,
+      interactive: false,
+      intentClassifierCaller: async (systemPrompt) => {
+        if (systemPrompt.includes('rewrite or translate a GitHub Pull Request')) {
+          return {
+            title: 'ci,docs: schedule security audit and align release docs',
+            body: '## Summary\n\nTranslated PR body in clean English.',
+          };
+        }
+        return {
+          asksForCodeChanges: false,
+          intent: 'edit_pr',
+          language: 'pt',
+          confidence: 'high',
+        };
+      },
+    });
+
+    const ghService = (shell as unknown as {
+      githubWorkflowService: {
+        getLatestOpenPullRequest: () => Promise<{
+          number: number;
+          url: string;
+          title: string;
+          body: string;
+        }>;
+        editPullRequest: (opts: {
+          prNumber?: number | string;
+          title?: string;
+          body?: string;
+        }) => Promise<{ success: boolean; prUrl?: string; message: string }>;
+      };
+    }).githubWorkflowService;
+    ghService.getLatestOpenPullRequest = async () => ({
+      number: 152,
+      url: 'https://github.com/eder/taskforge/pull/152',
+      title: 'taskforge: automated integration for run-1',
+      body: 'Goal: │ Implemente 2 melhorias',
+    });
+    ghService.editPullRequest = async (opts) => {
+      editedCalls.push(opts);
+      return {
+        success: true,
+        prUrl: 'https://github.com/eder/taskforge/pull/152',
+        message: 'Pull request updated: https://github.com/eder/taskforge/pull/152',
+      };
+    };
+
+    const out = stripAnsi(await shell.handleInput('Eu preciso que vc ajuste o texto do PR para ingles'));
+    expect(out).toContain('PR #152 atualizado');
+    expect(out).toContain('ci,docs: schedule security audit and align release docs');
+    expect(editedCalls).toHaveLength(1);
+    expect(editedCalls[0]).toEqual({
+      prNumber: 152,
+      title: 'ci,docs: schedule security audit and align release docs',
+      body: '## Summary\n\nTranslated PR body in clean English.',
+      repoRoot,
+    });
+  });
 });

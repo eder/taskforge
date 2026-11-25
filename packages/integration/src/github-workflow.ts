@@ -37,6 +37,36 @@ export interface PRCreationResult {
   message: string;
 }
 
+export interface EditPROptions {
+  prNumber?: number | string;
+  title?: string;
+  body?: string;
+  repoRoot?: string;
+}
+
+export interface EditPRResult {
+  success: boolean;
+  prUrl?: string;
+  message: string;
+}
+
+export interface OpenPullRequestInfo {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  headRefName?: string;
+}
+
+function sanitizeGoalForMarkdown(rawGoal: string): string {
+  return rawGoal
+    .split('\n')
+    .map((line) => line.replace(/^\s*[│|]+\s?/, '').trimEnd())
+    .filter((line, idx, arr) => line.length > 0 || (idx > 0 && arr[idx - 1].length > 0))
+    .join('\n')
+    .trim();
+}
+
 export interface ImportedIssue {
   number: number;
   title: string;
@@ -75,6 +105,39 @@ export class GitHubWorkflowService {
     }
   }
 
+  suggestPullRequestTitle(runId: string): string {
+    const audit = this.auditService.reconstructRun(runId);
+    if (!audit) return `taskforge: automated integration for ${runId}`;
+
+    const mutatingTitles = audit.tasks
+      .filter(
+        (t) =>
+          t.type !== 'review' &&
+          t.type !== 'investigation' &&
+          t.title.trim().length > 0,
+      )
+      .map((t) => t.title.trim().replace(/\.+$/, ''));
+
+    if (mutatingTitles.length === 1) {
+      return mutatingTitles[0].slice(0, 90);
+    }
+    if (mutatingTitles.length === 2) {
+      const combined = `${mutatingTitles[0]} and ${mutatingTitles[1]}`;
+      return combined.length <= 96 ? combined : `${mutatingTitles[0].slice(0, 72)} (+1 more)`;
+    }
+    if (mutatingTitles.length > 2) {
+      return `${mutatingTitles[0].slice(0, 68)} (+${mutatingTitles.length - 1} more tasks)`;
+    }
+
+    const cleanGoal = sanitizeGoalForMarkdown(audit.goal?.description ?? '')
+      .split('\n')[0]
+      ?.trim();
+    if (cleanGoal && cleanGoal.length >= 4) {
+      return cleanGoal.slice(0, 88);
+    }
+    return `taskforge: automated integration for ${runId}`;
+  }
+
   generatePullRequestSummary(runId: string): string {
     const audit = this.auditService.reconstructRun(runId);
     if (!audit) {
@@ -83,11 +146,12 @@ export class GitHubWorkflowService {
 
     const costReport = this.telemetry.getCostReport(runId);
     const runStats = this.telemetry.getRunSummary(runId);
+    const cleanGoal = sanitizeGoalForMarkdown(audit.goal?.description ?? '') || 'No goal recorded';
 
     const lines: string[] = [
       `## 🚀 TaskForge Automated Run Summary (${runId})`,
       '',
-      `**Goal:** ${audit.goal?.description ?? 'No goal recorded'}`,
+      `**Goal:** ${cleanGoal}`,
       `**Final Status:** \`${audit.run.status.toUpperCase()}\``,
       '',
       '### 📋 Executed & Verified Tasks',
@@ -175,7 +239,7 @@ export class GitHubWorkflowService {
         : integrationBranchName(options.runId));
 
     const summary = this.generatePullRequestSummary(runId);
-    const title = options.title ?? `taskforge: automated integration for ${runId}`;
+    const title = options.title ?? this.suggestPullRequestTitle(runId);
     const targetBranch = options.targetBranch ?? 'main';
 
     const hasGh = await this.isGhInstalled();
@@ -250,6 +314,100 @@ export class GitHubWorkflowService {
         summary,
         commandUsed,
         message: `Error creating Pull Request via GitHub CLI: ${(err as Error).message}`,
+      };
+    }
+  }
+
+  async getLatestOpenPullRequest(
+    prNumberOrUrl?: number | string,
+    repoRoot?: string,
+  ): Promise<OpenPullRequestInfo | undefined> {
+    const cwd = repoRoot ?? this.repoRoot;
+    try {
+      if (prNumberOrUrl !== undefined && String(prNumberOrUrl).trim().length > 0) {
+        const res = await ProcessRunner.run({
+          command: 'gh',
+          args: ['pr', 'view', String(prNumberOrUrl), '--json', 'number,url,title,body,headRefName'],
+          cwd,
+          timeoutMs: 15000,
+          envPolicy: USER_ACTION_ENV_POLICY,
+        });
+        if (res.exitCode === 0 && res.stdout.trim()) {
+          return JSON.parse(res.stdout) as OpenPullRequestInfo;
+        }
+      }
+
+      const listRes = await ProcessRunner.run({
+        command: 'gh',
+        args: [
+          'pr',
+          'list',
+          '--state',
+          'open',
+          '--limit',
+          '1',
+          '--json',
+          'number,url,title,body,headRefName',
+        ],
+        cwd,
+        timeoutMs: 15000,
+        envPolicy: USER_ACTION_ENV_POLICY,
+      });
+      if (listRes.exitCode !== 0 || !listRes.stdout.trim()) return undefined;
+      const items = JSON.parse(listRes.stdout) as OpenPullRequestInfo[];
+      return Array.isArray(items) && items.length > 0 ? items[0] : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async editPullRequest(options: EditPROptions): Promise<EditPRResult> {
+    const hasGh = await this.isGhInstalled();
+    if (!hasGh) {
+      return {
+        success: false,
+        message: 'GitHub CLI (`gh`) not found on system.',
+      };
+    }
+    const cwd = options.repoRoot ?? this.repoRoot;
+    const args = ['pr', 'edit'];
+    if (options.prNumber !== undefined) {
+      args.push(String(options.prNumber));
+    }
+    if (options.title?.trim()) {
+      args.push('--title', options.title.trim());
+    }
+    if (options.body?.trim()) {
+      args.push('--body', options.body.trim());
+    }
+    if (args.length <= (options.prNumber !== undefined ? 3 : 2)) {
+      return { success: false, message: 'No PR title or body provided to update.' };
+    }
+
+    try {
+      const res = await ProcessRunner.run({
+        command: 'gh',
+        args,
+        cwd,
+        timeoutMs: 30000,
+        envPolicy: USER_ACTION_ENV_POLICY,
+      });
+      if (res.exitCode !== 0) {
+        return {
+          success: false,
+          message: `Failed to update PR via gh CLI: ${(res.stderr || res.stdout).trim()}`,
+        };
+      }
+      const prUrl = res.stdout.trim() || undefined;
+      return {
+        success: true,
+        prUrl,
+        message: prUrl ? `Pull request updated: ${prUrl}` : 'Pull request updated successfully.',
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: `Error updating Pull Request via GitHub CLI: ${(err as Error).message}`,
       };
     }
   }

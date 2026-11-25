@@ -107,3 +107,23 @@ describe('commandsForVerificationTask', () => {
     expect(commandsForVerificationTask(task(['src/**']), config)).toEqual([]);
   });
 });
+
+describe('filesOutsideScope case-sensitivity', () => {
+  it('tolerates casing differences on case-insensitive filesystems while staying strict on case-sensitive ones', async () => {
+    const { filesOutsideScope } = await import('../src/task-policy.js');
+    expect(
+      filesOutsideScope(
+        ['.github/PULL_REQUEST_TEMPLATE.md'],
+        ['.github/pull_request_template.md'],
+        { caseInsensitive: true },
+      ),
+    ).toEqual([]);
+    expect(
+      filesOutsideScope(
+        ['.github/PULL_REQUEST_TEMPLATE.md'],
+        ['.github/pull_request_template.md'],
+        { caseInsensitive: false },
+      ),
+    ).toEqual(['.github/pull_request_template.md']);
+  });
+});
