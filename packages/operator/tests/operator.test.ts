@@ -163,5 +163,16 @@ describe('leading "no"/"y" in other languages', () => {
     expect(OperatorIntentParser.parse('no, use a different approach', waiting).type).toBe('reject_plan');
     expect(OperatorIntentParser.parse('yes', {}).type).toBe('approve_plan');
     expect(OperatorIntentParser.parse('no', {}).type).toBe('reject_plan');
+
+    // Portuguese / natural follow-through replies approve only while waiting for an answer.
+    expect(OperatorIntentParser.parse('sim', waiting).type).toBe('approve_plan');
+    expect(OperatorIntentParser.parse('siga', waiting).type).toBe('approve_plan');
+    expect(OperatorIntentParser.parse('pode seguir', waiting).type).toBe('approve_plan');
+    expect(OperatorIntentParser.parse('faz o que tem que fazer', waiting).type).toBe('approve_plan');
+    expect(OperatorIntentParser.parse('vai em frente', waiting).type).toBe('approve_plan');
+
+    const idle = { conversationState: 'IDLE' as const };
+    expect(OperatorIntentParser.parse('faz o que tem que fazer', idle).type).toBe('submit_goal');
+    expect(OperatorIntentParser.parse('siga', idle).type).toBe('submit_goal');
   });
 });

@@ -195,7 +195,11 @@ export function parseDeliveryFollowUpReply(rawText: string): DeliveryFollowUpRep
     )
     .trim();
 
-  if (/^(?:y|yes|s|sim|ok|confirm(?:a|ar)?|pode|vai|manda|go|beleza|fechado|bora|aprovo)$/.test(lower)) {
+  if (
+    /^(?:y|yes|s|sim|ok|confirm(?:a|ar)?|pode(?:\s+(?:ir|seguir|fazer|continuar|prosseguir|executar))?|vai(?:\s+em\s+frente)?|manda(?:\s+(?:ver|bala))?|go(?:\s+ahead)?|proceed|continue|do\s+it|ship\s+it|run\s+it|beleza|fechado|bora|aprovo|siga|segue|prossegue|continua|toca|executa(?:r)?|faz(?:\s+isso|\s+o\s+que\s+tem\s+que\s+fazer)?|fa[çc]a(?:\s+isso|\s+o\s+que\s+tem\s+que\s+fazer)?)$/.test(
+      lower,
+    )
+  ) {
     return 'accept';
   }
   if (

@@ -165,6 +165,13 @@ describe('Conversational Smart Delivery', () => {
     it('parses natural PT & EN replies and ignores unrelated messages', () => {
       expect(parseDeliveryFollowUpReply('sim')).toBe('accept');
       expect(parseDeliveryFollowUpReply('yes')).toBe('accept');
+      expect(parseDeliveryFollowUpReply('siga')).toBe('accept');
+      expect(parseDeliveryFollowUpReply('pode seguir')).toBe('accept');
+      expect(parseDeliveryFollowUpReply('faz o que tem que fazer')).toBe('accept');
+      expect(parseDeliveryFollowUpReply('vai em frente')).toBe('accept');
+      expect(parseDeliveryFollowUpReply('manda ver')).toBe('accept');
+      expect(parseDeliveryFollowUpReply('go ahead')).toBe('accept');
+      expect(parseDeliveryFollowUpReply('do it')).toBe('accept');
       expect(parseDeliveryFollowUpReply('abre pr')).toBe('pr');
       expect(parseDeliveryFollowUpReply('quero abrir um PR')).toBe('pr');
       expect(parseDeliveryFollowUpReply('eu quero abrir uma pr')).toBe('pr');

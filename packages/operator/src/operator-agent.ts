@@ -350,10 +350,17 @@ export class OperatorIntentParser {
       context?.conversationState === 'AWAITING_PLAN_APPROVAL' ||
       Boolean(context?.hasActivePlan) ||
       Boolean(context?.hasPendingInteractions);
+    const strippedAnswer = lower.replace(/[.!?]+$/, '').trim();
+    const ptOrGenericApproval =
+      awaitingAnswer &&
+      /^(?:s|sim|ok|confirm(?:a|ar)?|pode(?:\s+(?:ir|seguir|fazer|continuar|prosseguir|executar))?|vai(?:\s+em\s+frente)?|manda(?:\s+(?:ver|bala))?|beleza|fechado|bora|aprovo|siga|segue|prossegue|continua|toca|executa(?:r)?|faz(?:\s+isso|\s+o\s+que\s+tem\s+que\s+fazer)?|fa[çc]a(?:\s+isso|\s+o\s+que\s+tem\s+que\s+fazer)?|do\s+it|ship\s+it)$/.test(
+        strippedAnswer,
+      );
     if (
       lower === 'yes' ||
       lower === 'y' ||
       (awaitingAnswer && (lower.startsWith('yes ') || lower.startsWith('y '))) ||
+      ptOrGenericApproval ||
       lower.includes('approve plan') ||
       lower.includes('go ahead') ||
       lower.includes('proceed') ||
