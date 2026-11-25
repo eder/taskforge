@@ -55,4 +55,31 @@ describe('the final check of a run uses the commands the project configured', ()
   it('still says what is missing when nothing is configured', async () => {
     await expect(finalize()).rejects.toThrow(/No verification checks were executed/);
   });
+
+  it('uses scopedCommands when every non-doc changed file is covered and global commands is empty', async () => {
+    const service = new IntegrationService(root, git, worktrees, new VerificationRunner());
+    await service.initIntegrationBranch('run-scoped-1', base);
+    await git.exec(['branch', '-f', 'taskforge/run-scoped-1', 'work'], root);
+    const config = getDefaultConfig();
+    config.verification.commands = [];
+    config.verification.scopedCommands = [
+      { scope: 'app.py', commands: ['test -f app.py'] },
+    ];
+    const result = await service.finalizeRun('run-scoped-1', config, base);
+    expect(result.verified).toBe(true);
+  });
+
+  it('falls back to full discovery when a non-doc changed file is not covered by scopedCommands', async () => {
+    const service = new IntegrationService(root, git, worktrees, new VerificationRunner());
+    await service.initIntegrationBranch('run-scoped-2', base);
+    await git.exec(['branch', '-f', 'taskforge/run-scoped-2', 'work'], root);
+    const config = getDefaultConfig();
+    config.verification.commands = [];
+    config.verification.scopedCommands = [
+      { scope: 'other/**', commands: ['test -f app.py'] },
+    ];
+    await expect(service.finalizeRun('run-scoped-2', config, base)).rejects.toThrow(
+      /No verification checks were executed/,
+    );
+  });
 });
