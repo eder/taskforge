@@ -1,6 +1,9 @@
 name: Supply Chain Security
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
   push:
     branches: [main]
   pull_request:
@@ -26,7 +29,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          cache: pnpm
 
       - name: Audit high-severity dependencies
         run: pnpm audit --audit-level=high
