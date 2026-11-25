@@ -109,6 +109,27 @@ verification:
     - scope: packages/shared/**
       commands:
         - pnpm build && pnpm vitest run packages/shared/tests && pnpm lint
+    - scope: packages/core/**
+      commands:
+        - pnpm --filter @taskforge/core build && pnpm vitest run packages/core/tests && pnpm lint
+    - scope: packages/execution/**
+      commands:
+        - pnpm --filter @taskforge/execution build && pnpm vitest run packages/execution/tests && pnpm lint
+    - scope: packages/git-workflow/**
+      commands:
+        - pnpm --filter @taskforge/git-workflow build && pnpm vitest run packages/git-workflow/tests && pnpm lint
+    - scope: packages/negotiation/**
+      commands:
+        - pnpm --filter @taskforge/negotiation build && pnpm vitest run packages/negotiation/tests && pnpm lint
+    - scope: packages/operator/**
+      commands:
+        - pnpm --filter @taskforge/operator build && pnpm vitest run packages/operator/tests && pnpm lint
+    - scope: packages/plugins/**
+      commands:
+        - pnpm --filter @taskforge/plugins build && pnpm vitest run packages/plugins/tests && pnpm lint
+    - scope: packages/telemetry/**
+      commands:
+        - pnpm --filter @taskforge/telemetry build && pnpm vitest run packages/telemetry/tests && pnpm lint
     - scope: apps/cli/**
       commands:
         - pnpm build && pnpm vitest run tests/ && pnpm lint

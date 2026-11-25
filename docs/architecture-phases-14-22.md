@@ -1,12 +1,12 @@
 # TaskForge: Architecture & Verification Guide (Phases 14–22)
 
-**Milestones 3, 4 & 5: Real-Agent E2E, Plugin System, ECC Integration, Telemetry, Performance Engine, Adaptive Routing, TUI Dashboard, GitHub Workflows, and Remote Workers**
+**Milestones 3, 4 & 5: Real-Agent E2E, Plugin System, ECC Integration, Telemetry, Performance Engine, Adaptive Routing, TUI Dashboard, GitHub Workflows, and Experimental Remote Worker Stubs**
 
 ---
 
 ## 1. Overview & Architectural Foundations
 
-Phases 14 through 22 complete the entire TaskForge product engineering specification (`taskforge-complete-product-engineering-spec.md`), elevating TaskForge from an isolated scheduler into a production-grade, local-first multi-agent software engineering system.
+Phases 14 through 22 cover the TaskForge product engineering specification (`taskforge-complete-product-engineering-spec.md`), elevating TaskForge from an isolated scheduler into a local-first multi-agent software engineering system (note that Phase 22 remote worker adapters remain experimental stubs rather than full isolated agent runners).
 
 The core invariants of TaskForge (Section 29.1) remain strictly enforced:
 
@@ -22,8 +22,8 @@ flowchart TD
     Preflight --> Router[AdaptiveRoutingProvider / OpenAIRouter]
     Router --> PerfEngine[PerformanceEngine]
     Router --> Scheduler[DeterministicScheduler]
-    Scheduler --> Adapters[ClaudeCode / Codex / Gemini / Remote Workers]
-    Adapters --> Isolated[Git Worktrees / Docker Containers / SSH]
+    Scheduler --> Adapters[ClaudeCode / Codex / Gemini / Experimental Worker Stubs]
+    Adapters --> Isolated[Git Worktrees]
     Scheduler --> Verify[VerificationRunner & Quality Gates]
     Verify --> Integration[IntegrationService & Branch Merge]
     Integration --> Telemetry[TelemetryCollector & CostEstimator]
@@ -37,7 +37,7 @@ flowchart TD
 
 | Package / Module          | Role & Responsibility                                                                                                                                                                                                                       | Spec Reference    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `@taskforge/agents`       | Real-agent adapters (`ClaudeCodeAdapter`, `CodexAdapter`, `GeminiCliAdapter`), fake agent (`FakeAgent`), and remote worker adapters (`DockerWorkerAdapter`, `SshWorkerAdapter`).                                                            | Section 9, 17, 22 |
+| `@taskforge/agents`       | Real-agent adapters (`ClaudeCodeAdapter`, `CodexAdapter`, `GeminiCliAdapter`), fake agent (`FakeAgent`), and experimental remote worker stubs (`DockerWorkerAdapter`, `SshWorkerAdapter` — not full isolated agent runners).              | Section 9, 17, 22 |
 | `@taskforge/plugins`      | Modular Plugin SDK: `TaskForgePlugin` interface, lifecycle hooks (`onRunStart`, `beforePlan`, `afterPlan`, `beforeTask`, `afterTask`, `verify`, `onRunComplete`), error isolation, and `ECCPlugin` for selective capability/rule injection. | Section 21        |
 | `@taskforge/telemetry`    | Multi-model token cost estimation (`CostEstimator`), execution telemetry recording (`TelemetryCollector`), and historical performance aggregation (`PerformanceEngine`).                                                                    | Section 26, 31    |
 | `@taskforge/router`       | Adaptive routing provider (`AdaptiveRoutingProvider`) biasing staffing toward historically proven agent-role configurations with uncertainty reporting.                                                                                     | Section 8, 26     |
@@ -113,12 +113,14 @@ flowchart TD
     - `createPullRequest()`: Invokes native `gh pr create` with graceful manual fallback when `gh` CLI is absent.
   - CLI command: `tf issue <number>`.
 
-### Phase 22: Remote Workers (`packages/agents`)
+### Phase 22: Experimental Remote Worker Stubs (`packages/agents`)
 
-- **Isolated Execution Adapters**:
-  - `DockerWorkerAdapter`: Executes worker tasks inside ephemeral Docker containers with isolated volume mounts (`-v <worktree>:/workspace`), memory/CPU constraints, and restricted networking.
-  - `SshWorkerAdapter`: Executes tasks on remote worker nodes via SSH with secure working directory isolation.
-  - Conforms strictly to the `AgentAdapter` interface, allowing plug-and-play distribution while preserving local Git integrity.
+- **Experimental Adapter Stubs (Not Full Isolated Agent Runners)**:
+  - `DockerWorkerAdapter` *(experimental stub)*: Verifies Docker availability and runs an ephemeral `docker run --rm` command that mounts the task worktree (`-v <worktree>:/workspace`) and appends a task receipt to `.taskforge-docker.log` (passing optional `--network`, `--memory`, `--cpus`, and `-e` flags when configured). It does **not** execute a full coding agent inside an isolated container, and passing a volume mount, memory/CPU limits, or network flags does **not** correspond to effective isolation for an agent executed by this adapter.
+  - `SshWorkerAdapter` *(experimental stub)*: Verifies `ssh` availability and executes a placeholder `echo` command over SSH; it does **not** run a full remote coding agent or provide remote workspace isolation.
+  - Both classes implement the `AgentAdapter` interface as experimental placeholders only. Do **not** rely on `DockerWorkerAdapter` for agent sandboxing or untrusted workloads.
+- **Recommended Container Isolation (`Dockerfile` / Container Mode)**:
+  - To isolate real coding agents from your host `HOME` (`~/.ssh`, `~/.aws`, shell history), run the entire TaskForge control plane and its agents inside the documented container image (`docker build -t taskforge .` followed by `scripts/tf-container.sh`, as documented in `Dockerfile`, `README.md`, and `SECURITY.md`). Container mode still does **not** restrict network access or protect the mounted repository itself (including `.git/hooks`).
 
 ---
 
