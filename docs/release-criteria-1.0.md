@@ -23,12 +23,12 @@ All of these are recorded in [`docs/pilot.md`](pilot.md) for the release candida
 | `--json` outputs (for example `tf insights --json`) | Fields are added, not renamed or removed. |
 | Event types in the audit trail | Existing types keep their meaning; new ones may appear. |
 
-Explicitly **outside** the promise: experimental adapters (Cursor, Aider, OpenCode, Goose, `DockerWorkerAdapter`, `SshWorkerAdapter`), anything the docs call experimental, and Windows.
+Explicitly **outside** the promise: experimental adapters (Cursor, Aider, OpenCode, Goose) and experimental worker stubs (`DockerWorkerAdapter`, `SshWorkerAdapter` — neither executes full coding agents in an isolated container or remote environment), anything the docs call experimental, and Windows.
 
 ## 3. Security and safety
 
 - `SECURITY.md` describes what is and is not enforced, matching the code at the release commit.
-- The container mode is the documented way to run untrusted work, and `tf doctor` reports whether it is in use.
+- Container mode (`Dockerfile` / `scripts/tf-container.sh`) — not the experimental `DockerWorkerAdapter` stub, which does not execute full coding agents in an isolated container — is the documented way to run untrusted work, and `tf doctor` reports whether it is in use.
 - No open report that shows model output controlling permissions, process lifecycles, Git state or verification (the design boundary in `CONTRIBUTING.md`).
 - Nothing reaches the user's branch without the user's command (default `delivery.mode: ask_human`), and `tf undo` works on the release.
 
