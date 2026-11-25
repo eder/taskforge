@@ -166,9 +166,15 @@ describe('Conversational Smart Delivery', () => {
       expect(parseDeliveryFollowUpReply('sim')).toBe('accept');
       expect(parseDeliveryFollowUpReply('yes')).toBe('accept');
       expect(parseDeliveryFollowUpReply('abre pr')).toBe('pr');
+      expect(parseDeliveryFollowUpReply('quero abrir um PR')).toBe('pr');
+      expect(parseDeliveryFollowUpReply('eu quero abrir uma pr')).toBe('pr');
+      expect(parseDeliveryFollowUpReply('vamos abrir um pull request')).toBe('pr');
+      expect(parseDeliveryFollowUpReply('I want to open a PR')).toBe('pr');
       expect(parseDeliveryFollowUpReply('commita e abre pr')).toBe('pr');
       expect(parseDeliveryFollowUpReply('pode aplicar')).toBe('apply');
+      expect(parseDeliveryFollowUpReply('quero aplicar na main')).toBe('apply');
       expect(parseDeliveryFollowUpReply('mostra o diff')).toBe('diff');
+      expect(parseDeliveryFollowUpReply('quero ver o diff')).toBe('diff');
       expect(parseDeliveryFollowUpReply('descarta')).toBe('discard');
       expect(parseDeliveryFollowUpReply('agora implementa suporte a redis no cache')).toBeUndefined();
     });
@@ -178,6 +184,10 @@ describe('Conversational Smart Delivery', () => {
       expect(parseDirectGitIntent('commit and open a PR')?.kind).toBe('pr');
       expect(parseDirectGitIntent('pode commitar')?.kind).toBe('commit');
       expect(parseDirectGitIntent('pode abrir a pr')?.kind).toBe('pr');
+      expect(parseDirectGitIntent('quero abrir um PR')?.kind).toBe('pr');
+      expect(parseDirectGitIntent('eu quero abrir uma PR agora')?.kind).toBe('pr');
+      expect(parseDirectGitIntent('I want to open a pull request')?.kind).toBe('pr');
+      expect(parseDirectGitIntent('quero fazer commit')?.kind).toBe('commit');
     });
 
     it('formats concise branch-aware post-edit hints', () => {

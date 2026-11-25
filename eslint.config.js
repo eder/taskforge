@@ -19,6 +19,6 @@ export default [
     languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
   },
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/*.d.ts'],
+    ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/*.d.ts', '.taskforge/**'],
   },
 ];

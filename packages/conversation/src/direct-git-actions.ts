@@ -31,7 +31,7 @@ export type PendingDirectGitAction =
     };
 
 const PT_GIT_CUE =
-  /\b(?:desfaz\w*|reverte\w*|mostr\w*|ver\b|mudou|alterad\w*|arquivos?|faz(?:er)?|fa[çc]a|commita\w*|abre|abrir|cria(?:r)?|mensagem|t[ií]tulo|[uú]ltim[ao])\b/i;
+  /\b(?:desfaz\w*|reverte\w*|mostr\w*|ver\b|mudou|alterad\w*|arquivos?|faz(?:er)?|fa[çc]a|commita\w*|abre|abrir|cria(?:r)?|quero|queria|gostaria|vamos|bora|mensagem|t[ií]tulo|[uú]ltim[ao])\b/i;
 
 const ENGINEERING_TASK_GUARD =
   /\b(?:implement\w*|refactor\w*|refator\w*|corrig\w*|fix\b|bug\b|erro\b|fun[çc][aã]o|function|class\b|classe\b|endpoint|teste?s?\b|tests?\b)\b|\.(?:ts|tsx|js|jsx|py|go|rs|swift|java|md|json|yaml|yml)\b/i;
@@ -89,10 +89,18 @@ export function parseDirectGitIntent(rawText: string): DirectGitIntent | undefin
     return { kind: 'status', language };
   }
 
+  const strippedIntentText = text
+    .replace(
+      /^(?:(?:por\s+favor|please)\s*,?\s*)?(?:(?:eu\s+)?(?:quero|queria|gostaria\s+de|preciso|vou)|vamos|bora|i(?:'d|\s+would)?\s+(?:want|like)\s+to|let'?s|can\s+you|could\s+you|please)\s+/i,
+      '',
+    )
+    .replace(/[.!?]+$/, '')
+    .trim();
+
   // 4. Open Pull Request (also handles combined "commita e abre pr" / "commit and open pr" — checked before commit)
   const prMatch =
-    /^(?:(?:(?:faz(?:er)?|fa[çc]a|pode\s+)?(?:commit(?:a(?:r)?)?|git\s+commit)(?:\s+(?:isso|disso|tudo|this|all))?\s+(?:e|and)\s+(?:j[aá]\s+)?)?(?:abr[aeir]+|cria(?:r)?|faz(?:er)?|fa[çc]a|pode\s+abrir|open|create|make)\s+(?:um[ao]?\s+|o\s+|a\s+)?)(?:pr|pull\s+request)(?:\s+(?:disso|dessa\s+branch|for\s+this))?(?:\s+(?:com\s+(?:o\s+)?t[ií]tulo|titled|with\s+title)\s*[:=]?\s*(.+))?$/i.exec(
-      text,
+    /^(?:(?:(?:faz(?:er)?|fa[çc]a|pode\s+)?(?:commit(?:a(?:r)?)?|git\s+commit)(?:\s+(?:isso|disso|tudo|this|all))?\s+(?:e|and)\s+(?:j[aá]\s+)?)?(?:abr[aeir]+|cria(?:r)?|faz(?:er)?|fa[çc]a|pode\s+abrir|open|create|make|submit|raise)\s+(?:um[ao]?\s+|o\s+|a\s+|the\s+)?)(?:pr|pull\s+request)(?:\s+(?:disso|dessa\s+branch|para\s+main|for\s+this|agora|now|por\s+favor|please))?(?:\s+(?:com\s+(?:o\s+)?t[ií]tulo|titled|with\s+title)\s*[:=]?\s*(.+))?$/i.exec(
+      strippedIntentText,
     );
   if (prMatch && !/\brun-\d+\b/i.test(withoutQuote)) {
     const rawTitle = (quotedMatch?.[1] ?? prMatch[1] ?? '').trim().replace(/^["'“”]|["'“”]$/g, '');
@@ -106,7 +114,7 @@ export function parseDirectGitIntent(rawText: string): DirectGitIntent | undefin
   // 5. Commit working tree changes
   const commitMatch =
     /^(?:(?:faz(?:er)?|fa[çc]a|cria(?:r)?|pode(?:\s+fazer)?|make|create|do)\s+(?:um\s+|o\s+|a\s+)?)?(?:git\s+)?commit(?:a(?:r)?)?(?:\s+(?:disso|isso|as\s+altera[çc][õo]es|tudo|this|these(?:\s+changes)?|all))?(?:\s+(?:com\s+(?:a\s+)?mensagem|with\s+message|-m)\s*[:=]?\s*(.+))?$/i.exec(
-      text,
+      strippedIntentText,
     );
   if (commitMatch && !/\b(?:run-\d+|pull\s+request|\bpr\b)\b/i.test(withoutQuote)) {
     const rawMsg = (quotedMatch?.[1] ?? commitMatch[1] ?? '').trim().replace(/^["'“”]|["'“”]$/g, '');

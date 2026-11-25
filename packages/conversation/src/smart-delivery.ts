@@ -188,37 +188,43 @@ export function parseDeliveryFollowUpReply(rawText: string): DeliveryFollowUpRep
   if (text.length > 80) return undefined;
 
   const lower = text.toLowerCase().replace(/[.!?]+$/, '').trim();
+  const normalized = lower
+    .replace(
+      /^(?:(?:por\s+favor|please)\s*,?\s*)?(?:(?:eu\s+)?(?:quero|queria|gostaria\s+de|preciso|vou)|vamos|bora|pode|i(?:'d|\s+would)?\s+(?:want|like)\s+to|let'?s|can\s+you|could\s+you|please)\s+/i,
+      '',
+    )
+    .trim();
 
   if (/^(?:y|yes|s|sim|ok|confirm(?:a|ar)?|pode|vai|manda|go|beleza|fechado|bora|aprovo)$/.test(lower)) {
     return 'accept';
   }
   if (
-    /^(?:(?:abr(?:e|ir|a)|cri(?:a|ar|e)|faz(?:er)?|fa[çc]a|pode\s+abrir|open|create|make)\s+)?(?:um[ao]?\s+|o\s+|a\s+)?(?:pr|pull\s+request)(?:\s+(?:disso|agora|now|por\s+favor|please))?$/.test(
-      lower,
+    /^(?:(?:abr(?:e|ir|a)|cri(?:a|ar|e)|faz(?:er)?|fa[çc]a|pode\s+abrir|open|create|make|submit|raise)\s+)?(?:um[ao]?\s+|o\s+|a\s+|the\s+)?(?:pr|pull\s+request)(?:\s+(?:disso|dessa\s+branch|para\s+main|agora|now|por\s+favor|please))?$/.test(
+      normalized,
     ) ||
-    /^(?:commita\w*|commit)\s+(?:e|and)\s+(?:abr(?:e|ir|a)|cri(?:a|ar|e)|open|create)\s+(?:um[ao]?\s+|o\s+|a\s+)?(?:pr|pull\s+request)$/.test(
-      lower,
+    /^(?:commita\w*|commit)\s+(?:e|and)\s+(?:j[aá]\s+)?(?:abr(?:e|ir|a)|cri(?:a|ar|e)|open|create)\s+(?:um[ao]?\s+|o\s+|a\s+|the\s+)?(?:pr|pull\s+request)$/.test(
+      normalized,
     )
   ) {
     return 'pr';
   }
   if (
     /^(?:(?:pode\s+|faz(?:er)?\s+)?(?:aplica(?:r)?|apply|merge(?:ar)?|mescla(?:r)?|commita(?:r)?|commit)(?:\s+(?:isso|tudo|agora|now|na\s+branch|na\s+main|to\s+main|it|this))?|faz(?:er)?\s+(?:o\s+|um\s+)?commit)$/.test(
-      lower,
+      normalized,
     )
   ) {
     return 'apply';
   }
   if (
     /^(?:(?:ver|mostr[ae]|exib[ae]|show|view|review)\s+(?:o\s+|the\s+)?)?(?:diff|mudan[çc]as|changes)$/.test(
-      lower,
+      normalized,
     )
   ) {
     return 'diff';
   }
   if (
     /^(?:descarta(?:r)?|discard|cancel(?:a|ar)?|n[aã]o|no|deixa|mant[eé]m(?:\s+na\s+branch)?|keep\s+branch|skip|q)$/.test(
-      lower,
+      normalized,
     )
   ) {
     return 'discard';

@@ -116,6 +116,19 @@ describe('Cross-agent review assignment & Portuguese/English review blocking gat
     });
     expect(enBlocked.accepted).toBe(false);
     expect(enBlocked.failureReason).toBe('ACCEPTANCE_NOT_MET');
+
+    const rawToolJson = await gate.evaluate({
+      task: reviewTask,
+      agentResult: {
+        success: true,
+        output: '```json\n{\n  "name": "search_files",\n  "arguments": { "query": "TASK-01" }\n}\n```',
+        durationMs: 10,
+      },
+      worktreePath: repoRoot,
+    });
+    expect(rawToolJson.accepted).toBe(false);
+    expect(rawToolJson.failureReason).toBe('EMPTY_PROVIDER_RESULT');
+    expect(rawToolJson.evidence.explanation).toContain('unexecuted tool-call JSON');
   });
 
   it('assigns an independent reviewer agent (not the implementer of the prerequisite task) when multiple healthy agents exist', async () => {
