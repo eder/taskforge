@@ -361,13 +361,15 @@ export class ConversationalIntentClassifier {
       '- "undo": asks to undo/revert the last edit or applied run.',
       '- "git_status": asks for git status or repository cleanliness.',
       '- "inspect_agents": asks which coding agents are available/ready/online.',
-      '- "inspect_tasks": asks to see current/running tasks.',
+      '- "inspect_tasks": ONLY asks to see TaskForge\'s currently running/queued orchestrator tasks (equivalent to `/tasks`, e.g. "quais tarefas estão rodando agora?", "show running tasks"). NEVER use this for reading files/specs/docs or asking what features/requirements remain to be implemented in the project.',
       '- "inspect_health": asks about system/router/agent health status.',
-      '- "engineering_task": ANY request that asks to write/edit/fix/refactor/test/review/explain/analyze code, OR asks to implement changes in separate PRs.',
+      '- "engineering_task": ANY request that asks to write/edit/fix/refactor/test/review/explain/analyze/read/summarize code, specs, docs, or repository files, OR asks what remains to be implemented against a spec, OR asks to implement changes in separate PRs.',
       'Examples:',
       '- "Faça todas as alterações necessárias que vc encontrou mas em Pull requests separados" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"pt","confidence":"high"}',
       '- "Make all the improvements you found in separate PRs" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"en","confidence":"high"}',
       '- "Fix the bug in auth.ts and open a PR" -> {"asksForCodeChanges":true,"intent":"engineering_task","language":"en","confidence":"high"}',
+      '- "O que falta fazer ainda quando olhamos para o BARBEARIA_PWA_SPEC.md" -> {"asksForCodeChanges":false,"intent":"engineering_task","language":"pt","confidence":"high"}',
+      '- "Leia o arquivo BARBEARIA_PWA_SPEC.md" -> {"asksForCodeChanges":false,"intent":"engineering_task","language":"pt","confidence":"high"}',
       '- "Eu preciso que vc ajuste o texto do PR para ingles" -> {"asksForCodeChanges":false,"intent":"edit_pr","language":"pt","confidence":"high"}',
       '- "Translate the PR description and title to English" -> {"asksForCodeChanges":false,"intent":"edit_pr","language":"en","confidence":"high"}',
       '- "Sobe isso pro GitHub num PR" -> {"asksForCodeChanges":false,"intent":"open_pr","language":"pt","confidence":"high"}',
@@ -403,8 +405,21 @@ export class ConversationalIntentClassifier {
       typeof obj.intent === 'string' &&
       VALID_CONTROL_PLANE_INTENTS.has(obj.intent as ControlPlaneIntentKind)
     ) {
+      let resolvedIntent = obj.intent as ControlPlaneIntentKind;
+      // Deterministic safety net: asking to read/analyze a repository file or spec is never `/tasks`.
+      if (
+        resolvedIntent === 'inspect_tasks' &&
+        (/\b[\w./-]+\.(?:md|ts|tsx|js|jsx|json|sql|yaml|yml|toml|py|go|rs|sh|css|html)\b/i.test(
+          trimmed,
+        ) ||
+          /\b(?:leia|ler|read|open|abra|abrir|arquivo|file|spec|documento|document|analise|analyze|resuma|summarize)\b/i.test(
+            trimmed,
+          ))
+      ) {
+        resolvedIntent = 'engineering_task';
+      }
       return {
-        intent: obj.intent as ControlPlaneIntentKind,
+        intent: resolvedIntent,
         language: obj.language === 'pt' ? 'pt' : 'en',
       };
     }

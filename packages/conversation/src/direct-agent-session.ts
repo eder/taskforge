@@ -279,6 +279,8 @@ export interface DirectRunnerOptions {
   verifyWorktree?: (worktreePath: string) => Promise<{ passed: boolean; summary: string }>;
   /** Project verification commands (used automatically during `@a @b --edit` when `verifyWorktree` is omitted). */
   verificationCommands?: string[];
+  /** Optional provider returning a compact TaskForge Control-Plane snapshot (unapplied runs, plan.md, failures, degraded agents) for real-time Supervisor awareness. */
+  getControlPlaneContext?: () => string | undefined;
   /** Invoked whenever memory or native provider session IDs change (used for SQLite persistence). */
   onStateChanged?: () => void;
 }
@@ -344,6 +346,7 @@ export class DirectAgentRunner {
   private readonly openAiModel: string;
   private readonly verifyWorktree?: (worktreePath: string) => Promise<{ passed: boolean; summary: string }>;
   private readonly verificationCommands: string[];
+  private readonly getControlPlaneContext?: () => string | undefined;
   private readonly onStateChanged?: () => void;
   /** Tracks each agent's latest native provider session/thread ID + memory watermark for zero-bloat follow-ups. */
   private readonly providerSessions = new Map<string, { sessionId: string; lastSeq: number }>();
@@ -368,6 +371,7 @@ export class DirectAgentRunner {
     this.openAiModel = options.openAiModel ?? 'gpt-4o-mini';
     this.verifyWorktree = options.verifyWorktree;
     this.verificationCommands = (options.verificationCommands ?? []).filter((c) => c.trim().length > 0);
+    this.getControlPlaneContext = options.getControlPlaneContext;
     this.onStateChanged = options.onStateChanged;
   }
 
@@ -515,7 +519,9 @@ export class DirectAgentRunner {
     const resolvedMentions = resolveFileMentionsInPrompt(rawPrompt, this.repoRoot);
     const prompt = appendImageContextToPrompt(resolvedMentions.cleanedPrompt, resolvedMentions.images);
     const durableMemory = formatProjectMemoryForPrompt(this.repoRoot);
-    const combinedPriorContext = [durableMemory, options.priorContext].filter(Boolean).join('\n\n') || undefined;
+    const controlPlaneContext = this.getControlPlaneContext?.();
+    const combinedPriorContext =
+      [durableMemory, controlPlaneContext, options.priorContext].filter(Boolean).join('\n\n') || undefined;
     const { adapters, unavailable, selectionReason } = await this.resolveTargets(
       targets,
       resolvedMentions.cleanedPrompt,

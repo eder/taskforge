@@ -488,6 +488,36 @@ describe('CompletionGate - Task-Type Aware Policy Matrix', () => {
       expect(effective.accepted).toBe(true);
     });
 
+    it('treats equivalent package-manager test invocations (pnpm run test vs pnpm test) as matching', async () => {
+      const task = createTask('testing', {
+        title: 'Run tests',
+        objective: 'Run tests',
+        allowedScope: [],
+        forbiddenChanges: ['*'],
+        completionMode: 'verification',
+        verification: { commands: ['pnpm run test'], expectation: 'pass' },
+      });
+      const result = await gate.evaluate({
+        task,
+        agentResult: createAgentResult({ output: 'Tests passed.' }),
+        baseCommit: 'commit-base',
+        resultingCommit: 'commit-base',
+        verificationPassed: true,
+        verificationChecks: [
+          {
+            name: 'test',
+            command: 'pnpm test',
+            exitCode: 0,
+            stdout: '40 passed',
+            stderr: '',
+            durationMs: 50,
+            success: true,
+          },
+        ],
+      });
+      expect(result.accepted).toBe(true);
+    });
+
     it('rejects verification-only completion without command evidence', async () => {
       const task = createTask('testing', {
         title: 'Run pnpm lint',

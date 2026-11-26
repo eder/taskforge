@@ -143,15 +143,19 @@ describe('RunOrchestrator.checkResumable', () => {
     db.close();
   });
 
-  it('tells the user when the repository moved on since the run started', async () => {
+  it('tells the user when the repository moved on since the run started and auto-rebases cleanly onto HEAD', async () => {
     const { db, orchestrator, runId } = await failedRun();
     fs.writeFileSync(path.join(root, 'later.txt'), 'later\n');
-    await git.stageAndCommit('a later commit', root);
+    const newHead = await git.stageAndCommit('a later commit', root);
     const progress: string[] = [];
     await orchestrator.resume(runId, { onProgress: (m) => progress.push(m) });
     const note = progress.find((m) => m.startsWith('Note: this run started from'));
     expect(note).toContain('moved on by 1 commit');
     expect(note).toContain(`tf abandon ${runId}`);
+    expect(progress.some((m) => m.includes('Rebased resumed run onto latest'))).toBe(true);
+    const updatedRun = new RunRepository(db).get(runId);
+    const updatedMeta = updatedRun?.metadataJson ? (JSON.parse(updatedRun.metadataJson) as { baseCommit?: string }) : {};
+    expect(updatedMeta.baseCommit).toBe(newHead);
     db.close();
   });
 });

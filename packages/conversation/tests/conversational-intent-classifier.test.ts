@@ -396,4 +396,57 @@ describe('ConversationalIntentClassifier (Ollama -> OpenAI -> Fast-Path Fallback
       repoRoot,
     });
   });
+
+  it('never misclassifies file/spec reading or gap-analysis questions as inspect_tasks', async () => {
+    const mockOpenAI = await startMockHttpServer(() => ({
+      json: {
+        choices: [
+          {
+            message: {
+              // Simulate an over-eager model misclassifying a spec/file question as inspect_tasks
+              content: JSON.stringify({
+                asksForCodeChanges: false,
+                intent: 'inspect_tasks',
+                language: 'pt',
+                confidence: 'high',
+              }),
+            },
+          },
+        ],
+      },
+    }));
+    cleanups.push(mockOpenAI.close);
+
+    const config = getDefaultConfig();
+    config.router.provider = 'openai';
+    config.router.baseUrl = mockOpenAI.url;
+    config.router.apiKey = 'sk-test-key';
+
+    const classifier = new ConversationalIntentClassifier({
+      config,
+      agentRegistry: new AgentRegistry(false),
+      repoRoot: process.cwd(),
+      enableLiveCallsInTests: true,
+    });
+
+    const ctx = {
+      hasReadyRun: false,
+      hasDirtyWorkingTree: false,
+      hasUndoCheckpoint: false,
+      currentBranch: 'main',
+      hasRecentDirectAnalysis: false,
+    };
+
+    const q1 = await classifier.classifyControlPlaneIntent(
+      'O que falta fazer ainda quando olhamos para o BARBEARIA_PWA_SPEC.md',
+      ctx,
+    );
+    expect(q1?.intent).toBe('engineering_task');
+
+    const q2 = await classifier.classifyControlPlaneIntent(
+      'Leia o arquivo BARBEARIA_PWA_SPEC.md',
+      ctx,
+    );
+    expect(q2?.intent).toBe('engineering_task');
+  });
 });

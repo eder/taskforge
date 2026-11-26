@@ -210,6 +210,11 @@ import {
   type PendingCouncilDecision,
   type CouncilSynthesizerFn,
 } from './debate-council.js';
+import {
+  bootstrapWorkspaceAfterApply,
+  collectControlPlaneSnapshot,
+  formatControlPlaneContextForPrompt,
+} from './control-plane-supervisor.js';
 import { DirectTelemetryStore } from './direct-telemetry.js';
 import {
   addProjectMemoryEntry,
@@ -518,6 +523,7 @@ export class InteractiveShell {
       openAiBaseUrl: openaiBaseUrl,
       openAiModel: advisorModel,
       verificationCommands: this.config.verification.commands,
+      getControlPlaneContext: () => this.getControlPlanePromptContext(),
       onStateChanged: () => {
         this.persistDirectSessionState();
         this.syncPromptBadge();
@@ -1141,6 +1147,20 @@ export class InteractiveShell {
     return lines.join('\n');
   }
 
+  /** Returns true when a bare Enter key has a pending interactive action to accept. */
+  private hasPendingEnterAction(): boolean {
+    return Boolean(
+      this.pendingDirectGitAction ||
+        this.pendingOrchestratedDelivery ||
+        this.pendingGitHubAction ||
+        this.pendingCouncilDecision ||
+        this.pendingLivingPlan ||
+        this.pendingPipelineFollowUp ||
+        this.pendingCompetitiveEdit ||
+        this.focusedRun,
+    );
+  }
+
   async handleInput(input: string, abortSignal?: AbortSignal): Promise<string> {
     const text = input.trim();
     if (!text) {
@@ -1354,7 +1374,7 @@ export class InteractiveShell {
       }
     }
 
-    const blueprintMatch = text.match(/^\/(?:blueprint|waves)(?:\s+(.*))?$/i);
+    const blueprintMatch = text.match(/^\/(?:blueprint|waves)(?:\s+([\s\S]*))?$/i);
     if (blueprintMatch) {
       return this.handleBlueprintCommand((blueprintMatch[1] ?? '').trim(), abortSignal);
     }
@@ -1717,7 +1737,11 @@ export class InteractiveShell {
             break;
           }
           case 'inspect_tasks': {
-            intent = { type: 'inspect_tasks' };
+            // Only intercept AI-classified task inspection while a run or planned graph is actually active;
+            // explicit `/tasks` or `list tasks` is already handled deterministically by OperatorIntentParser.
+            if (this.conversationState === 'EXECUTING' || Boolean(this.currentGraph)) {
+              intent = { type: 'inspect_tasks' };
+            }
             break;
           }
           case 'inspect_health': {
@@ -1862,6 +1886,30 @@ export class InteractiveShell {
           .filter(Boolean)
           .join('\n');
 
+        const supervisor = collectControlPlaneSnapshot({
+          repoRoot: this.repoRoot,
+          config: this.config,
+          db: this.db,
+          deliveryService: this.deliveryService,
+          agentRegistry: this.agentRegistry,
+        });
+        const supervisorLines: string[] = [];
+        for (const ready of supervisor.readyRuns.slice(0, 3)) {
+          supervisorLines.push(
+            `    ${colors.yellow}●${colors.reset} Unapplied delivery: ${colors.bold}${ready.runId}${colors.reset} (${ready.branch} → ${ready.targetBranch}) — run \`/apply ${ready.runId}\``,
+          );
+        }
+        for (const issue of supervisor.environmentIssues) {
+          supervisorLines.push(`    ${colors.yellow}▲${colors.reset} ${issue}`);
+        }
+        if (supervisor.livingPlanSummary) {
+          supervisorLines.push(`    ${colors.dim}Living Plan:${colors.reset} ${supervisor.livingPlanSummary}`);
+        }
+        const supervisorSection =
+          supervisorLines.length > 0
+            ? `\n  ${colors.bold}Workspace Supervisor:${colors.reset}\n${supervisorLines.join('\n')}`
+            : '';
+
         return [
           header,
           routerDetails,
@@ -1870,6 +1918,7 @@ export class InteractiveShell {
           agentLines,
           '',
           dbDetails,
+          ...(supervisorSection ? [supervisorSection] : []),
           `  ${divider}`,
           `  ${colors.bold}Status:${colors.reset}             ${overallStatus}`,
           `  ${divider}`,
@@ -2008,6 +2057,17 @@ export class InteractiveShell {
             sections.push([`  ${colors.dim}Files${colors.reset}`, ...fileLines]);
           }
           sections.push([`  ${colors.dim}Commit${colors.reset}`, `  ${afterShort}  ${commitSubject}`]);
+
+          const bootstrap = await bootstrapWorkspaceAfterApply(this.repoRoot, this.config, {
+            onProgress: (line) =>
+              this.viewport.writeUpper(`  ${colors.cyan}⚙${colors.reset} ${colors.dim}${line}${colors.reset}\n`),
+          });
+          if (bootstrap.notes.length > 0) {
+            sections.push([
+              `  ${colors.dim}Workspace Bootstrap${colors.reset}`,
+              ...bootstrap.notes.map((n) => `  ${colors.green}✔${colors.reset} ${n}`),
+            ]);
+          }
 
           return sections.map((s) => s.join('\n')).join('\n\n');
         } catch (err) {
@@ -2199,6 +2259,33 @@ export class InteractiveShell {
           });
           this.focusedRun = proposal.focus;
           return [...proposal.lines, '', `↵ ${proposal.hint}   ·   /back to leave this run`].join('\n');
+        }
+        // If this stopped run has a deterministic 0-token scope expansion fix (either already
+        // focused or newly diagnosed), apply it directly instead of burning tokens repeating
+        // the exact same scope violation!
+        if (this.focusedRun?.runId === runId && this.focusedRun.action.kind === 'expand_scope') {
+          return this.expandTaskScopeAndContinue(
+            this.focusedRun,
+            this.focusedRun.action.expansions,
+            this.focusedRun.raiseBudgetTo,
+          );
+        }
+        const retryFailures = describeRunFailures(
+          { taskRepo: this.taskRepo, eventRepo: this.eventRepo },
+          runId,
+        );
+        const retryFocus = buildRunFocus({
+          runId,
+          failures: retryFailures,
+          repoRoot: this.repoRoot,
+          spend: budget > 0 ? { spent, budget } : undefined,
+        });
+        if (retryFocus?.focus.action.kind === 'expand_scope') {
+          return this.expandTaskScopeAndContinue(
+            retryFocus.focus,
+            retryFocus.focus.action.expansions,
+            retryFocus.focus.raiseBudgetTo,
+          );
         }
         return this.continueRun(runId);
       }
@@ -3454,6 +3541,22 @@ export class InteractiveShell {
     const plan = planRunRepair({ taskRepo: this.taskRepo, eventRepo: this.eventRepo }, this.repoRoot, focus.runId);
     const availableAgents = this.agentRegistry.list().map((a) => `${a.name} (${a.id})`);
 
+    // Detect if this stopped run started from an older commit before HEAD moved on (e.g. package.json added later).
+    let staleBaseNote: string | undefined;
+    try {
+      const runRecord = new RunRepository(this.db).get(focus.runId);
+      const meta = runRecord?.metadataJson ? (JSON.parse(runRecord.metadataJson) as { baseCommit?: string }) : undefined;
+      if (meta?.baseCommit) {
+        const behindRaw = await this.gitService.exec(['rev-list', '--count', `${meta.baseCommit}..HEAD`], this.repoRoot);
+        const behind = Number.parseInt(behindRaw.trim(), 10) || 0;
+        if (behind > 0) {
+          staleBaseNote = `Run base ${meta.baseCommit.slice(0, 7)} is ${behind} commit(s) behind current HEAD. Resuming auto-rebases cleanly onto HEAD when possible; if conflicts prevent rebasing, abandon the stale run or add a check command.`;
+        }
+      }
+    } catch {
+      // best-effort
+    }
+
     const decision = await this.focusedAdvisor.advise({
       userMessage: text,
       runId: focus.runId,
@@ -3463,6 +3566,7 @@ export class InteractiveShell {
       verificationCommands: this.config.verification.commands ?? [],
       worktreeLinks: this.config.execution.worktreeLinks ?? [],
       availableAgents,
+      staleBaseNote,
       pendingAction: focus.pendingAction,
       history: focus.history,
     });
@@ -4157,7 +4261,7 @@ export class InteractiveShell {
       return this.launchNextLivingPlanWave(abortSignal);
     }
 
-    const refineMatch = /^refine\s+(.+)$/i.exec(argText);
+    const refineMatch = /^refine\s+([\s\S]+)$/i.exec(argText);
     if (refineMatch) {
       const existing = loadLivingPlan(this.repoRoot);
       if (!existing) {
@@ -4209,7 +4313,12 @@ export class InteractiveShell {
     if (!plan) return undefined;
     const lower = text.toLowerCase();
 
-    if (/^(?:y|yes|s|sim|ok|go|start|inicia(?:r)?|executa(?:r)?|pode\s+ir|pr[óo]xima\s+wave|next\s+wave)$/.test(lower)) {
+    if (
+      /^(?:y|yes|s|sim|ok|go|start|run|launch|inicia(?:r)?|come[çc]a(?:r)?|executa(?:r)?|roda(?:r)?|avan[çc]a(?:r)?|bora|pode\s+ir|manda\s+ver)(?:\s+(?:a\s+|the\s+)?(?:next\s+|pr[óo]xima\s+)?(?:wave|onda)(?:\s+\d+)?)?$/.test(
+        lower,
+      ) ||
+      /^(?:pr[óo]xima|next)\s+(?:wave|onda)(?:\s+\d+)?$/.test(lower)
+    ) {
       return this.launchNextLivingPlanWave(abortSignal);
     }
 
@@ -4250,24 +4359,53 @@ export class InteractiveShell {
       return `${colors.green}✔${colors.reset} All ${plan.waves.length} waves in .taskforge/plan.md are already completed!`;
     }
 
-    // Wave F: Seamless wave-to-wave transition — if the previous completed wave
-    // produced a `ready_to_apply` delivery, apply it cleanly first so this wave
-    // re-scans and builds on top of the exact files created by the earlier wave!
-    let autoAppliedNote = '';
+    // Wave F + Auto-Apply Guard: apply BOTH any completed previous wave AND any
+    // other unmerged `ready_to_apply` run (e.g. a scaffolding run executed right
+    // before `/blueprint next`) before re-scanning the repository for Wave N!
+    const autoAppliedNotes: string[] = [];
+    const pendingApplyRunIds: Array<{ runId: string; label: string }> = [];
     const prevWave = plan.waves.find((w) => w.number === wave.number - 1 && w.status === 'completed');
     if (prevWave?.runId) {
       const prevDelivery = this.deliveryService.getDelivery(prevWave.runId);
       if (prevDelivery?.status === 'ready_to_apply') {
-        try {
-          const applied = await this.deliveryService.apply(prevWave.runId);
-          if (!applied.alreadyApplied) {
-            autoAppliedNote = `${colors.green}✔${colors.reset} Auto-applied Wave ${prevWave.number} (${prevWave.runId} → ${applied.commit.slice(0, 7)}) before scanning repo for Wave ${wave.number}.\n\n`;
-          }
-        } catch {
-          // Best-effort: if apply cannot cleanly fast-forward, proceed and let user resolve.
-        }
+        pendingApplyRunIds.push({ runId: prevWave.runId, label: `Wave ${prevWave.number}` });
       }
     }
+    const latestUnmergedRunId = await this.resolveUnmergedDeliveryRunId();
+    if (
+      latestUnmergedRunId &&
+      !pendingApplyRunIds.some((entry) => entry.runId === latestUnmergedRunId)
+    ) {
+      pendingApplyRunIds.push({ runId: latestUnmergedRunId, label: `pending run ${latestUnmergedRunId}` });
+    }
+
+    for (const entry of pendingApplyRunIds) {
+      try {
+        const applied = await this.deliveryService.apply(entry.runId);
+        if (!applied.alreadyApplied) {
+          autoAppliedNotes.push(
+            `${colors.green}✔${colors.reset} Auto-applied ${entry.label} (${entry.runId} → ${applied.commit.slice(0, 7)}) before scanning repo for Wave ${wave.number}.`,
+          );
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return [
+          `${colors.yellow}⚠${colors.reset} Could not auto-apply ${entry.label} (${entry.runId}) before starting Wave ${wave.number}: ${reason}`,
+          `  ${colors.dim}Resolve or inspect with \`/diff ${entry.runId}\` / \`/apply ${entry.runId}\`, then run \`/blueprint next\` again.${colors.reset}`,
+        ].join('\n');
+      }
+    }
+
+    // Auto-bootstrap host dependencies (e.g. `npm/pnpm install` after a scaffolding run added package.json)
+    // and upgrade placeholder `git diff --check` verification before launching Wave N.
+    const bootstrap = await bootstrapWorkspaceAfterApply(this.repoRoot, this.config, {
+      onProgress: (line) =>
+        this.viewport.writeUpper(`  ${colors.cyan}⚙${colors.reset} ${colors.dim}${line}${colors.reset}\n`),
+    });
+    for (const note of bootstrap.notes) {
+      autoAppliedNotes.push(`${colors.green}✔${colors.reset} ${note}`);
+    }
+    const autoAppliedNote = autoAppliedNotes.length > 0 ? `${autoAppliedNotes.join('\n')}\n\n` : '';
 
     // Re-analyze the live repository right before planning this wave so Wave 2+
     // plans strictly against the real files and directory topology created earlier!
@@ -4278,6 +4416,10 @@ export class InteractiveShell {
     const updated = markWaveStatus(plan, wave.number, 'in_progress');
     saveLivingPlan(this.repoRoot, updated);
     this.pendingLivingPlan = undefined;
+    // Clear any previously focused failed run so the recursive handleInput(waveGoal)
+    // plans the new wave instead of getting hijacked by FocusedRunAdvisor!
+    this.focusedRun = undefined;
+    this.pendingOrchestratedDelivery = undefined;
     this.activeLivingPlanWave = { waveNumber: wave.number, waveName: wave.name };
 
     const waveGoal = buildWaveExecutionGoal(updated, wave, liveRepoProfile);
@@ -4302,12 +4444,19 @@ export class InteractiveShell {
       `${result.runId} finished (${result.tasksCompleted} task(s) completed).`,
     );
 
-    const active = this.activeLivingPlanWave;
-    if (!active) return undefined;
-    this.activeLivingPlanWave = undefined;
-
     const plan = loadLivingPlan(this.repoRoot);
-    if (!plan) return undefined;
+    if (!plan) {
+      this.activeLivingPlanWave = undefined;
+      return undefined;
+    }
+
+    let active = this.activeLivingPlanWave;
+    this.activeLivingPlanWave = undefined;
+    if (!active) {
+      const matchedWave = plan.waves.find((w) => w.runId === result.runId);
+      if (!matchedWave) return undefined;
+      active = { waveNumber: matchedWave.number, waveName: matchedWave.name };
+    }
 
     const status = result.status === 'completed' ? 'completed' : 'failed';
     const updated = markWaveStatus(plan, active.waveNumber, status, {
@@ -4332,6 +4481,23 @@ export class InteractiveShell {
     }
 
     return `${colors.yellow}⚠${colors.reset} Living Plan Wave ${active.waveNumber} marked as failed in .taskforge/plan.md. Use /retry to finish it or /blueprint next to re-run.`;
+  }
+
+  /** Builds a compact live TaskForge Control-Plane snapshot injected into Direct Mode / Auto-Dispatch turns. */
+  private getControlPlanePromptContext(): string | undefined {
+    if (!this.inRepo) return undefined;
+    try {
+      const snapshot = collectControlPlaneSnapshot({
+        repoRoot: this.repoRoot,
+        config: this.config,
+        db: this.db,
+        deliveryService: this.deliveryService,
+        agentRegistry: this.agentRegistry,
+      });
+      return formatControlPlaneContextForPrompt(snapshot);
+    } catch {
+      return undefined;
+    }
   }
 
   /** Syncs the dynamic live prompt badge (mode, model override, checkpoints, background jobs). */
@@ -5320,8 +5486,10 @@ export class InteractiveShell {
             }
           }
           const summary = await this.formatRunSummary(result);
-          const deliveryPrompt = this.buildPostRunDeliveryPrompt(result);
-          return deliveryPrompt ? `${summary}\n\n${deliveryPrompt}` : summary;
+          const waveBanner = this.recordLivingPlanWaveOutcome(result);
+          const deliveryPrompt = waveBanner ? '' : this.buildPostRunDeliveryPrompt(result);
+          const trailing = [waveBanner, deliveryPrompt].filter(Boolean).join('\n\n');
+          return trailing ? `${summary}\n\n${trailing}` : summary;
         };
         const execution = orchestrator.resume(runId, {
           abortSignal: controller.signal,
@@ -5432,7 +5600,7 @@ export class InteractiveShell {
       for await (const line of rl) {
         const trimmed = line.trim();
         if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'exit' || trimmed === 'quit') break;
-        if (!trimmed && !this.focusedRun) continue;
+        if (!trimmed && !this.hasPendingEnterAction()) continue;
         const reply = await this.handleInput(trimmed);
         if (reply) {
           outStream.write(`${reply}\n`);
@@ -6005,8 +6173,8 @@ export class InteractiveShell {
         break;
       }
 
-      // A bare Enter only means something while a retry is being suggested.
-      if (!trimmed && !this.focusedRun) {
+      // A bare Enter only means something when a pending interactive prompt or focused run is active.
+      if (!trimmed && !this.hasPendingEnterAction()) {
         continue;
       }
 

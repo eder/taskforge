@@ -707,6 +707,116 @@ export function buildWaveExecutionGoal(
   return sections.join('\n\n');
 }
 
+const MODULE_SCOPE_ALIASES: Record<string, readonly string[]> = {
+  ui: ['ui', 'frontend', 'web', 'client'],
+  frontend: ['frontend', 'web', 'ui', 'client'],
+  web: ['web', 'frontend', 'ui'],
+  auth: ['auth', 'authentication', 'identity'],
+  notifications: ['notifications', 'notification', 'alerts', 'messaging'],
+  appointments: ['appointments', 'bookings', 'reservations', 'scheduling'],
+  bookings: ['bookings', 'appointments', 'reservations'],
+  reservations: ['reservations', 'bookings', 'appointments'],
+  tests: ['tests', 'test', '__tests__'],
+};
+
+/**
+ * Reconciles greenfield placeholder scopes (like `["auth", "user"]` or
+ * `["notifications"]` or `["ui"]`) against the real directory topology created
+ * in earlier waves (such as `src/worker/auth/`, `src/worker/notifications/`,
+ * `src/web/`, `tests/unit/`), while keeping scopes strictly disjoint from
+ * sibling modules in the same parallel wave.
+ */
+export function reconcileModuleScopeWithRepo(
+  mod: LivingPlanModule,
+  waveModules: readonly LivingPlanModule[],
+  liveRepoProfile?: RepositoryProfile,
+): string[] {
+  const baseScopes =
+    mod.scope.length > 0 ? [...mod.scope] : [`src/${mod.id}/**`, `tests/${mod.id}/**`];
+  const rawMap = liveRepoProfile?.repositoryMap ?? [];
+  if (rawMap.length === 0) return baseScopes;
+
+  // Parse directory paths out of `buildRepositoryMap()` entries ("src/worker/auth/ — 1 files (...)").
+  const repoDirs: string[] = [];
+  for (const line of rawMap) {
+    const match = /^([^\s(][^—]*?)\/\s+—/.exec(line.trim());
+    if (match?.[1]) {
+      repoDirs.push(match[1].replace(/\/+$/, ''));
+    }
+  }
+  if (repoDirs.length === 0) return baseScopes;
+
+  // Directories explicitly owned by sibling modules in the same wave must never be claimed here.
+  const siblingTokens = new Set<string>();
+  for (const sibling of waveModules) {
+    if (sibling.id === mod.id) continue;
+    for (const s of sibling.scope) {
+      const clean = s.replace(/\/\*\*$/, '').replace(/\/+$/, '').toLowerCase();
+      if (!clean) continue;
+      siblingTokens.add(clean);
+      const last = clean.split('/').pop();
+      if (last) siblingTokens.add(last);
+    }
+  }
+
+  const expanded: string[] = [...baseScopes];
+  const addScope = (pattern: string) => {
+    if (!expanded.includes(pattern)) expanded.push(pattern);
+  };
+
+  const hasTestsDir = repoDirs.some((d) => d === 'tests' || d.startsWith('tests/'));
+  const hasUnitTestsDir = repoDirs.some((d) => d === 'tests/unit' || d.startsWith('tests/unit/'));
+
+  for (const raw of baseScopes) {
+    const clean = raw.replace(/\/\*\*$/, '').replace(/\/+$/, '');
+    if (!clean || clean.includes('*') || clean.includes('/')) continue;
+
+    const lower = clean.toLowerCase();
+    const candidates = MODULE_SCOPE_ALIASES[lower] ?? [lower];
+    const matchedParents = new Set<string>();
+
+    for (const dir of repoDirs) {
+      const segments = dir.toLowerCase().split('/');
+      const lastSeg = segments[segments.length - 1];
+      if (siblingTokens.has(dir.toLowerCase()) || siblingTokens.has(lastSeg)) continue;
+
+      if (candidates.includes(lastSeg)) {
+        matchedParents.add(dir);
+        continue;
+      }
+
+      // Collapse nested directories like `src/web/app`, `src/web/pages` into `src/web` when `web` is an alias.
+      for (let idx = 0; idx < segments.length - 1; idx += 1) {
+        const seg = segments[idx];
+        if (candidates.includes(seg) && !siblingTokens.has(seg)) {
+          const parentPath = dir.split('/').slice(0, idx + 1).join('/');
+          matchedParents.add(parentPath);
+          break;
+        }
+      }
+    }
+
+    for (const parentDir of [...matchedParents].sort()) {
+      addScope(`${parentDir}/**`);
+    }
+
+    if (lower !== 'tests' && lower !== 'test') {
+      if (hasUnitTestsDir) addScope(`tests/unit/${lower}/**`);
+      if (hasTestsDir) addScope(`tests/${lower}/**`);
+    }
+  }
+
+  // Collapse redundant child globs when an ancestor glob (`src/web/**`) is already present.
+  const globRoots = expanded
+    .filter((s) => s.endsWith('/**'))
+    .map((s) => s.slice(0, -3));
+  return expanded.filter((entry) => {
+    if (!entry.endsWith('/**')) return true;
+    const root = entry.slice(0, -3);
+    return !globRoots.some((other) => other !== root && root.startsWith(`${other}/`));
+  });
+}
+
 /**
  * Deterministically compiles a parallel Living Plan Wave (e.g. Wave 2) directly
  * into a multi-task `TaskGraph` where each module becomes an independent task
@@ -749,7 +859,7 @@ export function compileWaveToTaskGraph(
       .map((dep) => moduleIdToTaskId.get(dep))
       .filter((depTaskId): depTaskId is string => Boolean(depTaskId) && depTaskId !== taskId);
 
-    const allowedScope = mod.scope.length > 0 ? [...mod.scope] : [`src/${mod.id}/**`, `tests/${mod.id}/**`];
+    const allowedScope = reconcileModuleScopeWithRepo(mod, waveModules, liveRepoProfile);
     const criteria = [
       `Implement ${mod.name} cleanly within [${allowedScope.join(', ')}]`,
       'Include unit tests covering the core behavior and edge cases',

@@ -231,4 +231,125 @@ describe('Wave C: Domain-Agnostic Living Plan (.taskforge/plan.md) & Wave Execut
 
     db.close();
   });
+
+  it('handles multi-line /blueprint goals, "start wave 1" confirmation, and bare Enter in the REPL loop', async () => {
+    const repoRoot = createGreenfieldRepo();
+    tempDirs.push(repoRoot);
+
+    const db = new TaskForgeDatabase(':memory:');
+    const config = getDefaultConfig();
+    config.verification.preflight = false;
+    config.verification.commands = [];
+    config.planner.agentPlanning = 'never';
+
+    const shell = new InteractiveShell({
+      repoRoot,
+      config,
+      database: db,
+      output: new PassThrough(),
+      interactive: false,
+      smartDirectDispatch: false,
+    });
+
+    // 1. Multi-line pasted /blueprint goal must match /blueprint and strip the prefix from plan.goal
+    const multiLineOut = await shell.handleInput(
+      '/blueprint Implement a TypeScript PWA\nwith auth, bookings, and notifications',
+    );
+    expect(multiLineOut).toContain('Living Plan');
+    const created = loadLivingPlan(repoRoot);
+    expect(created).toBeDefined();
+    expect(created?.goal).toBe('Implement a TypeScript PWA\nwith auth, bookings, and notifications');
+    expect(created?.goal.startsWith('/blueprint')).toBe(false);
+
+    // 2. Trailing details after "start wave 1" must still refine, not launch
+    const refineOut = await shell.handleInput('start wave 1 with SQLite');
+    expect(refineOut).toContain('SQLite');
+    expect(loadLivingPlan(repoRoot)?.waves[0].status).toBe('pending');
+
+    // 3. "start wave 1" launches Wave 1 instead of refining
+    const launchOut = await shell.handleInput('start wave 1');
+    expect(launchOut).toContain('Plan Proposal');
+    expect(loadLivingPlan(repoRoot)?.waves[0].status).toBe('in_progress');
+    db.close();
+
+    // 4. Bare Enter in the real REPL loop (shell.start) triggers pendingLivingPlan launch
+    const replRepo = createGreenfieldRepo();
+    tempDirs.push(replRepo);
+    const replDb = new TaskForgeDatabase(':memory:');
+    const inStream = new PassThrough();
+    const outStream = new PassThrough();
+    let captured = '';
+    outStream.on('data', (chunk) => {
+      captured += chunk.toString();
+    });
+
+    const replShell = new InteractiveShell({
+      repoRoot: replRepo,
+      config,
+      database: replDb,
+      input: inStream,
+      output: outStream,
+      interactive: false,
+      smartDirectDispatch: false,
+    });
+
+    const runPromise = replShell.start();
+    inStream.write('/blueprint Build a CLI tool in TypeScript with parser and formatter\n');
+    inStream.write('\n'); // bare Enter must launch Wave 1!
+    inStream.write('/exit\n');
+    inStream.end();
+    await runPromise;
+
+    expect(captured).toContain('Living Plan');
+    expect(captured).toContain('Plan Proposal');
+    expect(loadLivingPlan(replRepo)?.waves[0].status).toBe('in_progress');
+  });
+
+  it('matches a resumed Living Plan wave by runId and marks it completed when activeLivingPlanWave was cleared after an earlier failure', () => {
+    const repoRoot = createGreenfieldRepo();
+    tempDirs.push(repoRoot);
+
+    const basePlan = buildDeterministicLivingPlan(
+      'Criar PWA de barbearia com auth, agenda e notificacoes',
+    );
+    const failedPlan = markWaveStatus(basePlan, 1, 'failed', {
+      runId: 'run-wave-1-resumed',
+      summary: 'Stopped (failed) via run-wave-1-resumed',
+    });
+    saveLivingPlan(repoRoot, failedPlan);
+
+    const db = new TaskForgeDatabase(':memory:');
+    const config = getDefaultConfig();
+    const shell = new InteractiveShell({
+      repoRoot,
+      config,
+      database: db,
+      output: new PassThrough(),
+      interactive: false,
+      smartDirectDispatch: false,
+    });
+
+    // Simulate a resumed run completing after `activeLivingPlanWave` was already cleared on failure.
+    const recordOutcome = (shell as unknown as {
+      recordLivingPlanWaveOutcome: (result: {
+        runId: string;
+        status: 'completed' | 'failed';
+        tasksCompleted: number;
+      }) => string | undefined;
+    }).recordLivingPlanWaveOutcome.bind(shell);
+
+    const banner = recordOutcome({
+      runId: 'run-wave-1-resumed',
+      status: 'completed',
+      tasksCompleted: 3,
+    });
+
+    expect(banner).toContain('Wave 1/3');
+    expect(banner).toContain('completed');
+    expect(banner).toContain('Wave 2');
+    const updated = loadLivingPlan(repoRoot)!;
+    expect(updated.waves[0].status).toBe('completed');
+    expect(getNextPendingWave(updated)?.number).toBe(2);
+    db.close();
+  });
 });

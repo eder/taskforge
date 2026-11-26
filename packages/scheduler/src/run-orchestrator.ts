@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { taskProducesChanges } from './dual-review.js';
 import { capRoles } from './staffing-cap.js';
 import {
@@ -779,14 +782,42 @@ export class RunOrchestrator {
         `Work from an earlier attempt is kept for ${kept.join(', ')}; it is reused instead of starting over (use "tf resume --fresh" to discard it).`,
       );
     }
+    let activeBaseCommit = baseCommit;
     const behind = await this.gitService
-      .execGit(['rev-list', '--count', `${baseCommit}..HEAD`])
+      .execGit(['rev-list', '--count', `${activeBaseCommit}..HEAD`])
       .then((out) => parseInt(out.trim(), 10) || 0)
       .catch(() => 0);
     if (behind > 0) {
       options.onProgress?.(
-        `Note: this run started from ${baseCommit.slice(0, 7)} and the repository has moved on by ${behind} commit(s) since. The resumed work is still based on ${baseCommit.slice(0, 7)}. If the work was already applied by hand, run "tf abandon ${runId}" instead of resuming.`,
+        `Note: this run started from ${activeBaseCommit.slice(0, 7)} and the repository has moved on by ${behind} commit(s) since. The resumed work is still based on ${activeBaseCommit.slice(0, 7)}. If the work was already applied by hand, run "tf abandon ${runId}" instead of resuming.`,
       );
+      const rebased = await this.tryRebaseResumedRunOntoHead({
+        runId,
+        baseCommit: activeBaseCommit,
+        baseBranch,
+        integrationBranch,
+        branchExists,
+        hasIntegratedCommits,
+        candidates,
+      });
+      if (rebased) {
+        const oldShort = activeBaseCommit.slice(0, 7);
+        activeBaseCommit = rebased.newBaseCommit;
+        for (const [taskId, updated] of Object.entries(rebased.rebasedCandidates)) {
+          candidates[taskId] = updated;
+        }
+        this.runRepo.mergeMetadata(runId, {
+          baseCommit: activeBaseCommit,
+          ...(Object.keys(rebased.rebasedCandidates).length > 0 ? { candidates } : {}),
+        });
+        options.onProgress?.(
+          `✔ Rebased resumed run onto latest ${baseBranch} (${oldShort} → ${activeBaseCommit.slice(0, 7)}) so tasks inherit newly applied project files.`,
+        );
+      } else {
+        options.onProgress?.(
+          `⚠ Could not auto-rebase resumed run onto HEAD without conflicts; continuing on original base ${activeBaseCommit.slice(0, 7)}.`,
+        );
+      }
     }
     options.onProgress?.(
       pending.length === 0
@@ -804,7 +835,7 @@ export class RunOrchestrator {
       goalId: run.goalId ?? '',
       goalDescription,
       graph,
-      baseCommit,
+      baseCommit: activeBaseCommit,
       baseBranch,
       executionIntent: mostRestrictiveIntent(
         detectExecutionIntent(goalDescription),
@@ -819,6 +850,82 @@ export class RunOrchestrator {
         candidates,
       },
     });
+  }
+
+  /**
+   * Attempts a non-destructive rebase of a resumed run's integration branch and
+   * preserved candidate commits onto current `HEAD` inside a temporary worktree.
+   * Returns updated refs when all cherry-picks apply cleanly; returns `undefined`
+   * (leaving all refs untouched) on any conflict or git error.
+   */
+  private async tryRebaseResumedRunOntoHead(params: {
+    runId: string;
+    baseCommit: string;
+    baseBranch: string;
+    integrationBranch: string;
+    branchExists: boolean;
+    hasIntegratedCommits: boolean;
+    candidates: Record<string, PreservedCandidate>;
+  }): Promise<{ newBaseCommit: string; rebasedCandidates: Record<string, PreservedCandidate> } | undefined> {
+    const headCommit = await this.gitService.resolveRef('HEAD').catch(() => undefined);
+    if (!headCommit || headCommit === params.baseCommit) return undefined;
+
+    const tmpWorktree = path.join(
+      os.tmpdir(),
+      `tf-rebase-${params.runId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    );
+
+    try {
+      await this.gitService.exec(['worktree', 'add', '--detach', tmpWorktree, headCommit], this.repoRoot);
+      const wtGit = new GitService(tmpWorktree);
+
+      const cherryPickRange = async (range: string): Promise<string | undefined> => {
+        const revList = (await wtGit.exec(['rev-list', '--reverse', range], tmpWorktree)).trim();
+        const commits = revList ? revList.split('\n').filter(Boolean) : [];
+        if (commits.length === 0) return wtGit.resolveRef('HEAD');
+        for (const sha of commits) {
+          await wtGit.exec(['cherry-pick', sha], tmpWorktree);
+        }
+        return wtGit.resolveRef('HEAD');
+      };
+
+      let newIntegrationHead: string | undefined;
+      if (params.branchExists && params.hasIntegratedCommits) {
+        newIntegrationHead = await cherryPickRange(`${params.baseCommit}..${params.integrationBranch}`);
+      } else if (params.branchExists) {
+        newIntegrationHead = headCommit;
+      }
+
+      const rebasedCandidates: Record<string, PreservedCandidate> = {};
+      for (const [taskId, candidate] of Object.entries(params.candidates)) {
+        await wtGit.exec(['checkout', '--detach', headCommit], tmpWorktree);
+        const rebasedSha = await cherryPickRange(`${params.baseCommit}..${candidate.commit}`);
+        if (!rebasedSha) return undefined;
+        rebasedCandidates[taskId] = { ...candidate, commit: rebasedSha };
+      }
+
+      // Remove any stale integration worktree that may hold `integrationBranch` checked out before moving the ref.
+      await this.worktreeManager
+        .removeWorktree(`integration-${params.runId}`, 'main-worker', true, true)
+        .catch(() => {});
+
+      // All cherry-picks succeeded cleanly — atomically advance the branches.
+      if (params.branchExists && newIntegrationHead) {
+        await this.gitService.exec(['branch', '-f', params.integrationBranch, newIntegrationHead], this.repoRoot);
+      }
+      for (const [taskId, updated] of Object.entries(rebasedCandidates)) {
+        const candidateBranch = updated.branch || `taskforge/candidate/${params.runId}/${taskId}`;
+        await this.gitService.exec(['branch', '-f', candidateBranch, updated.commit], this.repoRoot);
+      }
+
+      return { newBaseCommit: headCommit, rebasedCandidates };
+    } catch {
+      await this.gitService.exec(['cherry-pick', '--abort'], tmpWorktree).catch(() => {});
+      return undefined;
+    } finally {
+      await this.gitService.exec(['worktree', 'remove', '--force', tmpWorktree], this.repoRoot).catch(() => {});
+      fs.rmSync(tmpWorktree, { recursive: true, force: true });
+    }
   }
 
   private async executeGraph(params: {

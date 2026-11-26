@@ -32,4 +32,5 @@ export * from './daemon-scheduler.js';
 export * from './voice-input.js';
 export * from './multi-repo.js';
 export * from './sdk.js';
+export * from './control-plane-supervisor.js';
 export { summarizeGoal } from './shell-helpers.js';

@@ -336,17 +336,39 @@ export class DeterministicScheduler {
 
   /** Tracks which agent executed each task in this run so downstream review tasks pick an independent reviewer. */
   private taskAssignedAgent = new Map<string, string>();
+  /** Per-run cache of agents that failed `detect()` or hit fatal auth/connectivity errors so we never waste attempts on offline providers (e.g. stopped Ollama). */
+  private unavailableDetectedAgents = new Set<string>();
+
+  private isAgentUsable(agentId: string): boolean {
+    return (
+      !this.unavailableDetectedAgents.has(agentId) &&
+      AgentQuotaTracker.getInstance().isAvailable(agentId)
+    );
+  }
+
+  /** Probes registered real adapters once at run startup so undetected CLIs/daemons are skipped cleanly. */
+  private async warmAgentDetectionCache(): Promise<void> {
+    const adapters = this.ctx.agentRegistry.list();
+    await Promise.all(
+      adapters.map(async (agent) => {
+        if (agent.id === 'fake' || typeof agent.detect !== 'function') return;
+        const detected = await agent.detect().catch(() => false);
+        if (!detected) {
+          this.unavailableDetectedAgents.add(agent.id);
+        }
+      }),
+    );
+  }
 
   private resolveAgentId(task: Task): string | undefined {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
-    const quotaTracker = AgentQuotaTracker.getInstance();
     const allowedWriters = allowedWritersForTask(task, this.ctx.config);
     const isAllowed = (agentId: string): boolean =>
       allowedWriters === undefined || allowedWriters.has(agentId);
 
     if (this.ctx.preferredAgentMapping && this.ctx.preferredAgentMapping[task.id]) {
       const preferred = this.ctx.preferredAgentMapping[task.id];
-      if (!failed.has(preferred) && quotaTracker.isAvailable(preferred) && isAllowed(preferred)) {
+      if (!failed.has(preferred) && this.isAgentUsable(preferred) && isAllowed(preferred)) {
         return preferred;
       }
     }
@@ -355,7 +377,7 @@ export class DeterministicScheduler {
       configuredAgent &&
       this.ctx.agentRegistry.get(configuredAgent) &&
       !failed.has(configuredAgent) &&
-      quotaTracker.isAvailable(configuredAgent) &&
+      this.isAgentUsable(configuredAgent) &&
       isAllowed(configuredAgent)
     ) {
       return configuredAgent;
@@ -365,9 +387,10 @@ export class DeterministicScheduler {
       .filter(
         (agent) =>
           !failed.has(agent.id) &&
-          quotaTracker.isAvailable(agent.id) &&
+          this.isAgentUsable(agent.id) &&
           isAllowed(agent.id),
-      );
+      )
+      .sort((a, b) => (a.id === 'ollama' ? 1 : 0) - (b.id === 'ollama' ? 1 : 0));
 
     if (available.length === 0 && allowedWriters && allowedWriters.size > 0) {
       this.ctx.onProgress?.(
@@ -383,8 +406,8 @@ export class DeterministicScheduler {
    * busy. Without this, independent tasks that all prefer the same agent wait
    * for it one after another while other healthy agents sit idle, which defeats
    * running them in parallel. The same limits as the first choice apply: not an
-   * agent that already failed this task, one out of quota, or one the ownership
-   * policy does not allow to write this scope.
+   * agent that already failed this task, one out of quota, one not detected, or
+   * one the ownership policy does not allow to write this scope.
    */
   private idleAlternativeAgentId(
     task: Task,
@@ -392,19 +415,20 @@ export class DeterministicScheduler {
     requireZeroActive = false,
   ): string | undefined {
     const failed = this.failedAgentsByTask.get(task.id) ?? new Set<string>();
-    const quotaTracker = AgentQuotaTracker.getInstance();
     const allowedWriters = allowedWritersForTask(task, this.ctx.config);
-    return this.ctx.agentRegistry
+    const candidates = this.ctx.agentRegistry
       .list()
-      .find(
+      .filter(
         (agent) =>
           agent.id !== busyAgentId &&
           !failed.has(agent.id) &&
-          quotaTracker.isAvailable(agent.id) &&
+          this.isAgentUsable(agent.id) &&
           (allowedWriters === undefined || allowedWriters.has(agent.id)) &&
           (!requireZeroActive || this.concurrency.getAgentActiveCount(agent.id) === 0) &&
           this.concurrency.canSchedule(agent.id),
-      )?.id;
+      )
+      .sort((a, b) => (a.id === 'ollama' ? 1 : 0) - (b.id === 'ollama' ? 1 : 0));
+    return candidates[0]?.id;
   }
 
   /**
@@ -650,6 +674,15 @@ export class DeterministicScheduler {
         `[${task.id}] ✗ Task is BLOCKED because ${blockReason}. Delivery remains disabled.`,
       );
       return 'block';
+    }
+
+    if (
+      failureClass === 'provider_auth' ||
+      /\b(?:fetch failed|econnrefused|enotfound|not detected|not installed|oauth_org_not_allowed)\b/i.test(
+        params.reason,
+      )
+    ) {
+      this.unavailableDetectedAgents.add(params.agentId);
     }
 
     if (decision.action === 'reassign') {
@@ -1180,6 +1213,8 @@ export class DeterministicScheduler {
 
     const blockedByPreflight = await this.preflightChecks();
     if (blockedByPreflight) return blockedByPreflight;
+
+    await this.warmAgentDetectionCache();
 
     // Main scheduling loop
     const runningPromises = new Map<string, Promise<void>>();
@@ -2021,10 +2056,10 @@ export class DeterministicScheduler {
           return;
         }
 
-        const quotaTracker = AgentQuotaTracker.getInstance();
         const availableAgents = this.ctx.agentRegistry
           .list()
-          .filter((candidate) => quotaTracker.isAvailable(candidate.id))
+          .filter((candidate) => this.isAgentUsable(candidate.id))
+          .sort((a, b) => (a.id === 'ollama' ? 1 : 0) - (b.id === 'ollama' ? 1 : 0))
           .map((candidate) => candidate.id);
         const candidateAgentId =
           availableAgents.find((id) => id !== agentId) ?? availableAgents[0];
