@@ -54,6 +54,8 @@ export interface FocusedAdvisorInput {
   verificationCommands: string[];
   worktreeLinks: string[];
   availableAgents: string[];
+  /** Optional note when the stopped run's baseCommit is behind HEAD (e.g. package.json was added on main after the run started). */
+  staleBaseNote?: string;
   pendingAction?: PendingAdvisorAction;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
@@ -250,6 +252,7 @@ export class FocusedRunAdvisor {
         worktreeLinks: input.worktreeLinks,
       },
       availableAgents: input.availableAgents,
+      staleBaseNote: input.staleBaseNote ?? null,
       pendingAction: input.pendingAction ?? null,
     };
 
@@ -266,12 +269,12 @@ export class FocusedRunAdvisor {
         : this.apiKey
           ? await this.callOpenAI(messages, this.apiKey)
           : await this.agentCaller!(messages, ADVISOR_JSON_SCHEMA);
-      return this.sanitizeDecision(raw);
+      return this.sanitizeDecision(raw, input.availableRepairs);
     } catch {
       if (!this.handler && this.apiKey && this.agentCaller) {
         try {
           const fallbackRaw = await this.agentCaller(messages, ADVISOR_JSON_SCHEMA);
-          return this.sanitizeDecision(fallbackRaw);
+          return this.sanitizeDecision(fallbackRaw, input.availableRepairs);
         } catch {
           return undefined;
         }
@@ -280,10 +283,13 @@ export class FocusedRunAdvisor {
     }
   }
 
-  private sanitizeDecision(raw: unknown): FocusedAdvisorDecision | undefined {
+  private sanitizeDecision(
+    raw: unknown,
+    availableRepairs: readonly string[] = [],
+  ): FocusedAdvisorDecision | undefined {
     if (!raw || typeof raw !== 'object') return undefined;
     const obj = raw as Record<string, unknown>;
-    const action = typeof obj.action === 'string' && VALID_ACTIONS.has(obj.action as FocusedAdvisorActionType)
+    let action = typeof obj.action === 'string' && VALID_ACTIONS.has(obj.action as FocusedAdvisorActionType)
       ? (obj.action as FocusedAdvisorActionType)
       : undefined;
     if (!action) return undefined;
@@ -293,11 +299,16 @@ export class FocusedRunAdvisor {
       ? obj.paths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
       : null;
     const guidance = typeof obj.guidance === 'string' && obj.guidance.trim() ? obj.guidance.trim() : null;
-    const proposedAction =
+    let proposedAction =
       typeof obj.proposedAction === 'string' &&
       VALID_PROPOSED.has(obj.proposedAction as ProposedAdvisorActionType)
         ? (obj.proposedAction as ProposedAdvisorActionType)
         : 'none';
+    // Never promise or dispatch `apply_repair` when TaskForge has zero deterministic repairs to apply.
+    if (availableRepairs.length === 0) {
+      if (action === 'apply_repair') action = 'answer';
+      if (proposedAction === 'apply_repair') proposedAction = 'none';
+    }
     return { action, reply, command, paths, guidance, proposedAction };
   }
 

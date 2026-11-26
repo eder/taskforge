@@ -450,8 +450,13 @@ export class CompletionGate {
         };
       }
 
+      const normalizeCmd = (command: string): string =>
+        command
+          .trim()
+          .replace(/\s+/g, ' ')
+          .replace(/^(pnpm|npm|yarn|bun)\s+run\s+(test|start|stop|restart)\b/i, '$1 $2');
       const missingCommands = expectedCommands.filter(
-        (expected) => !checks.some((check) => check.command.trim() === expected.trim()),
+        (expected) => !checks.some((check) => normalizeCmd(check.command) === normalizeCmd(expected)),
       );
       if (missingCommands.length > 0) {
         return {
